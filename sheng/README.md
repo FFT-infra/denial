@@ -1,7 +1,8 @@
 # sheng ARM64 candidate builds
 
-This directory is the build and packaging adapter for the `sheng-build` branch
-of `FFT-infra/denial`. It leaves Denial's compositor, SDK, Flutter source lock,
+This directory is the build and packaging adapter for the `dev-sheng-build` branch
+of `FFT-infra/denial`, following upstream `dev` at the exact revision in
+`source.lock.json`. It leaves Denial's compositor, SDK, Flutter source lock,
 and existing upstream tools unchanged. It does not install on a device, activate
 a plugin, restart a graphical session, create a release, or sign packages.
 
@@ -56,8 +57,9 @@ free, has a 360-minute limit, and does not delete runner software to make space.
    metadata verifier checks aarch64 and preserves the upstream package checks.
 9. Extract the actual RPMs into an isolated prefix/HOME, with a separate Pub cache
    and no inherited Denial SDK override. Run installed `denial-plugins prepare`,
-   then plan/build the built-ins. Fresh manager state selects `denial_top_bar`;
-   this is different from the packaged default shell, which already uses taskbar.
+   then plan/build the built-ins. Both fresh manager state and the packaged
+   default shell select `denial_top_bar`. Taskbar remains a separately selected
+   alternative and compatibility test, not the final Sheng desktop design.
    Next inspect/add the exact official taskbar Git package, remove `denial_top_bar`
    in that isolated selection, and plan/build again. Require `TaskbarPlugin` and
    a single `TaskbarWorkArea`, the pinned source identity, and no Sheng window strip.
@@ -103,7 +105,14 @@ as source changes; tracked core equality is checked again after building. No
 
 ## Local checks
 
-These require only Python 3.11+ and Bash, do not compile an engine, and create
+Workflow validation uses actionlint 1.7.12 (the ARM64 archive SHA-256 is pinned
+in the workflow), with its optional ShellCheck and Pyflakes integrations disabled.
+Run `actionlint -shellcheck= -pyflakes= .github/workflows/sheng-arm64.yml` before
+pushing workflow changes. The workflow runs the same check. Runner-dependent
+paths are initialized in a step through `GITHUB_ENV`; the job-level `env` context
+cannot reference `runner.temp`.
+
+The Python 3.11+ and Bash checks below do not compile an engine and create
 fixtures only in temporary directories under `sheng/`:
 
 ```sh

@@ -3,7 +3,7 @@ name: Sheng ARM64 candidates
 on:
   workflow_dispatch:
   push:
-    branches: [sheng-build]
+    branches: [dev-sheng-build]
 
 permissions:
   contents: read
@@ -21,6 +21,15 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Validate workflow syntax
+        run: |
+          set -euo pipefail
+          tools="$(mktemp -d "$RUNNER_TEMP/actionlint.XXXXXX")"
+          archive="$tools/actionlint.tar.gz"
+          curl -fsSL https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_arm64.tar.gz -o "$archive"
+          printf '%s  %s\n' 325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6 "$archive" | sha256sum --check --strict
+          tar -xzf "$archive" -C "$tools" actionlint
+          "$tools/actionlint" -shellcheck= -pyflakes= .github/workflows/sheng-arm64.yml
       - name: Check adapter and pinned core
         run: |
           set -euo pipefail
@@ -32,11 +41,15 @@ jobs:
     needs: adapter-tests
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 360
-    env:
-      SHENG_WORK: ${{ runner.temp }}/denial-sheng-${{ github.run_id }}-${{ github.run_attempt }}
-      PUB_CACHE: ${{ runner.temp }}/sheng-dependency-cache/pub
-      CARGO_HOME: ${{ runner.temp }}/sheng-dependency-cache/cargo
     steps:
+      - name: Initialize isolated build paths
+        run: |
+          set -euo pipefail
+          {
+            printf 'SHENG_WORK=%s/denial-sheng-%s-%s\n' "$RUNNER_TEMP" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+            printf 'PUB_CACHE=%s/sheng-dependency-cache/pub\n' "$RUNNER_TEMP"
+            printf 'CARGO_HOME=%s/sheng-dependency-cache/cargo\n' "$RUNNER_TEMP"
+          } >> "$GITHUB_ENV"
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
