@@ -79,7 +79,9 @@ step arm-metadata python3 sheng/packaging.py engine-metadata --root "$SOURCE" --
 step build tools/denial-pc build
 step sdk-test tools/denial-pc sdk-test
 step plugin-check tools/denial-pc plugin-check
-step compositor-test tools/denial-pc compositor-test
+# Portal 1.18 ignores XDG_DATA_HOME for descriptors; this directory also
+# supplies denial-portals.conf for its explicit-directory configuration lookup.
+step compositor-test env XDG_DESKTOP_PORTAL_DIR="$SOURCE/packaging/arch" tools/denial-pc compositor-test
 step source-guard python3 sheng/packaging.py guard --root "$SOURCE"
 step adapters python3 sheng/packaging.py render --root "$SOURCE" --work "$WORK"
 step stage "$WORK/adapters/stage"

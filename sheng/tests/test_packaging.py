@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
 import stat
 import struct
@@ -350,6 +351,37 @@ class AdapterTests(unittest.TestCase):
             run.side_effect = subprocess.CalledProcessError(1, "payload-verifier")
             with self.assertRaises(subprocess.CalledProcessError):
                 packaging.verify_rpms(stage, packages)
+
+    def test_portal_test_receives_explicit_descriptor_and_routing_directory(self):
+        source = self.root / "source with spaces"
+        descriptors = source / "packaging/arch"
+        descriptors.mkdir(parents=True)
+        for name in ("denial.portal", "denial-portals.conf"):
+            (descriptors / name).write_bytes((ROOT / "packaging/arch" / name).read_bytes())
+        tools = source / "tools"
+        tools.mkdir()
+        command = tools / "denial-pc"
+        command.write_text('''#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == compositor-test ]]
+[[ -f "$XDG_DESKTOP_PORTAL_DIR/denial.portal" ]]
+[[ -f "$XDG_DESKTOP_PORTAL_DIR/denial-portals.conf" ]]
+printf '%s\\n' "$XDG_DESKTOP_PORTAL_DIR"
+''')
+        command.chmod(0o755)
+        lines = [line for line in (ROOT / "sheng/build.sh").read_text().splitlines()
+                 if line.startswith("step compositor-test ")]
+        self.assertEqual(len(lines), 1)
+        env = {**os.environ, "SOURCE": str(source), "XDG_DESKTOP_PORTAL_DIR": str(self.root / "wrong")}
+        prefix = 'step() { shift; "$@"; }; '
+        result = subprocess.run(["bash", "-c", prefix + lines[0]], cwd=source, env=env,
+                                text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), str(descriptors))
+        # The fixture must fail when the old invocation inherits an unrelated directory.
+        old = subprocess.run(["bash", "-c", prefix + "step compositor-test tools/denial-pc compositor-test"],
+                             cwd=source, env=env, text=True, capture_output=True)
+        self.assertNotEqual(old.returncode, 0)
 
     def test_build_script_has_no_install_or_activation_command(self):
         script = (ROOT / "sheng/build.sh").read_text()

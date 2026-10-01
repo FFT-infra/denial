@@ -47,6 +47,11 @@ free, has a 360-minute limit, and does not delete runner software to make space.
    the manager kit itself is generated once.
 6. Run upstream `sdk-test`, `plugin-check`, and `compositor-test`. These are the
    release path; debug/profile engines and visual test events are not requested.
+   The compositor-test subprocess receives `XDG_DESKTOP_PORTAL_DIR` pointing to
+   the checkout's `packaging/arch`, which contains both the Denial descriptor and
+   routing configuration. Ubuntu 24.04's portal 1.18 does not discover descriptors
+   through the test's `XDG_DATA_HOME`. This keeps the real frontend test enabled
+   without installing descriptors in the system or changing upstream test code.
 7. Render external copies of the reviewed upstream packaging scripts with only
    their source-root location, ARM paths, ARM RPM metadata, and no-rebuild staging
    adjusted. Every replacement has an exact occurrence guard. Nothing is written
