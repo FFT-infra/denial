@@ -1,0 +1,101 @@
+name: Sheng ARM64 candidates
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [sheng-build]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sheng-arm64-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  adapter-tests:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check adapter and pinned core
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s sheng/tests -v
+          bash -n sheng/build.sh
+          python3 sheng/packaging.py guard --root "$GITHUB_WORKSPACE"
+
+  build:
+    needs: adapter-tests
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 360
+    env:
+      SHENG_WORK: ${{ runner.temp }}/denial-sheng-${{ github.run_id }}-${{ github.run_attempt }}
+      PUB_CACHE: ${{ runner.temp }}/sheng-dependency-cache/pub
+      CARGO_HOME: ${{ runner.temp }}/sheng-dependency-cache/cargo
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check native runner and disk budget
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = aarch64
+          python3 - <<'PY'
+          import os, shutil
+          free = shutil.disk_usage(os.environ['RUNNER_TEMP']).free
+          minimum = 40 * 1024**3
+          print(f'Available build space: {free / 1024**3:.1f} GiB')
+          if free < minimum:
+              raise SystemExit('Cold engine build needs at least 40 GiB free; no host files will be deleted to make room.')
+          PY
+      - name: Install declared build prerequisites
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ca-certificates git curl python3 jq tar xz-utils zip unzip rsync \
+            build-essential clang lld llvm ninja-build cmake pkg-config \
+            libgtk-3-dev libglib2.0-dev libfontconfig-dev libfreetype-dev \
+            libharfbuzz-dev libdbus-1-dev libpam0g-dev libinput-dev libudev-dev \
+            libseat-dev libxkbcommon-dev libx11-xcb-dev libxcb1-dev \
+            libxcb-composite0-dev libxcb-xfixes0-dev libxcb-render0-dev \
+            libxcb-shape0-dev libdrm-dev libgbm-dev libegl1-mesa-dev \
+            libgles-dev libgl1-mesa-dev mesa-common-dev libsdl2-dev libpulse-dev \
+            xwayland xdg-desktop-portal xdg-desktop-portal-gtk dbus-x11 \
+            rpm rpm2cpio libarchive-tools
+          command -v rustup
+      - name: Restore locked language dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ${{ env.PUB_CACHE }}
+            ${{ env.CARGO_HOME }}/registry
+            ${{ env.CARGO_HOME }}/git
+          key: sheng-aarch64-ubuntu24-${{ hashFiles('sheng/source.lock.json', 'compositor/Cargo.lock', '**/pubspec.lock') }}
+      - name: Build, package and verify the complete candidate
+        run: bash sheng/build.sh "$SHENG_WORK"
+      - name: Require the completed verification marker
+        run: |
+          set -euo pipefail
+          test "$(< "$SHENG_WORK/verified")" = "$GITHUB_SHA"
+          (cd "$SHENG_WORK/artifacts" && sha256sum --check --strict SHA256SUMS)
+      - name: Upload verified ARM64 candidates
+        uses: actions/upload-artifact@v7
+        with:
+          name: denial-sheng-fc44-aarch64-${{ github.sha }}
+          path: ${{ env.SHENG_WORK }}/artifacts/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Preserve build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: denial-sheng-build-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.SHENG_WORK }}/logs/
+          if-no-files-found: ignore
+          retention-days: 7
