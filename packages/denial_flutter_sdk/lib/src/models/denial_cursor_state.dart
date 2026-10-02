@@ -13,6 +13,8 @@ class DenialCursorState {
     this.shape = '',
     this.hotspot = Offset.zero,
     this.surfaceLayers = const <DenialSurfaceLayer>[],
+    this.dragActive = false,
+    this.dragSurfaceLayers = const <DenialSurfaceLayer>[],
   });
 
   final int epoch;
@@ -20,6 +22,8 @@ class DenialCursorState {
   final String shape;
   final Offset hotspot;
   final List<DenialSurfaceLayer> surfaceLayers;
+  final bool dragActive;
+  final List<DenialSurfaceLayer> dragSurfaceLayers;
 
   bool get hasSurfaceArtwork =>
       kind == DenialCursorStateKind.surface &&
@@ -32,10 +36,19 @@ class DenialCursorState {
         other.kind == kind &&
         other.shape == shape &&
         other.hotspot == hotspot &&
-        listEquals(other.surfaceLayers, surfaceLayers);
+        listEquals(other.surfaceLayers, surfaceLayers) &&
+        other.dragActive == dragActive &&
+        listEquals(other.dragSurfaceLayers, dragSurfaceLayers);
   }
 
   @override
-  int get hashCode =>
-      Object.hash(epoch, kind, shape, hotspot, Object.hashAll(surfaceLayers));
+  int get hashCode => Object.hash(
+    epoch,
+    kind,
+    shape,
+    hotspot,
+    Object.hashAll(surfaceLayers),
+    dragActive,
+    Object.hashAll(dragSurfaceLayers),
+  );
 }

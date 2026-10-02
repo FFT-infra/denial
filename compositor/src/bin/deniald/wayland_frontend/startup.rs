@@ -379,6 +379,16 @@ impl WaylandFrontend {
             #[cfg(feature = "flutter")]
             clipboard_drag_active: false,
             #[cfg(feature = "flutter")]
+            client_drag_active: false,
+            #[cfg(feature = "flutter")]
+            drag_icon: None,
+            #[cfg(feature = "flutter")]
+            drag_icon_offset: Point::from((0, 0)),
+            #[cfg(feature = "flutter")]
+            pending_drag_icon: false,
+            #[cfg(feature = "flutter")]
+            pending_drag_frame_callback_roots: HashSet::new(),
+            #[cfg(feature = "flutter")]
             compositor_pointer_grab_active: false,
             wayland_pointer_buttons: HashSet::new(),
             #[cfg(feature = "flutter")]

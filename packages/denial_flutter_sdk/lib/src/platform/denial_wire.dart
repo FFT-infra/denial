@@ -940,37 +940,59 @@ class DenialWireCodec {
       return null;
     }
 
+    final sourceDragLayers =
+        state.dragSurfaces ?? const <generated.SurfaceLayer>[];
+    if (sourceDragLayers.length > denialWireMaxSurfaces ||
+        (!state.dragActive && sourceDragLayers.isNotEmpty)) {
+      rejectedStructuredMessages += 1;
+      return null;
+    }
     final identities = <int>{};
-    final layers = <DenialSurfaceLayer>[];
-    var lastCompositionOrder = -1;
-    for (var index = 0; index < sourceLayers.length; index += 1) {
-      final layer = _decodeSurfaceLayer(sourceLayers[index]);
-      final isRoot = index == 0;
-      if (!_validSurfaceLayer(layer) ||
-          layer.transform > 7 ||
-          layer.scale120 <= 0 ||
-          !identities.add(layer.surfaceId) ||
-          layer.popupRootSurfaceId != 0 ||
-          layer.compositionOrder < lastCompositionOrder ||
-          (isRoot &&
-              (layer.role != DenialSurfaceRole.root ||
-                  layer.parentSurfaceId != 0)) ||
-          (!isRoot &&
-              (layer.role != DenialSurfaceRole.subsurface ||
-                  layer.parentSurfaceId <= 0 ||
-                  !identities.contains(layer.parentSurfaceId)))) {
-        rejectedStructuredMessages += 1;
-        return null;
+    List<DenialSurfaceLayer>? decodeTree(
+      List<generated.SurfaceLayer> sourceLayers,
+    ) {
+      final layers = <DenialSurfaceLayer>[];
+      final treeIdentities = <int>{};
+      var lastCompositionOrder = -1;
+      for (var index = 0; index < sourceLayers.length; index += 1) {
+        final layer = _decodeSurfaceLayer(sourceLayers[index]);
+        final isRoot = index == 0;
+        if (!_validSurfaceLayer(layer) ||
+            layer.transform > 7 ||
+            layer.scale120 <= 0 ||
+            !identities.add(layer.surfaceId) ||
+            !treeIdentities.add(layer.surfaceId) ||
+            layer.popupRootSurfaceId != 0 ||
+            layer.compositionOrder < lastCompositionOrder ||
+            (isRoot &&
+                (layer.role != DenialSurfaceRole.root ||
+                    layer.parentSurfaceId != 0)) ||
+            (!isRoot &&
+                (layer.role != DenialSurfaceRole.subsurface ||
+                    layer.parentSurfaceId <= 0 ||
+                    !treeIdentities.contains(layer.parentSurfaceId)))) {
+          return null;
+        }
+        lastCompositionOrder = layer.compositionOrder;
+        layers.add(layer);
       }
-      lastCompositionOrder = layer.compositionOrder;
-      layers.add(layer);
+      return List<DenialSurfaceLayer>.unmodifiable(layers);
+    }
+
+    final layers = decodeTree(sourceLayers);
+    final dragLayers = decodeTree(sourceDragLayers);
+    if (layers == null || dragLayers == null) {
+      rejectedStructuredMessages += 1;
+      return null;
     }
     return DenialCursorState(
       epoch: state.epoch,
       kind: kind,
       shape: shape,
       hotspot: Offset(hotspot.x, hotspot.y),
-      surfaceLayers: List<DenialSurfaceLayer>.unmodifiable(layers),
+      surfaceLayers: layers,
+      dragActive: state.dragActive,
+      dragSurfaceLayers: dragLayers,
     );
   }
 

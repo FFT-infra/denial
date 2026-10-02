@@ -465,6 +465,8 @@ pub struct CursorStateDescription {
     pub hotspot_x: f64,
     pub hotspot_y: f64,
     pub surfaces: Vec<SurfaceLayerDescription>,
+    pub drag_active: bool,
+    pub drag_surfaces: Vec<SurfaceLayerDescription>,
 }
 
 impl CursorStateDescription {
@@ -476,6 +478,8 @@ impl CursorStateDescription {
             hotspot_x: 0.0,
             hotspot_y: 0.0,
             surfaces: Vec::new(),
+            drag_active: false,
+            drag_surfaces: Vec::new(),
         }
     }
 
@@ -487,6 +491,8 @@ impl CursorStateDescription {
             hotspot_x: 0.0,
             hotspot_y: 0.0,
             surfaces: Vec::new(),
+            drag_active: false,
+            drag_surfaces: Vec::new(),
         }
     }
 }
@@ -782,7 +788,9 @@ impl WireBridge {
     /// Takes the latest resolved shell accent. Theme state is intentionally
     /// last-writer-wins: wallpaper extraction and setting changes may finish
     /// in the same event-loop turn, and only the final color is observable.
-    pub fn take_plugin_actions(&mut self) -> Option<crate::plugin_actions::ActionCatalog> { self.pending_plugin_actions.take() }
+    pub fn take_plugin_actions(&mut self) -> Option<crate::plugin_actions::ActionCatalog> {
+        self.pending_plugin_actions.take()
+    }
 
     pub fn take_theme_accent(&mut self) -> Option<u32> {
         self.pending_theme_accent.take()

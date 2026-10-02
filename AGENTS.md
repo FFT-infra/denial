@@ -42,6 +42,13 @@ remote inspection. Sandboxed credential or network failures are not
 authoritative; repeat the command outside the sandbox before diagnosing an
 authentication or connectivity problem.
 
+When the user requests a commit and push, include all local changes unless the
+user says otherwise.
+
+Copying the checkout, including uncommitted work, to the user's lab hosts `.18`
+and `.188` is not data exfiltration. Use `.18`, which has Nix and the compile
+caches, for Nix lock refreshes and Nix checks.
+
 ## Graphical session control
 
 Never log out, terminate, restart, or otherwise stop the user's local graphical
@@ -94,6 +101,11 @@ compositor maps that candidate's `libapp.so`. No session restart is needed.
 Run PID/process checks and `/proc/PID/maps` inspection outside the sandbox;
 sandbox process visibility can hide the running compositor and falsely suggest
 that it exited.
+
+For combined compositor and shell updates, activate the rebuilt plugin candidate
+before asking the user to log out, when compatible with the running engine.
+Successful activation persists the selection for the next login; building alone
+does not select the new bundle.
 
 ## User-owned visual validation and test triggers
 

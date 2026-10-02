@@ -3287,10 +3287,12 @@ class CursorState {
   String? get shape => const fb.StringReader().vTableGetNullable(_bc, _bcOffset, 8);
   WirePoint? get hotspot => WirePoint.reader.vTableGetNullable(_bc, _bcOffset, 10);
   List<SurfaceLayer>? get surfaces => const fb.ListReader<SurfaceLayer>(SurfaceLayer.reader).vTableGetNullable(_bc, _bcOffset, 12);
+  bool get dragActive => const fb.BoolReader().vTableGet(_bc, _bcOffset, 14, false);
+  List<SurfaceLayer>? get dragSurfaces => const fb.ListReader<SurfaceLayer>(SurfaceLayer.reader).vTableGetNullable(_bc, _bcOffset, 16);
 
   @override
   String toString() {
-    return 'CursorState{epoch: ${epoch}, kind: ${kind}, shape: ${shape}, hotspot: ${hotspot}, surfaces: ${surfaces}}';
+    return 'CursorState{epoch: ${epoch}, kind: ${kind}, shape: ${shape}, hotspot: ${hotspot}, surfaces: ${surfaces}, dragActive: ${dragActive}, dragSurfaces: ${dragSurfaces}}';
   }
 }
 
@@ -3308,7 +3310,7 @@ class CursorStateBuilder {
   final fb.Builder fbBuilder;
 
   void begin() {
-    fbBuilder.startTable(5);
+    fbBuilder.startTable(7);
   }
 
   int addEpoch(int? epoch) {
@@ -3331,6 +3333,14 @@ class CursorStateBuilder {
     fbBuilder.addOffset(4, offset);
     return fbBuilder.offset;
   }
+  int addDragActive(bool? dragActive) {
+    fbBuilder.addBool(5, dragActive);
+    return fbBuilder.offset;
+  }
+  int addDragSurfacesOffset(int? offset) {
+    fbBuilder.addOffset(6, offset);
+    return fbBuilder.offset;
+  }
 
   int finish() {
     return fbBuilder.endTable();
@@ -3343,6 +3353,8 @@ class CursorStateObjectBuilder extends fb.ObjectBuilder {
   final String? _shape;
   final WirePointObjectBuilder? _hotspot;
   final List<SurfaceLayerObjectBuilder>? _surfaces;
+  final bool? _dragActive;
+  final List<SurfaceLayerObjectBuilder>? _dragSurfaces;
 
   CursorStateObjectBuilder({
     int? epoch,
@@ -3350,12 +3362,16 @@ class CursorStateObjectBuilder extends fb.ObjectBuilder {
     String? shape,
     WirePointObjectBuilder? hotspot,
     List<SurfaceLayerObjectBuilder>? surfaces,
+    bool? dragActive,
+    List<SurfaceLayerObjectBuilder>? dragSurfaces,
   })
       : _epoch = epoch,
         _kind = kind,
         _shape = shape,
         _hotspot = hotspot,
-        _surfaces = surfaces;
+        _surfaces = surfaces,
+        _dragActive = dragActive,
+        _dragSurfaces = dragSurfaces;
 
   /// Finish building, and store into the [fbBuilder].
   @override
@@ -3364,7 +3380,9 @@ class CursorStateObjectBuilder extends fb.ObjectBuilder {
         : fbBuilder.writeString(_shape!);
     final int? surfacesOffset = _surfaces == null ? null
         : fbBuilder.writeList(_surfaces!.map((b) => b.getOrCreateOffset(fbBuilder)).toList());
-    fbBuilder.startTable(5);
+    final int? dragSurfacesOffset = _dragSurfaces == null ? null
+        : fbBuilder.writeList(_dragSurfaces!.map((b) => b.getOrCreateOffset(fbBuilder)).toList());
+    fbBuilder.startTable(7);
     fbBuilder.addUint64(0, _epoch);
     fbBuilder.addUint8(1, _kind?.value);
     fbBuilder.addOffset(2, shapeOffset);
@@ -3372,6 +3390,8 @@ class CursorStateObjectBuilder extends fb.ObjectBuilder {
       fbBuilder.addStruct(3, _hotspot!.finish(fbBuilder));
     }
     fbBuilder.addOffset(4, surfacesOffset);
+    fbBuilder.addBool(5, _dragActive);
+    fbBuilder.addOffset(6, dragSurfacesOffset);
     return fbBuilder.endTable();
   }
 

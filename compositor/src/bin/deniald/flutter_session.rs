@@ -243,7 +243,9 @@ pub(super) fn reload_flutter_runtime(
         return Ok(FlutterReloadOutcome::Retained);
     }
     events.plugin_actions = Default::default();
-    events.native_escape_shortcut.set_plugin_actions(&events.plugin_actions);
+    events
+        .native_escape_shortcut
+        .set_plugin_actions(&events.plugin_actions);
     old_runtime
         .shutdown()
         .map_err(|error| format!("Flutter shutdown before refresh failed: {error}"))?;

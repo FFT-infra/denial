@@ -6369,6 +6369,8 @@ impl<'a> CursorState<'a> {
   pub const VT_SHAPE: flatbuffers::VOffsetT = 8;
   pub const VT_HOTSPOT: flatbuffers::VOffsetT = 10;
   pub const VT_SURFACES: flatbuffers::VOffsetT = 12;
+  pub const VT_DRAG_ACTIVE: flatbuffers::VOffsetT = 14;
+  pub const VT_DRAG_SURFACES: flatbuffers::VOffsetT = 16;
 
   #[inline]
   pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -6381,9 +6383,11 @@ impl<'a> CursorState<'a> {
   ) -> flatbuffers::WIPOffset<CursorState<'bldr>> {
     let mut builder = CursorStateBuilder::new(_fbb);
     builder.add_epoch(args.epoch);
+    if let Some(x) = args.drag_surfaces { builder.add_drag_surfaces(x); }
     if let Some(x) = args.surfaces { builder.add_surfaces(x); }
     if let Some(x) = args.hotspot { builder.add_hotspot(x); }
     if let Some(x) = args.shape { builder.add_shape(x); }
+    builder.add_drag_active(args.drag_active);
     builder.add_kind(args.kind);
     builder.finish()
   }
@@ -6424,6 +6428,20 @@ impl<'a> CursorState<'a> {
     // which contains a valid value in this slot
     unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<SurfaceLayer>>>>(CursorState::VT_SURFACES, None)}
   }
+  #[inline]
+  pub fn drag_active(&self) -> bool {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<bool>(CursorState::VT_DRAG_ACTIVE, Some(false)).unwrap()}
+  }
+  #[inline]
+  pub fn drag_surfaces(&self) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<SurfaceLayer<'a>>>> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<SurfaceLayer>>>>(CursorState::VT_DRAG_SURFACES, None)}
+  }
 }
 
 impl flatbuffers::Verifiable for CursorState<'_> {
@@ -6438,6 +6456,8 @@ impl flatbuffers::Verifiable for CursorState<'_> {
      .visit_field::<flatbuffers::ForwardsUOffset<&str>>("shape", Self::VT_SHAPE, false)?
      .visit_field::<WirePoint>("hotspot", Self::VT_HOTSPOT, false)?
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<SurfaceLayer>>>>("surfaces", Self::VT_SURFACES, false)?
+     .visit_field::<bool>("drag_active", Self::VT_DRAG_ACTIVE, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<SurfaceLayer>>>>("drag_surfaces", Self::VT_DRAG_SURFACES, false)?
      .finish();
     Ok(())
   }
@@ -6448,6 +6468,8 @@ pub struct CursorStateArgs<'a> {
     pub shape: Option<flatbuffers::WIPOffset<&'a str>>,
     pub hotspot: Option<&'a WirePoint>,
     pub surfaces: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<SurfaceLayer<'a>>>>>,
+    pub drag_active: bool,
+    pub drag_surfaces: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<SurfaceLayer<'a>>>>>,
 }
 impl<'a> Default for CursorStateArgs<'a> {
   #[inline]
@@ -6458,6 +6480,8 @@ impl<'a> Default for CursorStateArgs<'a> {
       shape: None,
       hotspot: None,
       surfaces: None,
+      drag_active: false,
+      drag_surfaces: None,
     }
   }
 }
@@ -6488,6 +6512,14 @@ impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> CursorStateBuilder<'a, 'b, A> {
     self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(CursorState::VT_SURFACES, surfaces);
   }
   #[inline]
+  pub fn add_drag_active(&mut self, drag_active: bool) {
+    self.fbb_.push_slot::<bool>(CursorState::VT_DRAG_ACTIVE, drag_active, false);
+  }
+  #[inline]
+  pub fn add_drag_surfaces(&mut self, drag_surfaces: flatbuffers::WIPOffset<flatbuffers::Vector<'b , flatbuffers::ForwardsUOffset<SurfaceLayer<'b >>>>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(CursorState::VT_DRAG_SURFACES, drag_surfaces);
+  }
+  #[inline]
   pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> CursorStateBuilder<'a, 'b, A> {
     let start = _fbb.start_table();
     CursorStateBuilder {
@@ -6510,6 +6542,8 @@ impl core::fmt::Debug for CursorState<'_> {
       ds.field("shape", &self.shape());
       ds.field("hotspot", &self.hotspot());
       ds.field("surfaces", &self.surfaces());
+      ds.field("drag_active", &self.drag_active());
+      ds.field("drag_surfaces", &self.drag_surfaces());
       ds.finish()
   }
 }

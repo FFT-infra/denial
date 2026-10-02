@@ -9,6 +9,7 @@ import 'package:flutter/widgets.dart';
 import '../models/denial_drag_icon.dart';
 import '../diagnostics/cursor_benchmark.dart';
 import '../models/denial_cursor_state.dart';
+import '../models/denial_window.dart';
 import '../models/display_layout.dart';
 import '../theme/cursor_themes.dart';
 import 'retained_translation.dart';
@@ -239,7 +240,8 @@ class _ShellCursorHostState extends State<ShellCursorHost>
             !widget.hideCursor &&
             _visible &&
             _platformCursorState?.kind != DenialCursorStateKind.hidden &&
-            _dragIcon == null,
+            _dragIcon == null &&
+            !(_platformCursorState?.dragActive ?? false),
         move: _setPosition,
         restore: () {
           if (mounted && _physicalPosition != null) {
@@ -450,6 +452,7 @@ class _ShellCursorHostState extends State<ShellCursorHost>
     final position = _position;
     final dragIcon = _dragIcon;
     final cursorState = _platformCursorState;
+    final dragActive = dragIcon != null || (cursorState?.dragActive ?? false);
     final clientSurface = cursorState?.kind == DenialCursorStateKind.surface
         ? cursorState
         : null;
@@ -460,7 +463,7 @@ class _ShellCursorHostState extends State<ShellCursorHost>
       themedCursorVisible: _visible,
       cursorHidden: cursorHidden,
       clientSurfaceRequested: clientSurface != null,
-      dragActive: dragIcon != null,
+      dragActive: dragActive,
     );
     final fallbackScale = MediaQuery.maybeOf(context)?.devicePixelRatio ?? 1.0;
     final outputScale = _cursorOutputScale(
@@ -503,6 +506,24 @@ class _ShellCursorHostState extends State<ShellCursorHost>
                   ),
                 ),
               ),
+            if (position != null &&
+                (cursorState?.dragSurfaceLayers.isNotEmpty ?? false))
+              Positioned(
+                left: 0,
+                top: 0,
+                child: RetainedTranslation(
+                  translation: _cursorTranslation,
+                  child: IgnorePointer(
+                    child: ExcludeSemantics(
+                      child: RepaintBoundary(
+                        child: _ClientCursorSurfaceTree(
+                          layers: cursorState!.dragSurfaceLayers,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             if (artworkSource == ShellCursorArtworkSource.clientSurface)
               Positioned(
                 left: 0,
@@ -512,7 +533,10 @@ class _ShellCursorHostState extends State<ShellCursorHost>
                   child: IgnorePointer(
                     child: ExcludeSemantics(
                       child: RepaintBoundary(
-                        child: _ClientCursorSurfaceTree(state: clientSurface!),
+                        child: _ClientCursorSurfaceTree(
+                          layers: clientSurface!.surfaceLayers,
+                          hotspot: clientSurface.hotspot,
+                        ),
                       ),
                     ),
                   ),
@@ -529,9 +553,7 @@ class _ShellCursorHostState extends State<ShellCursorHost>
                       child: RepaintBoundary(
                         child: ShellCursorArtwork(
                           theme: widget.theme,
-                          kind: dragIcon == null
-                              ? _kind
-                              : ShellCursorKind.normal,
+                          kind: !dragActive ? _kind : ShellCursorKind.normal,
                           longestEdge: artworkExtent,
                           anchorAtHotspot: true,
                         ),
@@ -548,37 +570,43 @@ class _ShellCursorHostState extends State<ShellCursorHost>
 }
 
 class _ClientCursorSurfaceTree extends StatelessWidget {
-  const _ClientCursorSurfaceTree({required this.state});
+  const _ClientCursorSurfaceTree({
+    required this.layers,
+    this.hotspot = Offset.zero,
+  });
 
-  final DenialCursorState state;
+  final List<DenialSurfaceLayer> layers;
+  final Offset hotspot;
 
   @override
   Widget build(BuildContext context) {
-    final layers = state.surfaceLayers
+    final drawableLayers = layers
         .where((layer) => layer.textureId > 0)
         .toList(growable: false);
-    if (layers.isEmpty) {
+    if (drawableLayers.isEmpty) {
       return const SizedBox.shrink();
     }
-    var left = layers.first.surfaceX;
-    var top = layers.first.surfaceY;
-    var right = layers.first.surfaceX + layers.first.surfaceWidth;
-    var bottom = layers.first.surfaceY + layers.first.surfaceHeight;
-    for (final layer in layers.skip(1)) {
+    var left = drawableLayers.first.surfaceX;
+    var top = drawableLayers.first.surfaceY;
+    var right =
+        drawableLayers.first.surfaceX + drawableLayers.first.surfaceWidth;
+    var bottom =
+        drawableLayers.first.surfaceY + drawableLayers.first.surfaceHeight;
+    for (final layer in drawableLayers.skip(1)) {
       left = math.min(left, layer.surfaceX);
       top = math.min(top, layer.surfaceY);
       right = math.max(right, layer.surfaceX + layer.surfaceWidth);
       bottom = math.max(bottom, layer.surfaceY + layer.surfaceHeight);
     }
     return Transform.translate(
-      offset: Offset(left, top) - state.hotspot,
+      offset: Offset(left, top) - hotspot,
       child: SizedBox(
         width: right - left,
         height: bottom - top,
         child: Stack(
           clipBehavior: Clip.none,
           children: [
-            for (final layer in layers)
+            for (final layer in drawableLayers)
               Positioned(
                 left: layer.surfaceX - left,
                 top: layer.surfaceY - top,

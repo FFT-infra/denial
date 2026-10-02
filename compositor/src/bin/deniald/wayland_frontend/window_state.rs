@@ -1266,7 +1266,10 @@ impl WaylandFrontend {
         let preview_size = self
             .window_record_for_surface(&surface_id)
             .and_then(|record| record.layout_preview_size);
-        if committed_size_requires_reassertion(target.size, preview_size, committed.size) {
+        if committed_size_requires_reassertion(target.size, preview_size, committed.size)
+            && !ManagedWindow::new(window)
+                .is_some_and(|managed| managed.geometry_configure_in_flight())
+        {
             let action = self
                 .window_record_for_surface_mut(&surface_id)
                 .and_then(|record| record.geometry_intent.as_mut())

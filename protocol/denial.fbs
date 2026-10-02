@@ -529,6 +529,9 @@ table CursorState {
   shape:string;
   hotspot:WirePoint;
   surfaces:[SurfaceLayer];
+  // Drag artwork shares the cursor epoch and texture retirement acknowledgement.
+  drag_active:bool = false;
+  drag_surfaces:[SurfaceLayer];
 }
 
 // Native pointer position updates that do not participate in Flutter hit

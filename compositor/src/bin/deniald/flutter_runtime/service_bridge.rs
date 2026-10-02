@@ -80,11 +80,22 @@ impl FlutterRuntime {
         self.wire.drain_settings_commands()
     }
 
-    pub fn take_plugin_actions(&mut self) -> Option<crate::plugin_actions::ActionCatalog> { self.wire.take_plugin_actions() }
+    pub fn take_plugin_actions(&mut self) -> Option<crate::plugin_actions::ActionCatalog> {
+        self.wire.take_plugin_actions()
+    }
 
-    pub fn send_plugin_action(&mut self, generation: u64, id: &str, monitor: Option<i64>) -> Result<(), Box<dyn Error>> {
+    pub fn send_plugin_action(
+        &mut self,
+        generation: u64,
+        id: &str,
+        monitor: Option<i64>,
+    ) -> Result<(), Box<dyn Error>> {
         let response = self.wire.encode_plugin_action(generation, id, monitor)?;
-        self.host.as_ref().expect("active runtime").engine().send_platform_message(wire::TO_FLUTTER_CHANNEL, response)?;
+        self.host
+            .as_ref()
+            .expect("active runtime")
+            .engine()
+            .send_platform_message(wire::TO_FLUTTER_CHANNEL, response)?;
         Ok(())
     }
 

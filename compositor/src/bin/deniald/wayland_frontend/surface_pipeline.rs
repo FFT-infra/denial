@@ -167,6 +167,159 @@ fn surface_crop_to_buffer(
     source.to_buffer(scale, transform.invert(), &logical_size)
 }
 
+/// Dart lays a texture out from its published buffer size and source crop,
+/// while the engine samples whichever buffer is current when it rasterizes.
+/// Clients that crop an over-allocated buffer through wp_viewport (Chromium
+/// does during and after interactive resizes) reallocate without changing the
+/// visible size, so one buffer could be stretched into another's layout.
+/// Publish such a texture as a virtual canvas of its crop instead: the engine
+/// reads the crop together with the buffer it samples, and the published
+/// layout no longer depends on the allocation size.
+#[cfg(feature = "flutter")]
+fn cropped_buffer_canvas(
+    source: Rectangle<f64, smithay::utils::Buffer>,
+    transform: Transform,
+    buffer_width: u32,
+    buffer_height: u32,
+) -> Option<denial_flutter_engine::ExternalTexturePresentation> {
+    let [x, y, width, height] = [source.loc.x, source.loc.y, source.size.w, source.size.h];
+    // Fractional and transformed crops keep the established sampling path.
+    let integral = [x, y, width, height]
+        .iter()
+        .all(|value| value.is_finite() && (value - value.round()).abs() < 1e-6);
+    let buffer_width = f64::from(buffer_width);
+    let buffer_height = f64::from(buffer_height);
+    let cropped = integral
+        && transform == Transform::Normal
+        && width > 0.0
+        && height > 0.0
+        && x >= 0.0
+        && y >= 0.0
+        && x + width <= buffer_width
+        && y + height <= buffer_height
+        && (x, y, width, height) != (0.0, 0.0, buffer_width, buffer_height);
+    cropped.then(|| denial_flutter_engine::ExternalTexturePresentation {
+        struct_size: std::mem::size_of::<denial_flutter_engine::ExternalTexturePresentation>(),
+        width,
+        height,
+        source: [x, y, width, height],
+        destination: [0.0, 0.0, width, height],
+        // An empty background adds no draw to the engine's canvas.
+        ..Default::default()
+    })
+}
+
+/// Maps a rectangle in a [`cropped_buffer_canvas`] back to buffer pixels.
+#[cfg(feature = "flutter")]
+pub(super) fn canvas_rect_to_buffer(
+    canvas: Option<&denial_flutter_engine::ExternalTexturePresentation>,
+    rect: [f64; 4],
+) -> [f64; 4] {
+    let Some(canvas) = canvas.filter(|canvas| canvas.width > 0.0 && canvas.height > 0.0) else {
+        return rect;
+    };
+    let sx = canvas.source[2] / canvas.width;
+    let sy = canvas.source[3] / canvas.height;
+    [
+        canvas.source[0] + rect[0] * sx,
+        canvas.source[1] + rect[1] * sy,
+        rect[2] * sx,
+        rect[3] * sy,
+    ]
+}
+
+#[cfg(all(test, feature = "flutter"))]
+mod cropped_canvas_tests {
+    use super::*;
+
+    fn crop(x: f64, y: f64, w: f64, h: f64) -> Rectangle<f64, smithay::utils::Buffer> {
+        Rectangle::new((x, y).into(), (w, h).into())
+    }
+
+    #[test]
+    fn uncropped_buffers_keep_the_direct_image_path() {
+        assert!(
+            cropped_buffer_canvas(
+                crop(0.0, 0.0, 1454.0, 1282.0),
+                Transform::Normal,
+                1454,
+                1282
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn over_allocated_buffer_publishes_its_crop_as_the_canvas() {
+        // Chromium during an interactive resize: a 1792-row allocation shows 1283 rows.
+        let canvas = cropped_buffer_canvas(
+            crop(0.0, 0.0, 1454.0, 1283.0),
+            Transform::Normal,
+            1454,
+            1792,
+        )
+        .expect("cropped buffer");
+        assert_eq!((canvas.width, canvas.height), (1454.0, 1283.0));
+        assert_eq!(canvas.source, [0.0, 0.0, 1454.0, 1283.0]);
+        assert_eq!(canvas.destination, [0.0, 0.0, 1454.0, 1283.0]);
+        assert_eq!(canvas.background, [0.0; 4]);
+    }
+
+    #[test]
+    fn reallocation_without_a_visible_change_keeps_the_published_extent() {
+        // Before: cropped 1792-row allocation. After: an exact 1318-row buffer.
+        let before = cropped_buffer_canvas(
+            crop(0.0, 0.0, 1454.0, 1318.0),
+            Transform::Normal,
+            1454,
+            1792,
+        )
+        .expect("cropped buffer");
+        assert!(
+            cropped_buffer_canvas(
+                crop(0.0, 0.0, 1454.0, 1318.0),
+                Transform::Normal,
+                1454,
+                1318
+            )
+            .is_none()
+        );
+        // The exact buffer is published at its own size, which is the old canvas.
+        assert_eq!((before.width, before.height), (1454.0, 1318.0));
+    }
+
+    #[test]
+    fn offset_crops_map_back_to_buffer_pixels() {
+        let canvas =
+            cropped_buffer_canvas(crop(12.0, 30.0, 400.0, 26.0), Transform::Normal, 512, 64)
+                .expect("cropped buffer");
+        assert_eq!(
+            canvas_rect_to_buffer(Some(&canvas), [0.0, 0.0, 400.0, 26.0]),
+            [12.0, 30.0, 400.0, 26.0]
+        );
+        assert_eq!(
+            canvas_rect_to_buffer(Some(&canvas), [10.0, 2.0, 100.0, 20.0]),
+            [22.0, 32.0, 100.0, 20.0]
+        );
+        assert_eq!(
+            canvas_rect_to_buffer(None, [10.0, 2.0, 100.0, 20.0]),
+            [10.0, 2.0, 100.0, 20.0]
+        );
+    }
+
+    #[test]
+    fn fractional_transformed_and_out_of_bounds_crops_are_left_alone() {
+        for (source, transform) in [
+            (crop(0.0, 0.0, 100.5, 50.0), Transform::Normal),
+            (crop(0.0, 0.0, 100.0, 50.0), Transform::_90),
+            (crop(0.0, 0.0, 300.0, 50.0), Transform::Normal),
+            (crop(-1.0, 0.0, 100.0, 50.0), Transform::Normal),
+        ] {
+            assert!(cropped_buffer_canvas(source, transform, 200, 100).is_none());
+        }
+    }
+}
+
 #[cfg(all(test, feature = "flutter"))]
 mod surface_crop_tests {
     use super::*;
@@ -680,13 +833,24 @@ impl WaylandFrontend {
                 } else {
                     (0, 0, 0)
                 };
+                let canvas = (texture_id > 0)
+                    .then(|| cropped_buffer_canvas(source, transform, width, height))
+                    .flatten();
                 if let Some(frame) = textures
                     .last_mut()
                     .filter(|frame| frame.texture_id == surface_id as i64)
                 {
                     frame.set_feedback(super::presentation::surface_feedback(states));
-                    frame.presentation = Some(Default::default());
+                    frame.presentation = Some(canvas.unwrap_or_default());
                 }
+                let (width, height, source) = match canvas {
+                    Some(canvas) => (
+                        canvas.width as u32,
+                        canvas.height as u32,
+                        Rectangle::from_size((canvas.width, canvas.height).into()),
+                    ),
+                    None => (width, height, source),
+                };
                 let role = if surface == root {
                     root_role
                 } else {

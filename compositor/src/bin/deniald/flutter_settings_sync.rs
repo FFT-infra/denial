@@ -31,7 +31,8 @@ pub(super) fn synchronize_flutter_window_management(
         while runtime.take_application_launch().is_some() {}
     } else {
         while let Some((generation, id, monitor)) = events.plugin_actions.pending.pop_front() {
-            if generation == events.plugin_actions.generation && events.plugin_actions.contains(&id) {
+            if generation == events.plugin_actions.generation && events.plugin_actions.contains(&id)
+            {
                 runtime.send_plugin_action(generation, &id, monitor)?;
             }
         }
@@ -57,7 +58,8 @@ pub(super) fn synchronize_flutter_window_management(
                         None,
                         activation_token.as_deref(),
                     ),
-                native_shortcut::ShortcutTarget::DenialAction { .. } | native_shortcut::ShortcutTarget::PluginAction { .. } => continue,
+                native_shortcut::ShortcutTarget::DenialAction { .. }
+                | native_shortcut::ShortcutTarget::PluginAction { .. } => continue,
             };
             if let Err(error) = result {
                 warn!(%error, "could not launch command requested by shortcut");
@@ -1232,7 +1234,7 @@ pub(super) fn apply_shortcut_update(
     let result = match prepared {
         Ok(mut prepared) => {
             let mut candidate_engine = prepared.take_engine();
-    candidate_engine.set_plugin_actions(&events.plugin_actions);
+            candidate_engine.set_plugin_actions(&events.plugin_actions);
             let previous_engine =
                 std::mem::replace(&mut events.native_escape_shortcut, candidate_engine);
             let result = events

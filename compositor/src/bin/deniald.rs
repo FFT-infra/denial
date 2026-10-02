@@ -68,8 +68,6 @@ mod lifecycle;
 mod local_windows;
 #[path = "deniald/native_shortcut.rs"]
 mod native_shortcut;
-#[path = "deniald/plugin_actions.rs"]
-mod plugin_actions;
 #[cfg(feature = "flutter")]
 #[path = "deniald/notification_server.rs"]
 mod notification_server;
@@ -86,6 +84,8 @@ mod output_control;
 mod output_scheduler;
 #[path = "deniald/output_topology.rs"]
 mod output_topology;
+#[path = "deniald/plugin_actions.rs"]
+mod plugin_actions;
 #[cfg(feature = "flutter")]
 #[path = "deniald/plugin_bundle.rs"]
 mod plugin_bundle;
@@ -102,8 +102,6 @@ mod scene_sync;
 mod screenshot;
 #[path = "deniald/session_activation.rs"]
 mod session_activation;
-#[path = "deniald/welcome.rs"]
-mod welcome;
 #[path = "deniald/settings.rs"]
 mod settings;
 #[cfg(feature = "flutter")]
@@ -127,6 +125,8 @@ mod touchpad_gestures;
 mod ui_development;
 #[path = "deniald/wayland_frontend.rs"]
 mod wayland_frontend;
+#[path = "deniald/welcome.rs"]
+mod welcome;
 #[cfg(feature = "flutter")]
 #[path = "deniald/window_events.rs"]
 mod window_events;

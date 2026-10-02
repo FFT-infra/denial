@@ -664,10 +664,8 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
             && wayland.is_some()
             && let Some(runtime) = flutter.as_mut()
             && let Some(arguments) = welcome::launch_arguments()
-            && let Err(error) = runtime.start_startup_application(
-                arguments,
-                "dev.denial.Welcome.desktop",
-            )
+            && let Err(error) =
+                runtime.start_startup_application(arguments, "dev.denial.Welcome.desktop")
         {
             warn!(%error, "could not start Welcome");
         }

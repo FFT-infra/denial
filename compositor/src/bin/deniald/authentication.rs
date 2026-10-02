@@ -4,6 +4,10 @@
 mod fingerprint;
 #[path = "authentication/fingerprint_settings.rs"]
 pub(super) mod fingerprint_settings;
+#[path = "authentication/lock_capability.rs"]
+mod lock_capability;
+#[path = "authentication/session_lock.rs"]
+mod session_lock;
 
 use std::collections::VecDeque;
 use std::error::Error;
@@ -742,6 +746,8 @@ struct AuthenticationState {
     response: Option<SecureString>,
     available: bool,
     unavailable_reason: String,
+    automatic_lock: lock_capability::Capability,
+    automatic_lock_warning_shown: bool,
 }
 
 struct SharedAuthentication {
@@ -770,6 +776,8 @@ pub(super) struct AuthenticationController {
     shared: Arc<SharedAuthentication>,
     worker: Mutex<Option<JoinHandle<()>>>,
     fingerprint_worker: Mutex<Option<JoinHandle<()>>>,
+    session_worker: Mutex<Option<JoinHandle<()>>>,
+    capability_worker: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl AuthenticationController {
@@ -789,6 +797,24 @@ impl AuthenticationController {
                 fingerprint::run_worker(&shared, &mut fingerprint::FprintBackend);
             })?;
         *lock_unpoisoned(&controller.fingerprint_worker) = Some(worker);
+        lock_unpoisoned(&controller.shared.state).automatic_lock =
+            lock_capability::Capability::Pending;
+        let shared = Arc::clone(&controller.shared);
+        let worker = thread::Builder::new()
+            .name("denial-lock-capability".into())
+            .spawn(move || {
+                crate::cpu_scheduling::normalize_current_worker("lock capability");
+                lock_capability::run_worker(&shared);
+            })?;
+        *lock_unpoisoned(&controller.capability_worker) = Some(worker);
+        let shared = Arc::clone(&controller.shared);
+        let worker = thread::Builder::new()
+            .name("denial-logind-lock".into())
+            .spawn(move || {
+                crate::cpu_scheduling::normalize_current_worker("logind lock");
+                session_lock::run_worker(&shared);
+            })?;
+        *lock_unpoisoned(&controller.session_worker) = Some(worker);
         Ok(controller)
     }
 
@@ -821,6 +847,8 @@ impl AuthenticationController {
                 response: None,
                 available,
                 unavailable_reason,
+                automatic_lock: lock_capability::Capability::Unknown,
+                automatic_lock_warning_shown: false,
             }),
             condition: Condvar::new(),
             events: Mutex::new(VecDeque::with_capacity(16)),
@@ -837,6 +865,8 @@ impl AuthenticationController {
             shared,
             worker: Mutex::new(Some(worker)),
             fingerprint_worker: Mutex::new(None),
+            session_worker: Mutex::new(None),
+            capability_worker: Mutex::new(None),
         })
     }
 
@@ -910,26 +940,29 @@ impl AuthenticationController {
     }
 
     pub(super) fn lock(&self) {
-        {
-            let mut state = lock_unpoisoned(&self.shared.state);
-            state.lock_epoch = state.lock_epoch.wrapping_add(1);
-            state.fingerprint_unlock = None;
-            self.shared
-                .fingerprint_unlock_pending
-                .store(false, Ordering::Release);
-            self.shared.locked.store(true, Ordering::Release);
-            self.shared
-                .security_gate_locked
-                .store(true, Ordering::Release);
-            if state.busy {
-                state.generation = state.generation.wrapping_add(1);
-                state.cancel_requested = true;
-                state.response = None;
-                state.prompt = None;
-            }
+        lock_session(&self.shared);
+    }
+
+    /// Explicit locks remain unconditional. Only compositor-owned automatic
+    /// locks use the account capability discovered by the background worker.
+    pub(super) fn lock_automatically(&self) -> bool {
+        let mut state = lock_unpoisoned(&self.shared.state);
+        if self.locked() {
+            return true;
         }
+        if !state.available || !state.automatic_lock.permits_lock() {
+            if !state.automatic_lock_warning_shown {
+                warn!(capability = ?state.automatic_lock,
+                    "skipped automatic session lock: no usable unlock method is known");
+                state.automatic_lock_warning_shown = true;
+            }
+            return false;
+        }
+        apply_lock(&self.shared, &mut state);
+        drop(state);
         self.shared.condition.notify_all();
         self.publish_state();
+        true
     }
 
     pub(super) fn try_event(&self) -> Option<AuthenticationEvent> {
@@ -1071,6 +1104,14 @@ impl Drop for AuthenticationController {
             state.prompt = None;
         }
         self.shared.condition.notify_all();
+        for worker in [&self.session_worker, &self.capability_worker] {
+            if lock_unpoisoned(worker)
+                .take()
+                .is_some_and(|worker| worker.join().is_err())
+            {
+                warn!("session lock worker panicked during shutdown");
+            }
+        }
         if lock_unpoisoned(&self.fingerprint_worker)
             .take()
             .is_some_and(|worker| worker.join().is_err())
@@ -1084,6 +1125,33 @@ impl Drop for AuthenticationController {
             warn!("native authentication worker panicked during shutdown");
         }
     }
+}
+
+fn apply_lock(shared: &SharedAuthentication, state: &mut AuthenticationState) {
+    state.lock_epoch = state.lock_epoch.wrapping_add(1);
+    state.fingerprint_unlock = None;
+    shared
+        .fingerprint_unlock_pending
+        .store(false, Ordering::Release);
+    shared.locked.store(true, Ordering::Release);
+    shared.security_gate_locked.store(true, Ordering::Release);
+    if state.busy {
+        state.generation = state.generation.wrapping_add(1);
+        state.cancel_requested = true;
+        state.response = None;
+        state.prompt = None;
+    }
+}
+
+fn lock_session(shared: &SharedAuthentication) {
+    let mut state = lock_unpoisoned(&shared.state);
+    apply_lock(shared, &mut state);
+    shared.condition.notify_all();
+    shared.push_event(AuthenticationEvent {
+        kind: AuthenticationEventKind::State,
+        state: snapshot_locked(shared, &state, Instant::now()),
+        message: String::new(),
+    });
 }
 
 fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

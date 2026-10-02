@@ -56,7 +56,8 @@ fn take_periodic_deadline(now: Instant, deadline: &mut Instant, interval: Durati
 }
 
 fn interactive_service_work_pending(events: &RuntimeState) -> bool {
-    !events.plugin_actions.pending.is_empty() || !events.pending_shell_actions.is_empty()
+    !events.plugin_actions.pending.is_empty()
+        || !events.pending_shell_actions.is_empty()
         || !events.pending_shortcut_launches.is_empty()
         || !events.pending_window_events.is_empty()
 }

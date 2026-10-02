@@ -356,7 +356,9 @@ pub(super) enum ShortcutValidation {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 pub(super) enum ShortcutTarget {
-    PluginAction { id: String },
+    PluginAction {
+        id: String,
+    },
     DenialAction {
         action: ShortcutAction,
     },
@@ -378,9 +380,12 @@ impl ShortcutTarget {
     fn validate(&self) -> Result<(), ShortcutError> {
         match self {
             Self::PluginAction { id } => {
-                if crate::plugin_actions::valid_id(id) { Ok(()) }
-                else { Err(ShortcutError::Document("invalid plugin action ID".into())) }
-            },
+                if crate::plugin_actions::valid_id(id) {
+                    Ok(())
+                } else {
+                    Err(ShortcutError::Document("invalid plugin action ID".into()))
+                }
+            }
             Self::DenialAction { .. } => Ok(()),
             Self::Spawn {
                 command,
@@ -937,8 +942,12 @@ fn migrate_shortcut_file(file: &mut ShortcutFile) -> Result<Option<usize>, Short
             file.shortcuts.push(ShortcutBinding {
                 shortcut: trigger.canonical,
                 target: if action == ShortcutAction::OpenApplications {
-                    ShortcutTarget::PluginAction { id: crate::plugin_actions::LEGACY_LAUNCHER_ACTION.into() }
-                } else { ShortcutTarget::DenialAction { action } },
+                    ShortcutTarget::PluginAction {
+                        id: crate::plugin_actions::LEGACY_LAUNCHER_ACTION.into(),
+                    }
+                } else {
+                    ShortcutTarget::DenialAction { action }
+                },
             });
             changed += 1;
         }
@@ -952,8 +961,14 @@ fn migrate_shortcut_file(file: &mut ShortcutFile) -> Result<Option<usize>, Short
 fn migrate_launcher_targets(file: &mut ShortcutFile) -> usize {
     let mut changed = 0;
     for binding in &mut file.shortcuts {
-        if binding.target == (ShortcutTarget::DenialAction { action: ShortcutAction::OpenApplications }) {
-            binding.target = ShortcutTarget::PluginAction { id: crate::plugin_actions::LEGACY_LAUNCHER_ACTION.into() };
+        if binding.target
+            == (ShortcutTarget::DenialAction {
+                action: ShortcutAction::OpenApplications,
+            })
+        {
+            binding.target = ShortcutTarget::PluginAction {
+                id: crate::plugin_actions::LEGACY_LAUNCHER_ACTION.into(),
+            };
             changed += 1;
         }
     }
@@ -1197,8 +1212,12 @@ fn default_shortcut_file() -> ShortcutFile {
             .map(|(shortcut, action)| ShortcutBinding {
                 shortcut: shortcut.to_owned(),
                 target: if action == ShortcutAction::OpenApplications {
-                    ShortcutTarget::PluginAction { id: crate::plugin_actions::LEGACY_LAUNCHER_ACTION.into() }
-                } else { ShortcutTarget::DenialAction { action } },
+                    ShortcutTarget::PluginAction {
+                        id: crate::plugin_actions::LEGACY_LAUNCHER_ACTION.into(),
+                    }
+                } else {
+                    ShortcutTarget::DenialAction { action }
+                },
             })
             .collect(),
     }
@@ -1862,7 +1881,11 @@ impl ShortcutEngine {
     fn target_available(&self, target: &ShortcutTarget) -> bool {
         match target {
             ShortcutTarget::PluginAction { id } => self.available_plugin_actions.contains(id),
-            ShortcutTarget::DenialAction { action: ShortcutAction::OpenApplications } => self.available_plugin_actions.contains(crate::plugin_actions::LEGACY_LAUNCHER_ACTION),
+            ShortcutTarget::DenialAction {
+                action: ShortcutAction::OpenApplications,
+            } => self
+                .available_plugin_actions
+                .contains(crate::plugin_actions::LEGACY_LAUNCHER_ACTION),
             _ => true,
         }
     }
@@ -1982,8 +2005,9 @@ impl ShortcutEngine {
 
     fn modifier_tap_target(&self, modifier: Modifier) -> Option<ShortcutTarget> {
         self.bindings.iter().find_map(|binding| {
-            (binding.trigger.key == TriggerKey::ModifierTap(modifier) && self.target_available(&binding.target))
-                .then(|| binding.target.clone())
+            (binding.trigger.key == TriggerKey::ModifierTap(modifier)
+                && self.target_available(&binding.target))
+            .then(|| binding.target.clone())
         })
     }
 
@@ -2285,16 +2309,21 @@ mod tests {
             revision: 25,
             shortcuts: vec![ShortcutBinding {
                 shortcut: "Super+A".into(),
-                target: ShortcutTarget::DenialAction { action: ShortcutAction::OpenApplications },
+                target: ShortcutTarget::DenialAction {
+                    action: ShortcutAction::OpenApplications,
+                },
             }],
         };
         assert_eq!(migrate_shortcut_file(&mut file).unwrap(), Some(1));
         assert_eq!(file.revision, 26);
         assert_eq!(file.shortcuts.len(), 1);
         assert_eq!(file.shortcuts[0].shortcut, "Super+A");
-        assert_eq!(file.shortcuts[0].target, ShortcutTarget::PluginAction {
-            id: crate::plugin_actions::LEGACY_LAUNCHER_ACTION.into(),
-        });
+        assert_eq!(
+            file.shortcuts[0].target,
+            ShortcutTarget::PluginAction {
+                id: crate::plugin_actions::LEGACY_LAUNCHER_ACTION.into(),
+            }
+        );
         assert_eq!(migrate_shortcut_file(&mut file).unwrap(), None);
         file.version = 10;
         file.shortcuts.clear();
@@ -2308,28 +2337,47 @@ mod tests {
         let file = ShortcutFile {
             version: SHORTCUT_SCHEMA_VERSION,
             revision: 1,
-            shortcuts: ["A", "Super", "FourFingerSwipeUp"].into_iter().map(|shortcut| ShortcutBinding {
-                shortcut: shortcut.into(), target: ShortcutTarget::PluginAction { id: id.into() },
-            }).collect(),
+            shortcuts: ["A", "Super", "FourFingerSwipeUp"]
+                .into_iter()
+                .map(|shortcut| ShortcutBinding {
+                    shortcut: shortcut.into(),
+                    target: ShortcutTarget::PluginAction { id: id.into() },
+                })
+                .collect(),
         };
         let mut engine = ShortcutEngine::from_file(&file).unwrap();
         let catalog = crate::plugin_actions::ActionCatalog::decode(5,
             r#"[{"id":"third_party.anyAction","label":"Any action","description":"","provider":"Third party"}]"#).unwrap();
         assert_eq!(engine.observe(30, true), ShortcutDisposition::Forward);
         assert_eq!(engine.observe(30, false), ShortcutDisposition::Forward);
-        assert_eq!(engine.observe_gesture(ShortcutGesture::FourFingerSwipeUp), ShortcutDisposition::Forward);
+        assert_eq!(
+            engine.observe_gesture(ShortcutGesture::FourFingerSwipeUp),
+            ShortcutDisposition::Forward
+        );
         engine.set_plugin_actions(&catalog);
-        assert_eq!(engine.observe(30, true), ShortcutDisposition::PluginAction(id.into()));
+        assert_eq!(
+            engine.observe(30, true),
+            ShortcutDisposition::PluginAction(id.into())
+        );
         assert_eq!(engine.observe(30, true), ShortcutDisposition::Consume);
         // Disabling a provider during a captured key still consumes its release.
         engine.set_plugin_actions(&crate::plugin_actions::ActionCatalog::default());
         assert_eq!(engine.observe(30, false), ShortcutDisposition::Consume);
         engine.observe(KEY_LEFT_META, true);
-        assert_eq!(engine.observe(KEY_LEFT_META, false), ShortcutDisposition::Consume);
+        assert_eq!(
+            engine.observe(KEY_LEFT_META, false),
+            ShortcutDisposition::Consume
+        );
         engine.set_plugin_actions(&catalog);
         engine.observe(KEY_LEFT_META, true);
-        assert_eq!(engine.observe(KEY_LEFT_META, false), ShortcutDisposition::PluginAction(id.into()));
-        assert_eq!(engine.observe_gesture(ShortcutGesture::FourFingerSwipeUp), ShortcutDisposition::PluginAction(id.into()));
+        assert_eq!(
+            engine.observe(KEY_LEFT_META, false),
+            ShortcutDisposition::PluginAction(id.into())
+        );
+        assert_eq!(
+            engine.observe_gesture(ShortcutGesture::FourFingerSwipeUp),
+            ShortcutDisposition::PluginAction(id.into())
+        );
     }
 
     #[test]

@@ -498,6 +498,16 @@ pub(super) struct WaylandFrontend {
     #[cfg(feature = "flutter")]
     clipboard_drag_active: bool,
     #[cfg(feature = "flutter")]
+    client_drag_active: bool,
+    #[cfg(feature = "flutter")]
+    drag_icon: Option<WlSurface>,
+    #[cfg(feature = "flutter")]
+    drag_icon_offset: Point<i32, Logical>,
+    #[cfg(feature = "flutter")]
+    pending_drag_icon: bool,
+    #[cfg(feature = "flutter")]
+    pending_drag_frame_callback_roots: HashSet<ObjectId>,
+    #[cfg(feature = "flutter")]
     compositor_pointer_grab_active: bool,
     wayland_pointer_buttons: HashSet<u32>,
     #[cfg(feature = "flutter")]

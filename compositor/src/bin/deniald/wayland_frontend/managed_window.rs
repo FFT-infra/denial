@@ -10,10 +10,10 @@ use smithay::desktop::Window;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_server::Resource;
 use smithay::reexports::wayland_server::protocol::wl_output;
-use smithay::utils::{Logical, Rectangle, Size};
+use smithay::utils::{Logical, Rectangle, Serial, Size};
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::{
-    SurfaceCachedState, ToplevelState, ToplevelSurface, XdgToplevelSurfaceData,
+    SurfaceCachedState, ToplevelCachedState, ToplevelState, ToplevelSurface, XdgToplevelSurfaceData,
 };
 #[cfg(feature = "xwayland")]
 use smithay::xwayland::xwm::{WmWindowType, X11Surface};
@@ -21,6 +21,104 @@ use smithay::xwayland::xwm::{WmWindowType, X11Surface};
 use tracing::warn;
 
 use super::{KeyboardFocusTarget, WindowIdentity};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResizeConfigureIntent {
+    NotNeeded,
+    Send,
+    Throttled,
+}
+
+fn resize_configure_intent(
+    pending: Option<&ToplevelState>,
+    sent: &ToplevelState,
+    committed: Option<&ToplevelState>,
+    force: bool,
+    configure_in_flight: bool,
+) -> ResizeConfigureIntent {
+    let pending = pending.unwrap_or(sent);
+    if pending == sent {
+        return if force {
+            if configure_in_flight {
+                ResizeConfigureIntent::Throttled
+            } else {
+                ResizeConfigureIntent::Send
+            }
+        } else {
+            ResizeConfigureIntent::NotNeeded
+        };
+    }
+    let mut sent_with_pending_size = sent.clone();
+    sent_with_pending_size.size = pending.size;
+    // Match niri: throttle only size-only changes. Activation, constraints and
+    // the start/end of interactive resizing must remain immediately deliverable.
+    if *pending == sent_with_pending_size
+        && committed.is_some_and(|committed| committed.size != sent.size)
+    {
+        ResizeConfigureIntent::Throttled
+    } else {
+        ResizeConfigureIntent::Send
+    }
+}
+
+#[derive(Debug)]
+struct ResizeConfigureSnapshot {
+    pending: Option<ToplevelState>,
+    sent: ToplevelState,
+    committed: Option<ToplevelState>,
+    sent_serial: Option<Serial>,
+    committed_serial: Option<Serial>,
+}
+
+impl ResizeConfigureSnapshot {
+    fn read(toplevel: &ToplevelSurface) -> Self {
+        with_states(toplevel.wl_surface(), |states| {
+            let role = states.data_map.get::<XdgToplevelSurfaceData>().unwrap();
+            let role = role.lock().unwrap_or_else(|p| p.into_inner());
+            let committed = states
+                .cached_state
+                .get::<ToplevelCachedState>()
+                .current()
+                .last_acked
+                .clone();
+            Self {
+                pending: role.server_pending.clone(),
+                sent: role.current_server_state(),
+                committed: committed.as_ref().map(|configure| configure.state.clone()),
+                sent_serial: role
+                    .pending_configures()
+                    .last()
+                    .or(role.last_acked.as_ref())
+                    .map(|configure| configure.serial),
+                committed_serial: committed.map(|configure| configure.serial),
+            }
+        })
+    }
+
+    fn in_flight(&self) -> bool {
+        self.sent_serial.is_some_and(|sent| {
+            self.committed_serial
+                .is_none_or(|committed| committed < sent)
+        })
+    }
+}
+
+fn send_paced_resize_configure(toplevel: &ToplevelSurface, force: bool) {
+    if !toplevel.wl_surface().is_alive() || !toplevel.is_initial_configure_sent() {
+        return;
+    }
+    let snapshot = ResizeConfigureSnapshot::read(toplevel);
+    let intent = resize_configure_intent(
+        snapshot.pending.as_ref(),
+        &snapshot.sent,
+        snapshot.committed.as_ref(),
+        force,
+        snapshot.in_flight(),
+    );
+    if intent == ResizeConfigureIntent::Send {
+        toplevel.send_configure();
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) struct ClientWindowState {
@@ -397,7 +495,7 @@ impl<'a> ManagedWindow<'a> {
                     pending.states.unset(xdg_toplevel::State::Resizing);
                     pending.size = Some(target.size);
                 });
-                toplevel.send_pending_configure();
+                send_paced_resize_configure(toplevel, false);
             }
             #[cfg(feature = "xwayland")]
             ManagedWindowProtocol::X11(_) => {}
@@ -427,9 +525,7 @@ impl<'a> ManagedWindow<'a> {
                 if toplevel.is_initial_configure_sent()
                     && (state_changed || client_maximized != maximized || force_resize)
                 {
-                    // Force a new serial when a prior configure already cached
-                    // this target but the client still presents its old buffer.
-                    toplevel.send_configure();
+                    send_paced_resize_configure(toplevel, false);
                 }
             }
             #[cfg(feature = "xwayland")]
@@ -448,11 +544,7 @@ impl<'a> ManagedWindow<'a> {
             ManagedWindowProtocol::Xdg(toplevel) => {
                 toplevel.with_pending_state(|pending| pending.size = Some(size));
                 if toplevel.is_initial_configure_sent() {
-                    if force {
-                        toplevel.send_configure();
-                    } else {
-                        toplevel.send_pending_configure();
-                    }
+                    send_paced_resize_configure(toplevel, force);
                 }
             }
             #[cfg(feature = "xwayland")]
@@ -472,7 +564,7 @@ impl<'a> ManagedWindow<'a> {
                 }
                 pending.size = Some(size);
             });
-            toplevel.send_pending_configure();
+            send_paced_resize_configure(toplevel, false);
         }
     }
 
@@ -493,7 +585,7 @@ impl<'a> ManagedWindow<'a> {
                     }
                     pending.size = Some(target.size);
                 });
-                toplevel.send_pending_configure();
+                send_paced_resize_configure(toplevel, false);
             }
             #[cfg(feature = "xwayland")]
             ManagedWindowProtocol::X11(surface)
@@ -526,6 +618,28 @@ impl<'a> ManagedWindow<'a> {
         }
     }
 
+    /// Acknowledging a configure alone is insufficient: its state must have
+    /// reached a root-surface commit before a size mismatch merits reassertion.
+    pub(super) fn geometry_configure_in_flight(&self) -> bool {
+        match self.protocol {
+            ManagedWindowProtocol::Xdg(toplevel) => {
+                ResizeConfigureSnapshot::read(toplevel).in_flight()
+            }
+            #[cfg(feature = "xwayland")]
+            ManagedWindowProtocol::X11(_) => false,
+        }
+    }
+
+    pub(super) fn flush_pending_resize(&self) {
+        match self.protocol {
+            ManagedWindowProtocol::Xdg(toplevel) => {
+                send_paced_resize_configure(toplevel, false);
+            }
+            #[cfg(feature = "xwayland")]
+            ManagedWindowProtocol::X11(_) => {}
+        }
+    }
+
     /// Sends the backend's terminal geometry operation. XDG size negotiation
     /// is prepared by the higher-level operation that owns its configure
     /// serial; X11 receives its ConfigureWindow here.
@@ -554,7 +668,7 @@ impl<'a> ManagedWindow<'a> {
                     prepare_geometry_reassertion(pending, target.size, exact);
                 });
                 if toplevel.is_initial_configure_sent() {
-                    toplevel.send_configure();
+                    send_paced_resize_configure(toplevel, true);
                 }
             }
             #[cfg(feature = "xwayland")]
@@ -639,6 +753,123 @@ pub(super) fn toplevel_has_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sized(width: i32) -> ToplevelState {
+        ToplevelState {
+            size: Some(Size::from((width, 600))),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn resize_burst_waits_for_commit_then_sends_only_latest_size() {
+        let committed = sized(800);
+        let sent = sized(900);
+        for width in [910, 920, 930] {
+            assert_eq!(
+                resize_configure_intent(Some(&sized(width)), &sent, Some(&committed), false, true),
+                ResizeConfigureIntent::Throttled
+            );
+        }
+        // An ack is not a commit. Only the committed state opens the gate,
+        // even if the actual client geometry does not match the requested size.
+        let latest = sized(930);
+        assert_eq!(
+            resize_configure_intent(Some(&latest), &sent, Some(&sent), false, false),
+            ResizeConfigureIntent::Send
+        );
+        assert_eq!(
+            resize_configure_intent(None, &latest, Some(&sent), false, true),
+            ResizeConfigureIntent::NotNeeded
+        );
+    }
+
+    #[test]
+    fn resize_state_changes_bypass_outstanding_size_request() {
+        let committed = sized(800);
+        let mut sent = sized(900);
+        sent.states.set(xdg_toplevel::State::Resizing);
+        let mut finished = sent.clone();
+        finished.size = Some(Size::from((930, 600)));
+        finished.states.unset(xdg_toplevel::State::Resizing);
+        assert_eq!(
+            resize_configure_intent(Some(&finished), &sent, Some(&committed), false, true),
+            ResizeConfigureIntent::Send
+        );
+        let mut activated = sent.clone();
+        activated.states.set(xdg_toplevel::State::Activated);
+        assert_eq!(
+            resize_configure_intent(Some(&activated), &sent, Some(&committed), false, true),
+            ResizeConfigureIntent::Send
+        );
+        let mut maximized = sent.clone();
+        maximized.states.set(xdg_toplevel::State::Maximized);
+        assert_eq!(
+            resize_configure_intent(Some(&maximized), &sent, Some(&committed), false, true),
+            ResizeConfigureIntent::Send
+        );
+    }
+
+    #[test]
+    fn returning_to_last_requested_size_cancels_deferred_resize() {
+        let committed = sized(800);
+        let sent = sized(900);
+        assert_eq!(
+            resize_configure_intent(Some(&sent), &sent, Some(&committed), false, true),
+            ResizeConfigureIntent::NotNeeded
+        );
+        assert_eq!(
+            resize_configure_intent(Some(&sent), &sent, Some(&sent), false, false),
+            ResizeConfigureIntent::NotNeeded
+        );
+    }
+
+    #[test]
+    fn forced_reassertion_waits_for_commit_even_after_ack() {
+        let mut snapshot = ResizeConfigureSnapshot {
+            pending: None,
+            sent: sized(900),
+            committed: Some(sized(800)),
+            sent_serial: Some(Serial::from(20)),
+            committed_serial: Some(Serial::from(19)),
+        };
+        assert!(snapshot.in_flight());
+        assert_eq!(
+            resize_configure_intent(
+                None,
+                &snapshot.sent,
+                snapshot.committed.as_ref(),
+                true,
+                snapshot.in_flight()
+            ),
+            ResizeConfigureIntent::Throttled
+        );
+        snapshot.committed_serial = snapshot.sent_serial;
+        snapshot.committed = Some(snapshot.sent.clone());
+        assert!(!snapshot.in_flight());
+        assert_eq!(
+            resize_configure_intent(
+                None,
+                &snapshot.sent,
+                snapshot.committed.as_ref(),
+                true,
+                snapshot.in_flight()
+            ),
+            ResizeConfigureIntent::Send
+        );
+    }
+
+    #[test]
+    fn resize_commit_serial_comparison_handles_wraparound() {
+        let snapshot = ResizeConfigureSnapshot {
+            pending: None,
+            sent: sized(900),
+            committed: Some(sized(800)),
+            sent_serial: Some(Serial::from(1)),
+            committed_serial: Some(Serial::from(u32::MAX)),
+        };
+        assert!(snapshot.in_flight());
+    }
 
     #[test]
     fn ordinary_geometry_reassertion_preserves_live_resize_state() {

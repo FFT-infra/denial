@@ -558,6 +558,8 @@ stage_engine_test() {
         stage="$(mktemp -d "$ENGINE_TEST_STORE/.stage.XXXXXX")"
         mkdir -p -- "$stage/bundle"
         cp -a -- "$BUNDLE/." "$stage/bundle/"
+        chmod u+w -- "$stage/bundle/lib" \
+            "$stage/bundle/lib/libflutter_engine.so"
         install -m644 -- "$engine_source" \
             "$stage/bundle/lib/libflutter_engine.so"
         printf '%s  libflutter_engine.so\n' "$engine_sha" \
@@ -835,6 +837,10 @@ PYMETA
     fi
     ln -s "build-kits/$kit_id" "$staging/build-kit"
     mv -Tf -- "$staging/build-kit" "$BUILD_ROOT/plugin-manager/build-kit"
+    require_file "$BUNDLE/lib/libapp.so"
+    install -m644 -- \
+        "$BUILD_ROOT/plugin-manager/build-kit/runtime/.denial-ui-source.json" \
+        "$BUNDLE/.denial-ui-source.json"
     # The compiled Flutter-tool snapshot is not byte-for-byte reproducible, so
     # every rebuild can have a new kit identity. Only the atomically selected
     # kit is a build output; retaining older copies quickly consumes gigabytes.
@@ -951,6 +957,7 @@ test_compositor() {
         cd -- "$COMPOSITOR_ROOT"
         DENIAL_NOTIFICATION_TEST_BUS=1 \
         DENIAL_FPRINT_TEST_BUS=1 \
+        DENIAL_SESSION_LOCK_TEST_BUS=1 \
         CARGO_TARGET_DIR="$RUST_TARGET" \
         dbus-run-session -- cargo test \
             --locked \

@@ -214,6 +214,30 @@ user = "alice"
 The regular, authenticated greeter path should continue to launch
 `denial-session` without `--start-locked`.
 
+Denial handles logind and elogind session `Lock` requests, including
+`loginctl lock-session` and `loginctl lock-sessions`, through the same native
+security gate as an explicit shell lock. It resolves its own session by PID,
+accepts signals only from logind's unique bus owner for that session, and
+publishes `LockedHint` after lock and unlock transitions. Logind `Unlock`
+signals do not unlock Denial; password or fingerprint authentication is still
+required.
+
+Automatic idle, power-button display-off, and suspend locks check cached account
+capability before locking. For the default `login` PAM service, Denial queries
+AccountsService, falling back to the native user's read-only `passwd -S` status
+when that service is unavailable. A locked password, an absent password, or a
+password which must be set at next login disables automatic locking unless an
+enrolled fingerprint can also pass PAM account validation. Denial logs a warning
+when it skips automatic locking. Display blanking and suspend still work.
+Explicit shell locks, logind locks, and `--start-locked` remain unconditional.
+
+The probe runs off the compositor thread, checks again every 30 seconds, and
+defers automatic locking until its initial check finishes. Unknown account
+metadata and a custom `DENIAL_PAM_SERVICE` retain the configured locking policy;
+local account metadata cannot establish what an arbitrary PAM stack supports.
+A failed metadata refresh retains a previously known unavailable unlock method.
+This is an advisory check, not proof that a password or biometric will succeed.
+
 For simultaneous lock and display-off deadlines, the native input gate closes
 immediately and the output scheduler stops new submissions before powering off.
 On locked wake, Flutter resumes rendering while KMS remains physically off.
@@ -228,10 +252,11 @@ acknowledgement keeps a locked display off rather than presenting old content.
 
 Denial also holds a logind-compatible `sleep` delay inhibitor and observes
 `PrepareForSleep` for system suspend and hibernation. Before releasing that
-inhibitor, the native authentication gate closes and every output which was on
-is cleared through DRM DPMS. After resume, only those outputs are restored, and
-the same lock-frame handshake keeps KMS off until Flutter has produced a fresh
-lock frame. This covers sleep requested by Denial, logind idle policy, lid
+inhibitor, the native authentication gate closes when automatic locking is
+available, and every output which was on
+is cleared through DRM DPMS. After resume, only those outputs are restored. For
+a locked session, the same lock-frame handshake keeps KMS off until Flutter has
+produced a fresh lock frame. This covers sleep requested by Denial, logind idle policy, lid
 switches, and external logind clients without flashing the lock screen before
 the display goes black.
 

@@ -2096,13 +2096,19 @@ pub(super) fn execute_shortcut_disposition(
         }
         ShortcutDisposition::PluginAction(id) => {
             #[cfg(feature = "flutter")]
-            if state.secure_session_locked() { return false; }
+            if state.secure_session_locked() {
+                return false;
+            }
             state.plugin_actions.queue(id, None)
         }
         ShortcutDisposition::RequestApplications => {
             #[cfg(feature = "flutter")]
-            if state.secure_session_locked() { return false; }
-            state.plugin_actions.queue(crate::plugin_actions::LEGACY_LAUNCHER_ACTION.into(), None)
+            if state.secure_session_locked() {
+                return false;
+            }
+            state
+                .plugin_actions
+                .queue(crate::plugin_actions::LEGACY_LAUNCHER_ACTION.into(), None)
         }
         ShortcutDisposition::RequestDashboard => {
             #[cfg(feature = "flutter")]
