@@ -1,5 +1,5 @@
 import 'package:denial_desktop/src/state/reference_shell_controller.dart';
-import 'package:denial_flutter_sdk/effects.dart';
+import 'package:denial_flutter_sdk/glass_configuration.dart';
 import 'package:denial_flutter_sdk/models.dart';
 import 'package:denial_flutter_sdk/motion.dart';
 import 'package:denial_flutter_sdk/rendering.dart';
@@ -160,16 +160,34 @@ class DesktopPopupSurfaceLayers extends StatelessWidget {
                         pixelGridOrigin: pixelGridOrigin,
                         alignSizeToDevicePixels: true,
                         globalClipRect: outputClip,
-                        child: ShellBackdropBlur(
-                          blur: !layer.opaque || layer.opacity < 1.0,
-                          useWindowAlphaThreshold: true,
-                          singleWindowSurface: true,
-                          child: SurfaceLayerTexture(
-                            layer: layer,
-                            filterQuality: filterQuality,
-                            presentationScale: devicePixelRatio,
-                            pixelGridOrigin: pixelGridOrigin,
+                        // The window primitive composites the client
+                        // over its material per pixel, like a toplevel.
+                        child: WindowPlane.texture(
+                          texture: WindowPlaneTexture(
+                            id: layer.textureId,
+                            bufferSize: Size(
+                              layer.width.toDouble(),
+                              layer.height.toDouble(),
+                            ),
+                            source: Rect.fromLTWH(
+                              layer.textureSourceX,
+                              layer.textureSourceY,
+                              layer.textureSourceWidth,
+                              layer.textureSourceHeight,
+                            ),
+                            transform: layer.transform,
+                            opacity: layer.opacity,
                           ),
+                          backdrop: _popupBackdrop(
+                            ShellTheme.of(context),
+                            layer,
+                          ),
+                          // A client-drawn shadow lies outside the popup's
+                          // window geometry and stays unfrosted.
+                          materialRegion: layer.windowGeometryFraction,
+                          filterQuality: filterQuality,
+                          presentationScale: devicePixelRatio,
+                          pixelGridOrigin: pixelGridOrigin,
                         ),
                       ),
                 ],
@@ -179,5 +197,20 @@ class DesktopPopupSurfaceLayers extends StatelessWidget {
         );
       },
     );
+  }
+
+  static ImageFilterConfig? _popupBackdrop(
+    ShellThemeData theme,
+    DenialSurfaceLayer layer,
+  ) {
+    final available =
+        (!layer.opaque || layer.opacity < 1.0) &&
+        theme.backdropBlurEnabled &&
+        (theme.transparencyMode == ShellTransparencyMode.glass ||
+            theme.backdropBlurSigma > 0) &&
+        theme.backdropBlurOpacityThreshold < 1;
+    return available
+        ? theme.backdropFilterConfigAt(1, useWindowAlphaThreshold: true)
+        : null;
   }
 }

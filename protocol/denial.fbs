@@ -339,6 +339,11 @@ table SurfaceLayer {
   // True only when the complete logical surface is guaranteed opaque.
   // Older senders default false so receivers conservatively keep effects.
   opaque:bool;
+  // Appended for wire compatibility. A popup root's xdg_surface window
+  // geometry in surface-local logical coordinates: the visible popup without
+  // client-drawn decorations such as its drop shadow. Absent when the surface
+  // declares none or the geometry is the complete surface.
+  window_geometry:WireRect;
 }
 
 table Window {

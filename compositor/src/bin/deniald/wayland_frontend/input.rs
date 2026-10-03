@@ -8,6 +8,8 @@ use smithay::backend::input::{
     GestureBeginEvent, GestureEndEvent, GestureSwipeUpdateEvent, InputEvent, KeyState,
     KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent, TouchEvent,
 };
+#[cfg(feature = "flutter")]
+use smithay::backend::input::{Switch, SwitchState, SwitchToggleEvent};
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
 use smithay::backend::session::Session;
 use smithay::backend::session::libseat::LibSeatSession;
@@ -1479,6 +1481,20 @@ fn process_input_event(
         return false;
     }
 
+    // libinput's own event type has an inherent `switch()`; ask Smithay's.
+    #[cfg(feature = "flutter")]
+    if let InputEvent::SwitchToggle { event } = &event
+        && SwitchToggleEvent::switch(event) == Some(Switch::Lid)
+    {
+        let closed = SwitchToggleEvent::state(event) == SwitchState::On;
+        state.lid.note_toggle(closed);
+        if !closed {
+            // Opening the lid asks to see the panel, as a key press would.
+            state.note_user_activity();
+        }
+        return false;
+    }
+
     #[cfg(feature = "flutter")]
     if !matches!(&event, InputEvent::DeviceAdded { .. }) {
         state.note_user_activity();
@@ -1713,8 +1729,9 @@ fn reset_input_devices(state: &mut RuntimeState, reset: InputDeviceReset) {
         for keycode in pressed_keys {
             let raw_keycode = keycode.raw();
             let was_retired = previously_retired_keys.contains(&raw_keycode);
-            keyboard.input::<(), _>(
+            super::input_method::input_key(
                 state,
+                &keyboard,
                 keycode,
                 KeyState::Released,
                 SERIAL_COUNTER.next_serial(),
@@ -1937,8 +1954,9 @@ fn dispatch_flutter_repeat(state: &mut RuntimeState, keycode: u32) -> bool {
         .as_ref()
         .map(|frontend| frontend.start_time.elapsed().as_millis() as u32)
         .unwrap_or_default();
-    keyboard.input_forward(
+    super::input_method::forward_key(
         state,
+        &keyboard,
         Keycode::new(keycode),
         KeyState::Pressed,
         SERIAL_COUNTER.next_serial(),
@@ -2629,8 +2647,9 @@ fn process_flutter_keyboard_transition(
             keyboard.current_focus(),
             Some(super::focus::KeyboardFocusTarget::Flutter)
         );
-    keyboard.input::<(), _>(
+    super::input_method::input_key(
         state,
+        &keyboard,
         keycode,
         key_state,
         SERIAL_COUNTER.next_serial(),

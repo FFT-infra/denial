@@ -7642,6 +7642,78 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Tiling and keyboard control'**
   String get welcomeTiling;
+
+  /// Authentication prompt text.
+  ///
+  /// In en, this message translates to:
+  /// **'Administrator authentication required.'**
+  String get polkitRunCommandAsAdministrator;
+
+  /// Authentication prompt text.
+  ///
+  /// In en, this message translates to:
+  /// **'Authentication is required to run this command as {user}.'**
+  String polkitRunCommandAsUser(String user);
+
+  /// Authentication prompt text.
+  ///
+  /// In en, this message translates to:
+  /// **'Authentication is required.'**
+  String get polkitAuthenticationRequired;
+
+  /// Authentication prompt text.
+  ///
+  /// In en, this message translates to:
+  /// **'Authentication is unavailable.'**
+  String get polkitAuthenticationUnavailable;
+
+  /// Authentication prompt text.
+  ///
+  /// In en, this message translates to:
+  /// **'Password'**
+  String get polkitPassword;
+
+  /// Authentication prompt text.
+  ///
+  /// In en, this message translates to:
+  /// **'Verifying…'**
+  String get polkitVerifying;
+
+  /// Authentication prompt text.
+  ///
+  /// In en, this message translates to:
+  /// **'Preparing…'**
+  String get polkitPreparing;
+
+  /// Authentication prompt text.
+  ///
+  /// In en, this message translates to:
+  /// **'Caps Lock'**
+  String get polkitCapsLock;
+
+  /// Authentication prompt text.
+  ///
+  /// In en, this message translates to:
+  /// **'Confirm'**
+  String get polkitConfirm;
+
+  /// Authentication prompt text.
+  ///
+  /// In en, this message translates to:
+  /// **'Continue'**
+  String get polkitContinue;
+
+  /// Authentication prompt text.
+  ///
+  /// In en, this message translates to:
+  /// **'Close'**
+  String get polkitClose;
+
+  /// Authentication prompt text.
+  ///
+  /// In en, this message translates to:
+  /// **'Temporarily locked'**
+  String get polkitLocked;
 }
 
 class _AppLocalizationsDelegate

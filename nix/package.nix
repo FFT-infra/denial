@@ -91,7 +91,22 @@ let
     # the final package identity so packaging-only changes do not rebuild AOT.
     version = "0.0.0";
   };
+  nativeApp = callPackage ./native-app.nix {
+    src = sourceFor [ "native_app" "compositor" ];
+  };
+  polkitApp = callPackage ./polkit-app.nix {
+    inherit nativeApp;
+    src = sourceFor [
+      "polkit_app"
+      "packages/denial_sdk"
+      "packages/denial_flutter_sdk"
+      "protocol/generated/dart"
+    ];
+    sourceLockHash = builtins.hashFile "sha256" (src.origSrc + "/polkit_app/pubspec.lock");
+    version = "0.0.0";
+  };
   settingsApp = callPackage ./settings-app.nix {
+    inherit nativeApp;
     src = uiSourceFor [
       "dart_shell"
       "packages/denial_sdk"
@@ -107,7 +122,7 @@ let
     version = "0.0.0";
   };
   pluginManagerApp = callPackage ./plugin-manager-app.nix {
-    inherit pluginManagerBackend;
+    inherit pluginManagerBackend nativeApp;
     src = sourceFor [
       "plugin_manager_app"
       "packages/denial_sdk"
@@ -169,6 +184,7 @@ let
     "packaging/arch/session.conf"
     "packaging/arch/xdg-desktop-portal-wlr-Denial"
     "packaging/denial-session.target"
+    "packaging/denial-polkit-agent.service"
     "packaging/denial-suspend-mode"
   ];
   runtimeLibraryPath = lib.makeLibraryPath [
@@ -203,12 +219,17 @@ stdenvNoCC.mkDerivation (finalAttrs: {
 
     install -d $out/lib/denial/settings
     cp --recursive ${settingsApp}/app/denial-settings/. $out/lib/denial/settings/
-    install -m755 ${settingsApp}/bin/denial-settings $out/bin/denial-settings
-    ln --symbolic ../lib/denial/settings/denial-settings \
-      $out/bin/.denial-settings-wrapped
-    substituteInPlace $out/bin/denial-settings \
-      --replace-fail '${settingsApp}/bin/.denial-settings-wrapped' \
-      "$out/bin/.denial-settings-wrapped"
+    ln --symbolic ../lib/denial/settings/denial-settings $out/bin/denial-settings
+
+    install -d $out/lib/denial/polkit
+    cp -R ${polkitApp}/app/denial-polkit-dialog/. $out/lib/denial/polkit/
+    mv $out/lib/denial/polkit/denial-polkit-dialog $out/lib/denial/polkit/denial-app
+    makeWrapper ${compositor}/bin/denial-polkit-agent $out/bin/denial-polkit-agent \
+      --add-flags "--runner $out/lib/denial/polkit/denial-app --bundle $out/lib/denial/polkit --engine $out/lib/denial/polkit/lib/libflutter_engine.so"
+    install -Dm644 ${packageSrc}/packaging/denial-polkit-agent.service \
+      $out/lib/systemd/user/denial-polkit-agent.service
+    substituteInPlace $out/lib/systemd/user/denial-polkit-agent.service \
+      --replace-fail '/usr/bin/denial-polkit-agent' "$out/bin/denial-polkit-agent"
 
     install -m644 ${pluginBuildKit}/runtime/.denial-ui-source.json \
       $out/lib/denial/flutter/.denial-ui-source.json
@@ -309,15 +330,9 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     test -x $out/bin/denialctl
     test -x $out/bin/denial-portal
     test -x $out/bin/denial-settings
-    test -x $out/bin/.denial-settings-wrapped
-    grep --fixed-strings 'GIO_EXTRA_MODULES' $out/bin/denial-settings
-    grep --fixed-strings 'GDK_PIXBUF_MODULE_FILE' $out/bin/denial-settings
-    grep --fixed-strings 'XDG_DATA_DIRS' $out/bin/denial-settings
-    grep --fixed-strings "$out/bin/.denial-settings-wrapped" \
-      $out/bin/denial-settings
-    ! grep --fixed-strings '$out/bin/.denial-settings-wrapped' \
-      $out/bin/denial-settings
-    ! grep --fixed-strings '${settingsApp}' $out/bin/denial-settings
+    test -x $out/bin/denial-polkit-agent
+    test -x $out/lib/denial/polkit/denial-app
+    test "$(readlink $out/bin/denial-settings)" = ../lib/denial/settings/denial-settings
     ! grep --binary-files=text --recursive --fixed-strings \
       'flutter-engine-toolchain-' $out/lib/denial/settings
     test -x $out/bin/denial-session
@@ -352,6 +367,8 @@ stdenvNoCC.mkDerivation (finalAttrs: {
       compositor
       dartShell
       settingsApp
+      nativeApp
+      polkitApp
       pluginManagerApp
       pluginManagerBackend
       pluginBuildKit

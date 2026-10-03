@@ -150,6 +150,77 @@ final class BridgeWindowsClient {
     );
   }
 
+  /// Commits an overview drop of [window] onto [workspaceId] of
+  /// [monitorId], which may be hidden. [point] is the drop position in that
+  /// workspace's own scene coordinates; native resolves it to a tile
+  /// operation and restores a minimized window on the way.
+  void dropWindowOnWorkspace(
+    DenialWindow window, {
+    required int monitorId,
+    required int workspaceId,
+    required Offset point,
+  }) {
+    _sendWorkspaceDrop(
+      window,
+      monitorId: monitorId,
+      workspaceId: workspaceId,
+      point: point,
+      flags: _workspaceLayoutDrop,
+    );
+  }
+
+  /// Plans [dropWindowOnWorkspace] without committing it. Native answers with
+  /// layout-preview placements, including the dragged window's landing slot.
+  /// A null [point] ends the preview.
+  void previewWindowDropOnWorkspace(
+    DenialWindow window, {
+    required int monitorId,
+    required int workspaceId,
+    Offset? point,
+  }) {
+    _sendWorkspaceDrop(
+      window,
+      monitorId: monitorId,
+      workspaceId: workspaceId,
+      point: point,
+      flags: _workspaceDropPreview,
+    );
+  }
+
+  static const int _workspaceLayoutDrop = 1 << 1;
+  static const int _workspaceDropPreview = 1 << 2;
+
+  void _sendWorkspaceDrop(
+    DenialWindow window, {
+    required int monitorId,
+    required int workspaceId,
+    required Offset? point,
+    required int flags,
+  }) {
+    if (window.windowId <= 0 ||
+        monitorId < 0 ||
+        workspaceId < 1 ||
+        workspaceId > 9 ||
+        (point != null && !point.isFinite)) {
+      return;
+    }
+    // Native resolves only the centre. A scrolling strip may place it left
+    // of or above its output.
+    final geometry = point == null
+        ? null
+        : Rect.fromCenter(center: point, width: 2.0, height: 2.0);
+    _context.sendWire(
+      _context.codec.encodeWindowRequest(
+        wire.WindowRequestKind.MoveWindowToWorkspace,
+        windowId: window.windowId,
+        monitorId: monitorId,
+        workspaceId: workspaceId,
+        geometry: geometry,
+        flags: flags,
+      ),
+    );
+  }
+
   void configureWindow(
     DenialWindow window,
     Rect contentRect, {

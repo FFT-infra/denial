@@ -5726,5 +5726,29 @@
   "welcomeTiling": "Tiling and keyboard control",
   "@welcomeTiling": {
     "description": "Welcome shortcut concept group heading."
-  }
+  },
+  "polkitRunCommandAsAdministrator": "Administrator authentication required.",
+  "@polkitRunCommandAsAdministrator": {"description": "Authentication prompt text."},
+  "polkitRunCommandAsUser": "Authentication is required to run this command as {user}.",
+  "@polkitRunCommandAsUser": {"description": "Authentication prompt text.", "placeholders": {"user": {"type": "String"}}},
+  "polkitAuthenticationRequired": "Authentication is required.",
+  "@polkitAuthenticationRequired": {"description": "Authentication prompt text."},
+  "polkitAuthenticationUnavailable": "Authentication is unavailable.",
+  "@polkitAuthenticationUnavailable": {"description": "Authentication prompt text."},
+  "polkitPassword": "Password",
+  "@polkitPassword": {"description": "Authentication prompt text."},
+  "polkitVerifying": "Verifying…",
+  "@polkitVerifying": {"description": "Authentication prompt text."},
+  "polkitPreparing": "Preparing…",
+  "@polkitPreparing": {"description": "Authentication prompt text."},
+  "polkitCapsLock": "Caps Lock",
+  "@polkitCapsLock": {"description": "Authentication prompt text."},
+  "polkitConfirm": "Confirm",
+  "@polkitConfirm": {"description": "Authentication prompt text."},
+  "polkitContinue": "Continue",
+  "@polkitContinue": {"description": "Authentication prompt text."},
+  "polkitClose": "Close",
+  "@polkitClose": {"description": "Authentication prompt text."},
+  "polkitLocked": "Temporarily locked",
+  "@polkitLocked": {"description": "Authentication prompt text."}
 }

@@ -31,6 +31,7 @@ use super::super::clipboard::{
     ClipboardAction, ClipboardCapturePlan, ClipboardDragPayload, ClipboardOrigin,
     ClipboardSelection, ClipboardSourceIdentity,
 };
+use super::input_method::input_key;
 use super::{RuntimeState, WaylandFrontend};
 
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(3);
@@ -543,8 +544,9 @@ fn paste_into_focused_client(state: &mut RuntimeState) {
     }
     let inject_ctrl = !keyboard.modifier_state().ctrl;
     if inject_ctrl {
-        keyboard.input::<(), _>(
+        input_key(
             state,
+            &keyboard,
             ctrl,
             KeyState::Pressed,
             SERIAL_COUNTER.next_serial(),
@@ -552,16 +554,18 @@ fn paste_into_focused_client(state: &mut RuntimeState) {
             |_, _, _| FilterResult::Forward,
         );
     }
-    keyboard.input::<(), _>(
+    input_key(
         state,
+        &keyboard,
         v,
         KeyState::Pressed,
         SERIAL_COUNTER.next_serial(),
         time,
         |_, _, _| FilterResult::Forward,
     );
-    keyboard.input::<(), _>(
+    input_key(
         state,
+        &keyboard,
         v,
         KeyState::Released,
         SERIAL_COUNTER.next_serial(),
@@ -569,8 +573,9 @@ fn paste_into_focused_client(state: &mut RuntimeState) {
         |_, _, _| FilterResult::Forward,
     );
     if inject_ctrl {
-        keyboard.input::<(), _>(
+        input_key(
             state,
+            &keyboard,
             ctrl,
             KeyState::Released,
             SERIAL_COUNTER.next_serial(),

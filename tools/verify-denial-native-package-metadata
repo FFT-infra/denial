@@ -207,7 +207,7 @@ verify_rpm() {
         <<<"$requirements" \
         || fail 'Denial RPM has the wrong exact engine dependency'
       if grep -Eq '^libflutter_linux_gtk\.so' <<<"$requirements"; then
-        fail 'Denial RPM requires its bundled private Flutter GTK library'
+        fail 'Denial RPM unexpectedly depends on a Flutter GTK runner'
       fi
       grep -Fxq rtkit <<<"$requirements" \
         || fail 'Denial RPM does not require rtkit'
@@ -235,9 +235,9 @@ verify_rpm() {
         fail 'Denial RPM embeds the Plugin Manager'
       fi
       grep -Fxq \
-        /usr/lib/denial/settings/lib/libflutter_linux_gtk.so \
+        /usr/lib/denial/settings/lib/libflutter_engine.so \
         <<<"$package_files" \
-        || fail 'Denial RPM lacks the private Flutter GTK settings runtime'
+        || fail 'Denial RPM lacks the raw Flutter settings engine'
       for portal_artifact in \
         /usr/bin/denial-portal \
         /usr/lib/systemd/user/denial-portal.service \

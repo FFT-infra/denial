@@ -396,6 +396,11 @@ if [[ -n "${DENIAL_FLUTTER_UI_WORKSPACE:-}" ]]; then
   denial_args+=(--flutter-ui-workspace "$DENIAL_FLUTTER_UI_WORKSPACE")
 fi
 
+# DENIAL_POLKIT_AGENT=0 leaves PolicyKit to an agent the user runs themselves.
+if [[ "${DENIAL_POLKIT_AGENT:-1}" == 0 ]]; then
+  denial_args+=(--no-polkit-agent)
+fi
+
 unset DISPLAY WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE SWAYSOCK I3SOCK
 unset NO_COLOR WLR_DRM_DEVICES AQ_DRM_DEVICES
 export RUST_BACKTRACE="${RUST_BACKTRACE:-1}"

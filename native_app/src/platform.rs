@@ -29,6 +29,40 @@ impl Platform {
             close: false,
         };
         match channel {
+            "denial/settings_activation" => {
+                if let Ok(call) = serde_json::from_slice::<serde_json::Value>(data) {
+                    match call["method"].as_str() {
+                        Some("closeWindow") => {
+                            reply.close = true;
+                            reply.data = b"[null]".to_vec();
+                        }
+                        Some("openUrl") => {
+                            let uri = call["args"].as_str().and_then(|s| url::Url::parse(s).ok());
+                            reply.data = match uri.filter(|u| {
+                                matches!(u.scheme(), "https" | "http") && u.host_str().is_some()
+                            }) {
+                                Some(uri) => match std::process::Command::new("xdg-open")
+                                    .arg(uri.as_str())
+                                    .stdin(std::process::Stdio::null())
+                                    .stdout(std::process::Stdio::null())
+                                    .spawn()
+                                {
+                                    Ok(mut child) => {
+                                        std::thread::spawn(move || {
+                                            let _ = child.wait();
+                                        });
+                                        b"[null]".to_vec()
+                                    }
+                                    Err(_) => b"[\"open-url\",\"Could not open the web URL\",null]"
+                                        .to_vec(),
+                                },
+                                None => b"[\"invalid-url\",\"Expected a web URL\",null]".to_vec(),
+                            };
+                        }
+                        _ => {}
+                    }
+                }
+            }
             "flutter/textinput" => reply
                 .data
                 .extend_from_slice(self.text_input.handle_platform_message(data)),

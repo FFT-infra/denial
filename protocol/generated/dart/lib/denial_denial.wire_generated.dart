@@ -1621,10 +1621,11 @@ class SurfaceLayer {
   int get compositionOrder => const fb.Uint32Reader().vTableGet(_bc, _bcOffset, 38, 0);
   double get opacity => const fb.Float32Reader().vTableGet(_bc, _bcOffset, 40, 1.0);
   bool get opaque => const fb.BoolReader().vTableGet(_bc, _bcOffset, 42, false);
+  WireRect? get windowGeometry => WireRect.reader.vTableGetNullable(_bc, _bcOffset, 44);
 
   @override
   String toString() {
-    return 'SurfaceLayer{surfaceId: ${surfaceId}, parentSurfaceId: ${parentSurfaceId}, popupRootSurfaceId: ${popupRootSurfaceId}, role: ${role}, textureId: ${textureId}, width: ${width}, height: ${height}, surfaceX: ${surfaceX}, surfaceY: ${surfaceY}, surfaceWidth: ${surfaceWidth}, surfaceHeight: ${surfaceHeight}, textureSourceX: ${textureSourceX}, textureSourceY: ${textureSourceY}, textureSourceWidth: ${textureSourceWidth}, textureSourceHeight: ${textureSourceHeight}, transform: ${transform}, scale120: ${scale120}, compositionOrder: ${compositionOrder}, opacity: ${opacity}, opaque: ${opaque}}';
+    return 'SurfaceLayer{surfaceId: ${surfaceId}, parentSurfaceId: ${parentSurfaceId}, popupRootSurfaceId: ${popupRootSurfaceId}, role: ${role}, textureId: ${textureId}, width: ${width}, height: ${height}, surfaceX: ${surfaceX}, surfaceY: ${surfaceY}, surfaceWidth: ${surfaceWidth}, surfaceHeight: ${surfaceHeight}, textureSourceX: ${textureSourceX}, textureSourceY: ${textureSourceY}, textureSourceWidth: ${textureSourceWidth}, textureSourceHeight: ${textureSourceHeight}, transform: ${transform}, scale120: ${scale120}, compositionOrder: ${compositionOrder}, opacity: ${opacity}, opaque: ${opaque}, windowGeometry: ${windowGeometry}}';
   }
 }
 
@@ -1642,7 +1643,7 @@ class SurfaceLayerBuilder {
   final fb.Builder fbBuilder;
 
   void begin() {
-    fbBuilder.startTable(20);
+    fbBuilder.startTable(21);
   }
 
   int addSurfaceId(int? surfaceId) {
@@ -1725,6 +1726,10 @@ class SurfaceLayerBuilder {
     fbBuilder.addBool(19, opaque);
     return fbBuilder.offset;
   }
+  int addWindowGeometry(int offset) {
+    fbBuilder.addStruct(20, offset);
+    return fbBuilder.offset;
+  }
 
   int finish() {
     return fbBuilder.endTable();
@@ -1752,6 +1757,7 @@ class SurfaceLayerObjectBuilder extends fb.ObjectBuilder {
   final int? _compositionOrder;
   final double? _opacity;
   final bool? _opaque;
+  final WireRectObjectBuilder? _windowGeometry;
 
   SurfaceLayerObjectBuilder({
     int? surfaceId,
@@ -1774,6 +1780,7 @@ class SurfaceLayerObjectBuilder extends fb.ObjectBuilder {
     int? compositionOrder,
     double? opacity,
     bool? opaque,
+    WireRectObjectBuilder? windowGeometry,
   })
       : _surfaceId = surfaceId,
         _parentSurfaceId = parentSurfaceId,
@@ -1794,12 +1801,13 @@ class SurfaceLayerObjectBuilder extends fb.ObjectBuilder {
         _scale120 = scale120,
         _compositionOrder = compositionOrder,
         _opacity = opacity,
-        _opaque = opaque;
+        _opaque = opaque,
+        _windowGeometry = windowGeometry;
 
   /// Finish building, and store into the [fbBuilder].
   @override
   int finish(fb.Builder fbBuilder) {
-    fbBuilder.startTable(20);
+    fbBuilder.startTable(21);
     fbBuilder.addUint64(0, _surfaceId);
     fbBuilder.addUint64(1, _parentSurfaceId);
     fbBuilder.addUint64(2, _popupRootSurfaceId);
@@ -1820,6 +1828,9 @@ class SurfaceLayerObjectBuilder extends fb.ObjectBuilder {
     fbBuilder.addUint32(17, _compositionOrder);
     fbBuilder.addFloat32(18, _opacity);
     fbBuilder.addBool(19, _opaque);
+    if (_windowGeometry != null) {
+      fbBuilder.addStruct(20, _windowGeometry!.finish(fbBuilder));
+    }
     return fbBuilder.endTable();
   }
 

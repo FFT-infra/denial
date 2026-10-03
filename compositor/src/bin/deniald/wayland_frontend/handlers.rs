@@ -2388,6 +2388,13 @@ impl XdgShellHandler for RuntimeState {
         if let Some(pointer) = pointer {
             pointer.set_grab(self, PopupPointerGrab::new(&grab), serial, Focus::Keep);
         }
+        #[cfg(feature = "flutter")]
+        {
+            self.wayland
+                .as_mut()
+                .expect("missing Wayland frontend")
+                .client_popup_grab = Some(grab);
+        }
         self.scene_sync.mark_dirty();
     }
 

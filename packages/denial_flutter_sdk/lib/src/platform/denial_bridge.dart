@@ -309,6 +309,33 @@ class DenialBridge {
     follow: follow,
   );
 
+  /// Commits an overview drop onto a possibly hidden workspace. [point] is
+  /// in that workspace's own scene coordinates.
+  void dropWindowOnWorkspace(
+    DenialWindow window, {
+    required int monitorId,
+    required int workspaceId,
+    required Offset point,
+  }) => _windows.dropWindowOnWorkspace(
+    window,
+    monitorId: monitorId,
+    workspaceId: workspaceId,
+    point: point,
+  );
+
+  /// Plans [dropWindowOnWorkspace]; a null [point] ends the preview.
+  void previewWindowDropOnWorkspace(
+    DenialWindow window, {
+    required int monitorId,
+    required int workspaceId,
+    Offset? point,
+  }) => _windows.previewWindowDropOnWorkspace(
+    window,
+    monitorId: monitorId,
+    workspaceId: workspaceId,
+    point: point,
+  );
+
   void configureWindow(
     DenialWindow window,
     Rect contentRect, {

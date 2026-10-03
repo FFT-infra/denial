@@ -13,6 +13,8 @@
   ddcutil,
   systemd,
   wayland,
+  polkit,
+  glib,
   src,
   version ? "0.0.0+unknown",
   buildIdentity ? "nix.unknown",
@@ -48,6 +50,8 @@ rustPlatform.buildRustPackage {
     ddcutil
     systemd
     wayland
+    polkit
+    glib
   ];
 
   cargoBuildFlags = [

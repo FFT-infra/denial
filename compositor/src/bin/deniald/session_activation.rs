@@ -18,6 +18,7 @@ fn session_activation_environment(
     x11_display: Option<&OsStr>,
     output_control_socket: Option<&OsStr>,
     qt_platform_theme: Option<&OsStr>,
+    polkit_agent: bool,
 ) -> Result<BTreeMap<&'static str, String>, Box<dyn Error>> {
     let wayland_display = wayland_display
         .to_str()
@@ -34,6 +35,11 @@ fn session_activation_environment(
         ("XDG_SESSION_DESKTOP", String::from("Denial")),
         ("XDG_SESSION_TYPE", String::from("wayland")),
     ]);
+    if !polkit_agent {
+        // The session's agent service reads this and leaves PolicyKit to
+        // whatever else the user runs.
+        environment.insert("DENIAL_POLKIT_AGENT", String::from("0"));
+    }
     if let Some(x11_display) = x11_display {
         environment.insert(
             "DISPLAY",
@@ -149,6 +155,7 @@ pub(super) fn publish_session_activation_environment(
     wayland_display: &OsStr,
     x11_display: Option<&OsStr>,
     output_control_socket: Option<&OsStr>,
+    polkit_agent: bool,
 ) -> Result<SessionActivation, Box<dyn Error>> {
     let qt_platform_theme = std::env::var_os("QT_QPA_PLATFORMTHEME");
     let environment = session_activation_environment(
@@ -156,6 +163,7 @@ pub(super) fn publish_session_activation_environment(
         x11_display,
         output_control_socket,
         qt_platform_theme.as_deref(),
+        polkit_agent,
     )?;
     let connection = zbus::blocking::Connection::session()?;
     update_dbus_activation_environment(&connection, &environment)?;
@@ -198,11 +206,19 @@ mod tests {
     fn display_is_published_only_when_xwayland_is_active() {
         let wayland = OsStr::new("wayland-7");
         let x11 = OsStr::new(":3");
-        let with_xwayland = session_activation_environment(wayland, Some(x11), None, None).unwrap();
-        let without_xwayland = session_activation_environment(wayland, None, None, None).unwrap();
+        let with_xwayland =
+            session_activation_environment(wayland, Some(x11), None, None, true).unwrap();
+        let without_xwayland =
+            session_activation_environment(wayland, None, None, None, true).unwrap();
 
         assert_eq!(with_xwayland.get("DISPLAY").map(String::as_str), Some(":3"));
         assert!(!without_xwayland.contains_key("DISPLAY"));
+        assert!(!without_xwayland.contains_key("DENIAL_POLKIT_AGENT"));
+        let no_agent = session_activation_environment(wayland, None, None, None, false).unwrap();
+        assert_eq!(
+            no_agent.get("DENIAL_POLKIT_AGENT").map(String::as_str),
+            Some("0")
+        );
         assert_eq!(
             without_xwayland.get("WAYLAND_DISPLAY").map(String::as_str),
             Some("wayland-7")

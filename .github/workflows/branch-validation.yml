@@ -50,6 +50,8 @@ jobs:
           nix build
           .#checks.x86_64-linux.locks
           .#checks.x86_64-linux.module
+          .#checks.x86_64-linux.module-unstable
+          .#checks.x86_64-linux.engine-manifest
           --no-link --print-build-logs
 
   build:
@@ -218,8 +220,14 @@ jobs:
             nix build \
               .#denial \
               .#denial-flutter \
+              .#denial-flutter-engine-raw \
+              .#denial-unstable \
               .#checks.x86_64-linux.locks \
               .#checks.x86_64-linux.module \
+              .#checks.x86_64-linux.module-unstable \
+              .#checks.x86_64-linux.engine-manifest \
+              .#checks.x86_64-linux.engine-cache \
+              .#checks.x86_64-linux.engine-cache-unstable \
               .#checks.x86_64-linux.path-contract \
               --accept-flake-config \
               --cores 16 \
@@ -228,7 +236,7 @@ jobs:
               --print-out-paths \
               2> >(tee "$EVIDENCE_ROOT/nix-build.txt" >&2)
           )
-          ((${#nix_paths[@]} == 5))
+          ((${#nix_paths[@]} == 11))
           for path in "${nix_paths[@]}"; do
             [[ "$path" == /nix/store/* ]]
           done

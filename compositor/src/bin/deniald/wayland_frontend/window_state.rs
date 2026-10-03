@@ -1085,6 +1085,13 @@ impl WaylandFrontend {
         let Some(record) = self.ensure_window_record_for_surface(&root_surface.id()) else {
             return;
         };
+        if authority.persistent() {
+            // A fullscreen, maximize, layout or shell target supersedes the
+            // initial client-sized placement. Its first buffer can still have
+            // the old size; do not publish that size as a later live placement.
+            record.pending_client_sized_placement = None;
+            record.pending_auxiliary_toplevel_placement = None;
+        }
         if window.geometry().size == target.size && !authority.persistent() {
             // A move needs no client acknowledgement.  Reading the geometry
             // back from Space is already authoritative and avoids retaining a

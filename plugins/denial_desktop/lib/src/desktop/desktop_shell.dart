@@ -45,6 +45,15 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
   Timer? _windowSwitcherHoldTimer;
   Timer? _windowSwitcherCleanupTimer;
   final Map<int, Timer> _workspaceTransitionTimers = <int, Timer>{};
+  // Rust only focuses windows on a visible workspace. Activating one on
+  // another workspace first switches there, then completes once the
+  // compositor reports the new active workspace.
+  ({int monitorId, int workspaceId, int? objectId})? _pendingWorkspaceRequest;
+  Timer? _pendingWorkspaceRequestTimer;
+  // The native drop preview requested for the current workspace-overview
+  // drag. Rust keeps planning it until a commit or an explicit end.
+  ({DenialWindow window, int monitorId, int workspaceId, Offset point})?
+  _overviewDropPreview;
   final FocusNode _applicationSearchFocusNode = FocusNode(
     debugLabel: 'desktop-application-search',
   );
@@ -81,6 +90,7 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
       timer.cancel();
     }
     _workspaceTransitionTimers.clear();
+    _pendingWorkspaceRequestTimer?.cancel();
     unawaited(_shellActionSubscription.cancel());
     _applicationSearchFocusNode.dispose();
     super.dispose();
@@ -393,6 +403,12 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
         : workspaceState.viewSize;
     final displayLayout = ref.read(displayLayoutProvider);
     final shellState = ref.read(referenceShellProvider);
+    final layout = ref.read(shellSettingsProvider).layout;
+    // Stacking windows overlap, so spreading them apart is the useful view.
+    // Managed layouts already avoid overlap and their arrangement is the
+    // information, so they show true-to-layout workspace miniatures instead.
+    final workspaceOverview =
+        layout.windowLayout != DesktopWindowLayout.stacking;
     final target = DesktopOverviewTarget.resolve(
       viewSize: viewSize,
       displayLayout: displayLayout,
@@ -400,12 +416,25 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
       workspace: workspaceState,
       foregroundObjectId: shellState.foregroundObjectId,
       preferredMonitorId: preferredMonitorId,
+      allWorkspaces: workspaceOverview,
     );
     if (target == null) {
       return;
     }
 
     workspace.closePanels();
+    if (workspaceOverview) {
+      _cancelPendingWorkspaceRequest();
+      workspace.openWorkspaceOverview(
+        monitorId: target.monitorId,
+        bounds: target.bounds,
+        backgroundBounds: target.backgroundBounds,
+        viewport: target.workArea,
+        orientation: layout.workspaceSwitchingOrientation,
+        selectedObjectId: shellState.foregroundObjectId,
+      );
+      return;
+    }
     workspace.toggleOverview(
       monitorId: target.monitorId,
       bounds: target.bounds,
@@ -430,6 +459,10 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
       return;
     }
     final selectedObjectId = overview.selectedObjectId;
+    if (selectedObjectId == null) {
+      _dismissOverview();
+      return;
+    }
     for (final window in ref.read(referenceShellProvider).openAppWindows) {
       if (window.objectId == selectedObjectId) {
         _activateWindow(window);
@@ -440,6 +473,68 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
   }
 
   void _dismissOverview() {
+    _cancelPendingWorkspaceRequest();
+    ref.read(desktopWorkspaceProvider.notifier).closeOverview();
+  }
+
+  /// Selects a workspace card. The overview closes by zooming into it once
+  /// the compositor has made it active.
+  void _selectOverviewWorkspace(int monitorId, int workspaceId) {
+    final workspace = ref.read(desktopWorkspaceProvider);
+    if (workspace.overview?.workspaces == null) {
+      return;
+    }
+    if (workspace.activeWorkspaceFor(monitorId) == workspaceId) {
+      _dismissOverview();
+      return;
+    }
+    _requestWorkspace(monitorId, workspaceId);
+  }
+
+  void _requestWorkspace(int monitorId, int workspaceId, {int? objectId}) {
+    _pendingWorkspaceRequest = (
+      monitorId: monitorId,
+      workspaceId: workspaceId,
+      objectId: objectId,
+    );
+    // A request the compositor rejects must not complete much later, after
+    // the user has moved on.
+    _pendingWorkspaceRequestTimer?.cancel();
+    _pendingWorkspaceRequestTimer = Timer(
+      const Duration(seconds: 1),
+      () => _pendingWorkspaceRequest = null,
+    );
+    ref
+        .read(denialBridgeProvider)
+        .switchWorkspace(monitorId: monitorId, workspaceId: workspaceId);
+  }
+
+  void _cancelPendingWorkspaceRequest() {
+    _pendingWorkspaceRequestTimer?.cancel();
+    _pendingWorkspaceRequestTimer = null;
+    _pendingWorkspaceRequest = null;
+  }
+
+  void _completePendingWorkspaceRequest() {
+    final request = _pendingWorkspaceRequest;
+    if (request == null || !mounted) {
+      return;
+    }
+    final workspace = ref.read(desktopWorkspaceProvider);
+    if (workspace.activeWorkspaceFor(request.monitorId) !=
+        request.workspaceId) {
+      return;
+    }
+    _cancelPendingWorkspaceRequest();
+    final objectId = request.objectId;
+    if (objectId != null) {
+      for (final window in ref.read(referenceShellProvider).openAppWindows) {
+        if (window.objectId == objectId) {
+          _activateWindow(window);
+          return;
+        }
+      }
+    }
     ref.read(desktopWorkspaceProvider.notifier).closeOverview();
   }
 
@@ -592,6 +687,20 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
   }
 
   void _activateWindow(DenialWindow window) {
+    final workspace = ref.read(desktopWorkspaceProvider);
+    final placement = workspace.placements[window.objectId];
+    if (placement != null &&
+        !placement.minimized &&
+        placement.monitorId >= 0 &&
+        !workspace.isPlacementOnActiveWorkspace(placement)) {
+      _requestWorkspace(
+        placement.monitorId,
+        placement.workspaceId,
+        objectId: window.objectId,
+      );
+      return;
+    }
+    _cancelPendingWorkspaceRequest();
     ref.read(desktopVisibleProvider.notifier).restore();
     ref.read(desktopWorkspaceProvider.notifier).activate(window.objectId);
     ref.read(referenceShellProvider.notifier).focusWindow(window);
@@ -612,6 +721,7 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
       workspace: workspace,
       windowsById: windowsById,
     );
+    _cancelPendingWorkspaceRequest();
     ref.read(desktopWorkspaceProvider.notifier).closeOverview();
     if (target != null) {
       _activateWindow(target);
@@ -619,6 +729,7 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
   }
 
   void _beginOverviewDrag(DenialWindow window) {
+    _endOverviewDropPreview();
     ref
         .read(desktopWorkspaceProvider.notifier)
         .beginOverviewDrag(window.objectId);
@@ -628,9 +739,71 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
     ref
         .read(desktopWorkspaceProvider.notifier)
         .moveOverviewBy(window.objectId, delta);
+    _previewOverviewDrop(window);
+  }
+
+  /// Asks the compositor to plan the drop under the dragged preview, exactly
+  /// as a SUPER+drag over a tile would. Its answer arrives as layout-preview
+  /// placements, which the overview projects into the cards.
+  void _previewOverviewDrop(DenialWindow window) {
+    final overview = ref.read(desktopWorkspaceProvider).overview;
+    if (overview == null || overview.workspaces == null) {
+      return;
+    }
+    final plan = ref
+        .read(desktopWorkspaceProvider.notifier)
+        .planOverviewDrop(window.objectId);
+    if (plan == null) {
+      _endOverviewDropPreview();
+      return;
+    }
+    final point = Offset(
+      plan.point.dx.roundToDouble(),
+      plan.point.dy.roundToDouble(),
+    );
+    final previous = _overviewDropPreview;
+    if (previous != null &&
+        previous.window.objectId == window.objectId &&
+        previous.monitorId == overview.monitorId &&
+        previous.workspaceId == plan.workspaceId &&
+        previous.point == point) {
+      return;
+    }
+    _overviewDropPreview = (
+      window: window,
+      monitorId: overview.monitorId,
+      workspaceId: plan.workspaceId,
+      point: point,
+    );
+    ref
+        .read(denialBridgeProvider)
+        .previewWindowDropOnWorkspace(
+          window,
+          monitorId: overview.monitorId,
+          workspaceId: plan.workspaceId,
+          point: point,
+        );
+  }
+
+  void _endOverviewDropPreview() {
+    final preview = _overviewDropPreview;
+    if (preview == null) {
+      return;
+    }
+    _overviewDropPreview = null;
+    ref
+        .read(denialBridgeProvider)
+        .previewWindowDropOnWorkspace(
+          preview.window,
+          monitorId: preview.monitorId,
+          workspaceId: preview.workspaceId,
+        );
   }
 
   void _endOverviewDrag(DenialWindow window) {
+    if (_dropOverviewWindowOnWorkspace(window)) {
+      return;
+    }
     final layout = ref.read(displayLayoutProvider);
     final outputBounds = <int, Rect>{
       for (final output in layout?.outputs ?? const <DisplayOutput>[])
@@ -659,7 +832,50 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
     }
   }
 
+  /// Handles drops inside a workspace overview's own output. A drop on any
+  /// card is a native layout drop onto that workspace: it rearranges tiles on
+  /// the window's own workspace, moves it to another one, or restores it from
+  /// the shelf, all without leaving the overview. Drops outside the cards
+  /// return the preview to its tile. Returns false for drops on other outputs,
+  /// which use the ordinary cross-output transfer.
+  bool _dropOverviewWindowOnWorkspace(DenialWindow window) {
+    final workspace = ref.read(desktopWorkspaceProvider);
+    final overview = workspace.overview;
+    final preview = overview?.frames[window.objectId];
+    if (overview == null ||
+        overview.workspaces == null ||
+        preview == null ||
+        !workspace.placements.containsKey(window.objectId) ||
+        !overview.backgroundBounds.contains(preview.center)) {
+      _endOverviewDropPreview();
+      return false;
+    }
+    final controller = ref.read(desktopWorkspaceProvider.notifier);
+    final plan = controller.planOverviewDrop(window.objectId);
+    if (plan == null ||
+        !controller.dropOverviewWindowOnWorkspace(
+          window.objectId,
+          plan.workspaceId,
+        )) {
+      _endOverviewDropPreview();
+      controller.cancelOverviewDrag(window.objectId);
+      return true;
+    }
+    // The commit ends the native preview with each tile's final rectangle.
+    _overviewDropPreview = null;
+    ref
+        .read(denialBridgeProvider)
+        .dropWindowOnWorkspace(
+          window,
+          monitorId: overview.monitorId,
+          workspaceId: plan.workspaceId,
+          point: plan.point,
+        );
+    return true;
+  }
+
   void _cancelOverviewDrag(DenialWindow window) {
+    _endOverviewDropPreview();
     ref
         .read(desktopWorkspaceProvider.notifier)
         .cancelOverviewDrag(window.objectId);
@@ -668,6 +884,20 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
   @override
   Widget build(BuildContext context) {
     ref.watch(desktopWindowCoordinatorProvider);
+    ref.listen<Map<int, int>>(
+      desktopWorkspaceProvider.select((state) => state.activeWorkspaces),
+      (_, _) => scheduleMicrotask(_completePendingWorkspaceRequest),
+    );
+    ref.listen<bool>(
+      desktopWorkspaceProvider.select(
+        (state) => state.overview?.workspaces != null,
+      ),
+      (_, open) {
+        if (!open) {
+          _endOverviewDropPreview();
+        }
+      },
+    );
     ref.listen<int?>(
       referenceShellProvider.select((state) => state.foregroundObjectId),
       (previous, next) {
@@ -771,6 +1001,7 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
                   .read(referenceShellProvider.notifier)
                   .closeWindow,
               onOverviewBarrierTap: _handleOverviewBarrierTap,
+              onSelectOverviewWorkspace: _selectOverviewWorkspace,
               onBeginOverviewDrag: _beginOverviewDrag,
               onUpdateOverviewDrag: _updateOverviewDrag,
               onEndOverviewDrag: _endOverviewDrag,

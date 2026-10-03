@@ -553,8 +553,11 @@ fn drain_frames_before_reconfiguration(
     Ok(())
 }
 
-fn output_properties_changed(outputs: &[ConnectedOutput], scanouts: &[Scanout]) -> bool {
-    outputs.iter().any(|output| {
+fn output_properties_changed<'a>(
+    outputs: impl IntoIterator<Item = &'a ConnectedOutput>,
+    scanouts: &[Scanout],
+) -> bool {
+    outputs.into_iter().any(|output| {
         scanouts
             .iter()
             .find(|scanout| scanout.output.id == output.id)
@@ -639,7 +642,9 @@ fn prepare_output_persistence(
         .iter()
         .map(|output| options::PersistedOutput {
             name: output.name.clone(),
-            enabled: output.enabled,
+            // Settings shows the effective state, which can include a transient
+            // fallback or clamshell. Save the reconciled preference instead.
+            enabled: !staged_configuration.disabled_outputs.contains(&output.name),
             x: output.x,
             y: output.y,
             width: output.mode.width,
@@ -787,7 +792,7 @@ fn stage_output_apply(
         }
     };
     let outputs = match configured_outputs(connectors, max_outputs, &configuration) {
-        Ok(outputs) => outputs,
+        Ok(configured) => configured.outputs,
         Err(error) => {
             request.reply(Err(output_control::OutputControlFailure::new(
                 "invalid_configuration",
@@ -1384,6 +1389,7 @@ fn observe_output_topology(
     output_configuration: &RuntimeOutputConfiguration,
     scanouts: &[Scanout],
     outputs_disconnected: &mut bool,
+    policy_journal: &mut output_policy::OutputPolicyJournal,
     flutter: &mut Option<flutter_runtime::FlutterRuntime>,
     events: &mut RuntimeState,
     event_loop: &mut EventLoop<'_, RuntimeState>,
@@ -1393,8 +1399,20 @@ fn observe_output_topology(
         kms_reconfigure_requested,
         resident_geometry_reconfigure_requested,
     } = request;
-    let outputs = connected_outputs(drm_scanner, drm, max_outputs, output_configuration)?;
-    let observed_output_changed = output_properties_changed(&outputs, scanouts);
+    let ConfiguredOutputs { outputs, selection } =
+        connected_outputs(drm_scanner, drm, max_outputs, output_configuration)?;
+    policy_journal.record(&selection);
+    // The DPMS debounce judges connectors. A fallback output and the panels
+    // under a closed lid are lit or dark by policy, so they are left out: a
+    // monitor which drops its connector while asleep must not light the
+    // fallback in its place, and closing the lid needs no debounce.
+    let connector_decided = |name: &str| !selection.policy.overrides(name);
+    let observed_output_changed = output_properties_changed(
+        outputs
+            .iter()
+            .filter(|output| connector_decided(&output.name)),
+        scanouts,
+    );
     let dpms_debounce_bypassed = scanout_rebased
         || kms_reconfigure_requested
         || resident_geometry_reconfigure_requested
@@ -1410,8 +1428,14 @@ fn observe_output_topology(
     } else {
         events.dpms_topology.defer_missing_outputs(
             Instant::now(),
-            scanouts.iter().map(|scanout| scanout.output.id),
-            outputs.iter().map(|output| output.id),
+            scanouts
+                .iter()
+                .filter(|scanout| connector_decided(&scanout.output.name))
+                .map(|scanout| scanout.output.id),
+            outputs
+                .iter()
+                .filter(|output| connector_decided(&output.name))
+                .map(|output| output.id),
         )
     };
     let topology_deferred = if let Some(deferred) = deferred_dpms_topology {
@@ -1446,7 +1470,7 @@ fn observe_output_topology(
                 .set_outputs_visible(false)?;
             warn!(
                 retry_ms = KMS_PRESENTATION_RECOVERY_RETRY.as_millis(),
-                "all DRM outputs disconnected; keeping the session alive until one reconnects"
+                "no connected display can be lit; keeping the session alive until one can"
             );
         }
         events.topology_dirty = true;
@@ -1458,14 +1482,14 @@ fn observe_output_topology(
         *outputs_disconnected = false;
         info!(
             connected_outputs = outputs.len(),
-            "DRM output reconnected; rebuilding presentation state"
+            "a display can be lit again; rebuilding presentation state"
         );
     }
     if !topology_deferred {
         events.output_control_dirty = true;
     }
-    let changed =
-        !topology_deferred && (outputs.len() != scanouts.len() || observed_output_changed);
+    let changed = !topology_deferred
+        && (outputs.len() != scanouts.len() || output_properties_changed(&outputs, scanouts));
     if !topology_deferred {
         info!(
             connected_outputs = outputs.len(),
@@ -2187,6 +2211,29 @@ fn apply_pending_sensor_orientation(
     Ok(())
 }
 
+/// Lets the display policy follow the lid. A topology rescan then lights or
+/// turns off the built-in panels; nothing changes when the lid covers no
+/// output that the policy would otherwise light.
+fn apply_pending_lid_position(
+    output_configuration: &mut RuntimeOutputConfiguration,
+    active_output_confirmation: &mut Option<ActiveOutputConfirmation>,
+    events: &mut RuntimeState,
+) {
+    let Some(closed) = events.lid.take_pending() else {
+        return;
+    };
+    if closed == output_configuration.lid_closed {
+        return;
+    }
+    output_configuration.lid_closed = closed;
+    // A rollback restores the user's configuration, not an older lid position.
+    if let Some(pending) = active_output_confirmation.as_mut() {
+        pending.rollback_configuration.lid_closed = closed;
+    }
+    info!(closed, "lid moved");
+    events.topology_dirty = true;
+}
+
 fn expire_output_confirmation(
     now: Instant,
     active_confirmation: &mut Option<ActiveOutputConfirmation>,
@@ -2388,6 +2435,7 @@ pub(super) struct FlutterEventLoopContext<'a, 'event_loop> {
     pub(super) topology: &'a mut TopologyManager,
     pub(super) max_outputs: usize,
     pub(super) output_configuration: RuntimeOutputConfiguration,
+    pub(super) output_policy_journal: output_policy::OutputPolicyJournal,
     pub(super) output_config: Option<PathBuf>,
     pub(super) output_control: output_control::OutputControlPublisher,
     pub(super) portal_ipc: Option<portal_ipc::PortalIpcPublisher>,
@@ -2417,6 +2465,7 @@ pub(super) fn run_flutter_event_loop(
         topology,
         max_outputs,
         mut output_configuration,
+        output_policy_journal: mut policy_journal,
         output_config,
         output_control,
         portal_ipc,
@@ -2491,6 +2540,16 @@ pub(super) fn run_flutter_event_loop(
             }
         },
     )?;
+    let (lid_readings, lid_reading_source) = channel();
+    event_loop.handle().insert_source(
+        lid_reading_source,
+        |event, _, state: &mut RuntimeState| {
+            if let ChannelEvent::Msg(reading) = event {
+                state.lid.note_reading(reading);
+            }
+        },
+    )?;
+    events.lid = lid_switch::LidSwitch::new(lid_readings);
     events.synchronize_flutter_pointer_position();
     let mut raster_frames = 0u64;
     let mut delivered_vsyncs = 0u64;
@@ -2589,6 +2648,11 @@ pub(super) fn run_flutter_event_loop(
             &mut events,
             iteration_now,
         )?;
+        apply_pending_lid_position(
+            &mut output_configuration,
+            &mut active_output_confirmation,
+            &mut events,
+        );
         expire_output_confirmation(
             iteration_now,
             &mut active_output_confirmation,
@@ -2798,6 +2862,7 @@ pub(super) fn run_flutter_event_loop(
                 &output_configuration,
                 scanouts,
                 &mut outputs_disconnected,
+                &mut policy_journal,
                 flutter,
                 &mut events,
                 event_loop,

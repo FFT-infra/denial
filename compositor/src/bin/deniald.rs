@@ -61,6 +61,8 @@ mod kms_render;
 mod kms_session;
 #[path = "deniald/kms_state.rs"]
 mod kms_state;
+#[path = "deniald/lid_switch.rs"]
+mod lid_switch;
 #[path = "deniald/lifecycle.rs"]
 mod lifecycle;
 #[cfg(feature = "flutter")]
@@ -79,6 +81,8 @@ mod orientation_sensor;
 #[cfg(feature = "flutter")]
 #[path = "deniald/output_control.rs"]
 mod output_control;
+#[path = "deniald/output_policy.rs"]
+mod output_policy;
 #[cfg(feature = "flutter")]
 #[path = "deniald/output_scheduler.rs"]
 mod output_scheduler;
@@ -276,8 +280,9 @@ use output_control::{
     ShellControlCommand, SystemControlCommand, SystemControlWaitKind,
 };
 use output_topology::{
-    ConnectedConnector, RuntimeOutputConfiguration, configured_outputs, connected_outputs,
-    scan_connected_connectors, stage_output_vrr, topology_for_outputs, update_topology_for_outputs,
+    ConfiguredOutputs, ConnectedConnector, RuntimeOutputConfiguration, configured_outputs,
+    connected_outputs, scan_connected_connectors, stage_output_vrr, topology_for_outputs,
+    update_topology_for_outputs,
 };
 #[cfg(feature = "flutter")]
 use output_topology::{

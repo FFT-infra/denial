@@ -622,6 +622,7 @@ fn create_window_snapshot<'a>(
     for description in descriptions {
         let mut surface_layers = Vec::with_capacity(description.surfaces.len());
         for surface in &description.surfaces {
+            let window_geometry = wire_window_geometry(surface);
             surface_layers.push(fb::SurfaceLayer::create(
                 builder,
                 &fb::SurfaceLayerArgs {
@@ -645,6 +646,7 @@ fn create_window_snapshot<'a>(
                     composition_order: surface.composition_order,
                     opacity: surface.opacity,
                     opaque: surface.opaque,
+                    window_geometry: window_geometry.as_ref(),
                 },
             ));
         }
@@ -952,10 +954,17 @@ fn validate_cursor_surface_tree(surfaces: &[SurfaceLayerDescription]) -> Result<
     Ok(())
 }
 
+fn wire_window_geometry(surface: &SurfaceLayerDescription) -> Option<fb::WireRect> {
+    surface
+        .window_geometry
+        .map(|geometry| fb::WireRect::new(geometry.x, geometry.y, geometry.width, geometry.height))
+}
+
 fn create_surface_layer<'a>(
     builder: &mut FlatBufferBuilder<'a>,
     surface: &SurfaceLayerDescription,
 ) -> WIPOffset<fb::SurfaceLayer<'a>> {
+    let window_geometry = wire_window_geometry(surface);
     fb::SurfaceLayer::create(
         builder,
         &fb::SurfaceLayerArgs {
@@ -979,6 +988,7 @@ fn create_surface_layer<'a>(
             composition_order: surface.composition_order,
             opacity: surface.opacity,
             opaque: surface.opaque,
+            window_geometry: window_geometry.as_ref(),
         },
     )
 }

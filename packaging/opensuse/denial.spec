@@ -3,7 +3,6 @@
 %global _build_id_links none
 %global __provides_exclude_from ^/usr/lib/denial/.*\\.so$
 # denial-settings resolves this bundled private runtime through $ORIGIN/lib.
-%global __requires_exclude ^libflutter_linux_gtk\\.so.*$
 
 Name:           denial
 Version:        %{denial_version}
@@ -17,9 +16,9 @@ Requires:       bash
 Requires:       coreutils
 Requires:       git
 Requires:       dbus-1
+Requires:       polkit
 Requires:       denial-flutter-engine = 1:%{version}-%{release}
 Requires:       glibc >= %{glibc_baseline}
-Requires:       gtk3
 Requires:       libEGL.so.1()(64bit)
 Requires:       libpam.so.0()(64bit)
 Requires:       libpulse.so.0()(64bit)
@@ -67,7 +66,6 @@ Summary:        Plugin development and composition tools for Denial
 License:        GPL-3.0-or-later
 Requires:       denial = %{version}-%{release}
 Requires:       git
-Requires:       gtk3
 
 %description -n denial-plugin-manager
 Installs the Plugin Manager app, its backend, and Denial's compiler kit.
@@ -95,7 +93,7 @@ test -f %{buildroot}/usr/bin/denial-plugins.installation.json
 test -f %{buildroot}/usr/lib/denial/plugin-build-kit/kit.json
 test -f %{buildroot}/usr/lib/denial/flutter/lib/libapp.so
 test -f %{buildroot}/usr/lib/denial/flutter/lib/libflutter_engine.so
-test -f %{buildroot}/usr/lib/denial/settings/lib/libflutter_linux_gtk.so
+test -f %{buildroot}/usr/lib/denial/settings/lib/libflutter_engine.so
 
 %post
 if [ $1 -eq 1 ] && [ -x /usr/lib/systemd/systemd-update-helper ]; then
@@ -127,6 +125,9 @@ fi
 /usr/lib/denial/flutter/data/flutter_assets
 /usr/lib/denial/flutter/lib/libapp.so
 /usr/lib/denial/settings
+/usr/bin/denial-polkit-agent
+/usr/lib/denial/polkit
+/usr/lib/systemd/user/denial-polkit-agent.service
 /usr/lib/denial/flutter/.denial-ui-source.json
 /usr/lib/elogind/system-sleep/denial-suspend-mode
 /usr/lib/systemd/system-sleep/denial-suspend-mode

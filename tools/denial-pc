@@ -112,6 +112,8 @@ DENIAL_PORTAL_DBUS_TEMPLATE="$ROOT/dev/org.freedesktop.impl.portal.desktop.denia
 DENIAL_PORTAL_DBUS_SERVICE="${DENIAL_PORTAL_DBUS_SERVICE:-/usr/local/share/dbus-1/services/org.freedesktop.impl.portal.desktop.denial.service}"
 DENIAL_PORTAL_UNIT_TEMPLATE="$ROOT/dev/denial-portal-development.service.in"
 DENIAL_PORTAL_UNIT="${DENIAL_PORTAL_UNIT:-/usr/local/lib/systemd/user/denial-portal-development.service}"
+POLKIT_UNIT_TEMPLATE="$ROOT/dev/denial-polkit-agent.service.in"
+POLKIT_UNIT="${DENIAL_POLKIT_UNIT:-/usr/local/lib/systemd/user/denial-polkit-agent.service}"
 WLR_PORTAL_DESCRIPTOR="${DENIAL_WLR_PORTAL_DESCRIPTOR:-/usr/share/xdg-desktop-portal/portals/wlr.portal}"
 WLR_PORTAL_CONFIG_TEMPLATE="$ROOT/dev/xdg-desktop-portal-wlr-Denial.in"
 WLR_PORTAL_CONFIG="${DENIAL_WLR_PORTAL_CONFIG:-/etc/xdg/xdg-desktop-portal-wlr/Denial}"
@@ -168,6 +170,8 @@ Commands:
   native-packages   Build Debian-family and Fedora packages from one payload
   flutter-test      Run lock-matched Flutter shell tests; forwards remaining arguments
   plugin-manager    Build the separate Plugin Manager app and backend
+  polkit-agent      Build the Rust Polkit agent and native Flutter test dialog
+  polkit-agent-run  Run the development agent; its dialog opens on authentication requests
   compositor-test   Run compositor and Rust embedder tests without a debug engine
   sdk-test          Analyze and test the Dart-only plugin SDK; forwards test arguments
   plugin-check      Analyze the Flutter SDK and first-party plugins without a development engine
@@ -738,28 +742,78 @@ build_bundle() (
     install_pinned_engine
 )
 
+build_native_runner() (
+    CARGO_TARGET_DIR="$BUILD_ROOT/native-app" cargo build \
+        --manifest-path "$ROOT/native_app/Cargo.toml" --locked --release --jobs "$BUILD_JOBS"
+)
+
+# Assemble AOT assets directly. No Linux platform runner or toolkit is generated.
+build_native_application() (
+    local app="$1" binary="$2" bundle="$3"
+    build_native_runner
+    local assembly
+    mkdir -p -- "$BUILD_ROOT/app-assembly" "$(dirname -- "$bundle")"
+    assembly="$(mktemp -d "$BUILD_ROOT/app-assembly/$app.XXXXXX")"
+    trap 'rm -rf -- "$assembly"' EXIT
+    (
+        cd -- "$ROOT/$app"
+        "$FLUTTER" pub get --enforce-lockfile
+        "$FLUTTER" assemble \
+            --local-engine-src-path="$LOCAL_ENGINE_SRC_PATH" \
+            --local-engine="$LOCAL_ENGINE_TARGET" \
+            --local-engine-host="$LOCAL_ENGINE_TARGET" \
+            --suppress-analytics --resource-pool-size="$BUILD_JOBS" \
+            --output="$assembly/assets" \
+            -dTargetFile=lib/main.dart -dBuildMode=release \
+            -dTargetPlatform="$DENIAL_FLUTTER_PLATFORM" -dDartObfuscation=false \
+            -dTrackWidgetCreation=true -dTreeShakeIcons=true \
+            "release_bundle_${DENIAL_FLUTTER_PLATFORM}_assets"
+    )
+    require_file "$assembly/assets/lib/libapp.so"
+    local candidate retained
+    candidate="$(mktemp -d "${bundle}.new.XXXXXX")"
+    mkdir -p -- "$candidate/data/flutter_assets" "$candidate/lib"
+    cp -a -- "$assembly/assets/flutter_assets/." "$candidate/data/flutter_assets/"
+    install -m644 -- "$ICU_DATA" "$candidate/data/icudtl.dat"
+    install -m755 -- "$assembly/assets/lib/libapp.so" "$candidate/lib/libapp.so"
+    install -m755 -- "$ROOT/prebuilt/flutter-engine/$DENIAL_FLUTTER_PLATFORM-release/libflutter_engine.so" "$candidate/lib/libflutter_engine.so"
+    install -m755 -- "$BUILD_ROOT/native-app/release/denial-app" "$candidate/$binary"
+    "$candidate/$binary" --bundle "$candidate" --engine "$candidate/lib/libflutter_engine.so" --check
+    # Never truncate a library mapped by an existing app process.
+    retained="${bundle}.retained.$(date +%s%N)"
+    if [[ -d "$bundle" ]]; then mv -- "$bundle" "$retained"; fi
+    if ! mv -- "$candidate" "$bundle"; then
+        [[ ! -d "$retained" ]] || mv -- "$retained" "$bundle"
+        return 1
+    fi
+)
+
+build_polkit_agent() (
+    prepare_flutter_toolchain
+    prepare_sdk_package
+    "$ROOT/tools/denial-flutter-engine" prepare-app-build
+    run_pinned_cargo build --locked --release --jobs "$BUILD_JOBS" -p denial-polkit-agent
+    build_native_application polkit_app denial-app \
+        "$ROOT/polkit_app/build/linux/$DENIAL_FLUTTER_ARCH/release/bundle"
+)
+
+run_polkit_agent() {
+    local bundle="$ROOT/polkit_app/build/linux/$DENIAL_FLUTTER_ARCH/release/bundle"
+    require_file "$RUST_TARGET/release/denial-polkit-agent"
+    require_file "$bundle/denial-app"
+    exec "$RUST_TARGET/release/denial-polkit-agent" \
+        --runner "$bundle/denial-app" --bundle "$bundle" \
+        --engine "$bundle/lib/libflutter_engine.so"
+}
+
 build_settings() (
     prepare_flutter_toolchain
     prepare_sdk_package
     "$ROOT/tools/denial-flutter-engine" prepare-app-build
-    # The Linux asset target does not track app.dill as a subsetting input.
-    # Refresh its stamp so newly used icons cannot retain a stale font subset.
-    rm -f -- "$ROOT/settings_app"/.dart_tool/flutter_build/*/release_bundle_linux-*_assets.stamp
-    (
-        cd "$ROOT/settings_app"
-        "$FLUTTER" pub get
-        "$FLUTTER" build linux \
-            --local-engine-src-path="$LOCAL_ENGINE_SRC_PATH" \
-            --local-engine="$LOCAL_ENGINE_TARGET" \
-            --local-engine-host="$LOCAL_ENGINE_TARGET" \
-            --suppress-analytics \
-            --release \
-            --target=lib/main.dart \
-            --tree-shake-icons
-    )
+    build_native_application settings_app denial-settings "$SETTINGS_BUNDLE"
     require_file "$SETTINGS_BUNDLE/denial-settings"
     require_file "$SETTINGS_BUNDLE/lib/libapp.so"
-    require_file "$SETTINGS_BUNDLE/lib/libflutter_linux_gtk.so"
+    require_file "$SETTINGS_BUNDLE/lib/libflutter_engine.so"
     printf '\nBuilt %s\n' "$SETTINGS_BUNDLE/denial-settings"
 )
 
@@ -777,8 +831,7 @@ build_plugin_manager() (
         mv -f -- "$BUILD_ROOT/plugin-manager/denial-plugins.new" "$BUILD_ROOT/plugin-manager/denial-plugins"
     )
     local app_bundle="$ROOT/plugin_manager_app/build/linux/$DENIAL_FLUTTER_ARCH/release/bundle"
-    # Keep the metadata outside Flutter's disposable bundle. CMake installs
-    # it with the app, including during incremental builds and before kit work.
+    # Keep metadata beside the native application after publishing its bundle.
     python3 - "$BUILD_ROOT/plugin-manager" "$RUST_TARGET/release/denialctl" \
         "$app_bundle" <<'PYMETA'
 import json, os, pathlib, sys
@@ -797,27 +850,8 @@ publish(app.parent / 'denial-plugin-manager.installation.json', {
     'backend': str((backend / 'denial-plugins').resolve()),
 })
 PYMETA
-    local retained_app=""
-    if [[ -d "$app_bundle" ]]; then
-        retained_app="$app_bundle-retained-$(date +%s%N)"
-        mv -- "$app_bundle" "$retained_app"
-    fi
-    (
-        cd -- "$ROOT/plugin_manager_app"
-        "$FLUTTER" pub get --enforce-lockfile || exit $?
-        "$FLUTTER" build linux \
-            --local-engine-src-path="$LOCAL_ENGINE_SRC_PATH" \
-            --local-engine="$LOCAL_ENGINE_TARGET" \
-            --local-engine-host="$LOCAL_ENGINE_TARGET" \
-            --suppress-analytics --release --target=lib/main.dart --tree-shake-icons
-    ) || {
-        local status=$?
-        if [[ -n "$retained_app" ]]; then
-            rm -rf -- "$app_bundle"
-            mv -- "$retained_app" "$app_bundle"
-        fi
-        return "$status"
-    }
+    build_native_application plugin_manager_app denial-plugin-manager "$app_bundle"
+    install -m644 -- "$app_bundle/../denial-plugin-manager.installation.json" "$app_bundle/denial-plugin-manager.installation.json"
     require_file "$ROOT/plugin_manager_app/build/linux/$DENIAL_FLUTTER_ARCH/release/bundle/denial-plugin-manager"
     require_file "$app_bundle/denial-plugin-manager.installation.json"
     # A versioned, release-only build kit travels with installed Denial. The
@@ -928,6 +962,7 @@ build_all() {
     build_bundle
     build_settings
     build_plugin_manager
+    build_polkit_agent
     build_compositor
 }
 
@@ -1087,6 +1122,12 @@ run_compositor() {
         xwayland_arguments=(--no-xwayland)
     fi
 
+    # DENIAL_POLKIT_AGENT=0 leaves PolicyKit to an agent the user runs.
+    local polkit_arguments=()
+    if [[ "${DENIAL_POLKIT_AGENT:-1}" == 0 ]]; then
+        polkit_arguments=(--no-polkit-agent)
+    fi
+
     local drm_device
     drm_device="$(resolve_drm_device)"
     local shell_profile="${DENIAL_SHELL_PROFILE-${DENIA_SHELL_PROFILE-desktop}}"
@@ -1110,6 +1151,7 @@ run_compositor() {
         --output-config "$OUTPUT_CONFIG" \
         --wayland \
         "${xwayland_arguments[@]}" \
+        "${polkit_arguments[@]}" \
         --flutter-bundle "$BUNDLE" \
         --flutter-renderer impeller
 }
@@ -1393,6 +1435,7 @@ install_session() {
     require_file "$DENIAL_PORTAL_DESCRIPTOR_SOURCE"
     require_file "$DENIAL_PORTAL_DBUS_TEMPLATE"
     require_file "$DENIAL_PORTAL_UNIT_TEMPLATE"
+    require_file "$POLKIT_UNIT_TEMPLATE"
     require_file "$WLR_PORTAL_CONFIG_TEMPLATE"
     require_file "$BINARY"
     require_file "$CONTROL_BINARY"
@@ -1414,12 +1457,14 @@ install_session() {
         printf 'warning  zenity is not installed; the OBS source selector will not open\n' >&2
     fi
 
-    local rendered portal_rendered wlr_portal_rendered dbus_rendered unit_rendered
+    local rendered portal_rendered wlr_portal_rendered dbus_rendered unit_rendered polkit_rendered
     rendered="$(mktemp)"
     portal_rendered="$(mktemp)"
     wlr_portal_rendered="$(mktemp)"
     dbus_rendered="$(mktemp)"
     unit_rendered="$(mktemp)"
+    polkit_rendered="$(mktemp)"
+    sed "s|@LAUNCHER@|$SCRIPT_DIR/denial-pc|g" "$POLKIT_UNIT_TEMPLATE" > "$polkit_rendered"
     sed "s|@LAUNCHER@|$SCRIPT_DIR/denial-pc|g" "$SESSION_TEMPLATE" > "$rendered"
     sed "s|@LAUNCHER@|$SCRIPT_DIR/denial-pc|g" \
         "$PORTAL_TEMPLATE" > "$portal_rendered"
@@ -1437,16 +1482,17 @@ install_session() {
         && as_root install -Dm644 "$wlr_portal_rendered" "$WLR_PORTAL_CONFIG" \
         && as_root install -Dm644 "$DENIAL_PORTAL_DESCRIPTOR_SOURCE" "$DENIAL_PORTAL_DESCRIPTOR" \
         && as_root install -Dm644 "$dbus_rendered" "$DENIAL_PORTAL_DBUS_SERVICE" \
-        && as_root install -Dm644 "$unit_rendered" "$DENIAL_PORTAL_UNIT"; then
+        && as_root install -Dm644 "$unit_rendered" "$DENIAL_PORTAL_UNIT" \
+        && as_root install -Dm644 "$polkit_rendered" "$POLKIT_UNIT"; then
         :
     else
         local status=$?
         rm -f -- "$rendered" "$portal_rendered" "$wlr_portal_rendered" \
-            "$dbus_rendered" "$unit_rendered"
+            "$dbus_rendered" "$unit_rendered" "$polkit_rendered"
         return "$status"
     fi
     rm -f -- "$rendered" "$portal_rendered" "$wlr_portal_rendered" \
-        "$dbus_rendered" "$unit_rendered"
+        "$dbus_rendered" "$unit_rendered" "$polkit_rendered"
     systemctl --user daemon-reload >/dev/null 2>&1 || true
     remove_legacy_session_entry
     printf 'Installed %s\nInstalled %s\nInstalled %s\nInstalled %s\nInstalled %s\nInstalled %s\nInstalled %s\nInstalled %s\n' \
@@ -1552,6 +1598,9 @@ remove_denial_portal_metadata() {
 }
 
 remove_session_target() {
+    if [[ -e "$POLKIT_UNIT" ]] && grep -Fqx "# Installed by $SCRIPT_DIR/denial-pc" "$POLKIT_UNIT"; then
+        as_root rm -f -- "$POLKIT_UNIT"
+    fi
     [[ -e "$SESSION_TARGET_FILE" ]] || return 0
     if ! grep -Fqx 'BindsTo=graphical-session.target' "$SESSION_TARGET_FILE"; then
         printf 'warning  refusing to remove unrecognized session target %s\n' \
@@ -1614,6 +1663,8 @@ case "${1:-}" in
         test_flutter "$@"
         ;;
     plugin-manager) build_plugin_manager ;;
+    polkit-agent) build_polkit_agent ;;
+    polkit-agent-run) run_polkit_agent ;;
     compositor-test) test_compositor ;;
     plugin-check) check_plugins ;;
     sdk-test)

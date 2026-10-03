@@ -209,6 +209,78 @@ fn cropped_buffer_canvas(
     })
 }
 
+/// The visible part of a popup root surface, from its xdg window geometry.
+/// Clients such as Chromium draw menu shadows inside the popup surface and
+/// declare the menu itself as window geometry; Flutter confines translucent
+/// materials to it. xdg-shell clamps the geometry to the surface, and a
+/// geometry covering the complete surface carries no information.
+#[cfg(feature = "flutter")]
+fn popup_visible_geometry(
+    declared: Option<Rectangle<i32, Logical>>,
+    surface_size: Size<i32, Logical>,
+) -> Option<WindowGeometry> {
+    let surface = Rectangle::from_size(surface_size);
+    let visible = declared?.intersection(surface)?;
+    (!visible.is_empty() && visible != surface).then(|| WindowGeometry {
+        x: f64::from(visible.loc.x),
+        y: f64::from(visible.loc.y),
+        width: f64::from(visible.size.w),
+        height: f64::from(visible.size.h),
+    })
+}
+
+#[cfg(all(test, feature = "flutter"))]
+mod popup_visible_geometry_tests {
+    use super::*;
+
+    fn rect(x: i32, y: i32, w: i32, h: i32) -> Rectangle<i32, Logical> {
+        Rectangle::new((x, y).into(), (w, h).into())
+    }
+
+    #[test]
+    fn shadow_margins_publish_the_declared_menu() {
+        assert_eq!(
+            popup_visible_geometry(Some(rect(12, 8, 200, 300)), (224, 324).into()),
+            Some(WindowGeometry {
+                x: 12.0,
+                y: 8.0,
+                width: 200.0,
+                height: 300.0,
+            })
+        );
+    }
+
+    #[test]
+    fn undeclared_or_complete_geometry_publishes_nothing() {
+        assert_eq!(popup_visible_geometry(None, (224, 324).into()), None);
+        assert_eq!(
+            popup_visible_geometry(Some(rect(0, 0, 224, 324)), (224, 324).into()),
+            None
+        );
+        assert_eq!(
+            popup_visible_geometry(Some(rect(0, 0, 0, 0)), (224, 324).into()),
+            None
+        );
+    }
+
+    #[test]
+    fn geometry_is_clamped_to_the_surface() {
+        assert_eq!(
+            popup_visible_geometry(Some(rect(-4, 10, 100, 400)), (224, 324).into()),
+            Some(WindowGeometry {
+                x: 0.0,
+                y: 10.0,
+                width: 96.0,
+                height: 314.0,
+            })
+        );
+        assert_eq!(
+            popup_visible_geometry(Some(rect(300, 10, 100, 100)), (224, 324).into()),
+            None
+        );
+    }
+}
+
 /// Maps a rectangle in a [`cropped_buffer_canvas`] back to buffer pixels.
 #[cfg(feature = "flutter")]
 pub(super) fn canvas_rect_to_buffer(
@@ -856,6 +928,16 @@ impl WaylandFrontend {
                 } else {
                     SurfaceRoleDescription::Subsurface
                 };
+                let window_geometry = if role == SurfaceRoleDescription::Popup {
+                    let declared = states
+                        .cached_state
+                        .get::<SurfaceCachedState>()
+                        .current()
+                        .geometry;
+                    popup_visible_geometry(declared, view.dst)
+                } else {
+                    None
+                };
                 layers.push(SurfaceLayerDescription {
                     surface_id,
                     parent_surface_id: context.parent_surface_id,
@@ -877,6 +959,7 @@ impl WaylandFrontend {
                     composition_order: *composition_order,
                     opacity,
                     opaque,
+                    window_geometry,
                 });
                 *composition_order = composition_order.saturating_add(1);
             },

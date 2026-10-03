@@ -50,6 +50,7 @@ class WindowPlane extends SingleChildRenderObjectWidget {
     this.frameWidth = 0,
     this.frameColor = const Color(0x00000000),
     this.backdrop,
+    this.materialRegion,
     this.filterQuality = FilterQuality.none,
     this.presentationScale = 1,
     this.pixelGridOrigin = Offset.zero,
@@ -63,6 +64,7 @@ class WindowPlane extends SingleChildRenderObjectWidget {
     this.frameColor = const Color(0x00000000),
     this.backdrop,
   }) : texture = null,
+       materialRegion = null,
        filterQuality = FilterQuality.none,
        presentationScale = 1,
        pixelGridOrigin = Offset.zero;
@@ -72,6 +74,11 @@ class WindowPlane extends SingleChildRenderObjectWidget {
   final double frameWidth;
   final Color frameColor;
   final ImageFilterConfig? backdrop;
+
+  /// The part of the client area that receives [backdrop], in fractions of
+  /// its size, such as a popup's window geometry inside its client-drawn
+  /// shadow. The material takes its shape from it and is only evaluated there.
+  final Rect? materialRegion;
   final FilterQuality filterQuality;
   final double presentationScale;
   final Offset pixelGridOrigin;
@@ -133,12 +140,24 @@ class RenderWindowPlane extends RenderShiftedBox {
     final config = _configuration;
     final content = _content.shift(offset);
     final layer = _windowLayer.layer ??= _WindowPlaneLayer();
+    final region = config.materialRegion;
+    final material = region == null
+        ? null
+        : Rect.fromLTRB(
+            content.left + region.left * content.width,
+            content.top + region.top * content.height,
+            content.left + region.right * content.width,
+            content.top + region.bottom * content.height,
+          );
     layer
       ..bounds = offset & size
       ..content = content
+      ..material = material
       ..radius = config.radius
       ..frameColor = config.frameColor
-      ..backdrop = config.backdrop?.resolve(ImageFilterContext(bounds: content))
+      ..backdrop = config.backdrop?.resolve(
+        ImageFilterContext(bounds: material ?? content),
+      )
       ..texture = config.texture;
     final texture = config.texture;
     if (texture != null) {
@@ -284,6 +303,7 @@ WindowPlaneTextureGeometry windowPlaneTextureGeometry({
 class _WindowPlaneLayer extends ContainerLayer {
   Rect bounds = Rect.zero;
   Rect content = Rect.zero;
+  Rect? material;
   double radius = 0;
   Color frameColor = const Color(0x00000000);
   ui.ImageFilter? backdrop;
@@ -299,6 +319,7 @@ class _WindowPlaneLayer extends ContainerLayer {
     engineLayer = builder.pushWindowSurface(
       bounds,
       contentBounds: content,
+      materialBounds: material,
       radius: radius,
       frameColor: frameColor,
       backdrop: backdrop,

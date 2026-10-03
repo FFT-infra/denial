@@ -106,6 +106,8 @@ pub(super) struct RuntimeState {
     #[cfg(feature = "flutter")]
     pub(super) pending_orientation: Option<orientation_sensor::Orientation>,
     #[cfg(feature = "flutter")]
+    pub(super) lid: lid_switch::LidSwitch,
+    #[cfg(feature = "flutter")]
     pub(super) output_control_dirty: bool,
     #[cfg(feature = "flutter")]
     pub(super) output_control: Option<output_control::OutputControlPublisher>,

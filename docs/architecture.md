@@ -133,7 +133,9 @@ unit.
 - one external input-method client may bind `zwp_input_method_v2` for the seat;
   later contenders receive `unavailable`, and its `zwp_virtual_keyboard_v1`
   companion is accepted only from that same Wayland client. Its keyboard grab
-  and loop-safe key pass-through stay on the Smithay seat: Flutter participates
+  and loop-safe key pass-through stay on the Smithay seat, but the grab routes
+  keys before Smithay's single keyboard-grab slot so that XDG popup grabs can
+  coexist with an active input method. Flutter participates
   as a real keyboard focus target alongside Wayland and Xwayland, while editing
   transactions use the active text endpoint. Candidate surfaces join the same
   Flutter scene and native input layout.

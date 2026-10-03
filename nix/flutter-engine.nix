@@ -8,6 +8,9 @@
   runCommand,
   flutterNixpkgs ? pkgs.path,
   maintenanceOnly ? false,
+  # Retained for the isolated lab probe; normal packages use the pinned producer.
+  releaseEngineOverride ? null,
+  buildEngineFromSource ? false,
 }:
 
 let
@@ -28,7 +31,7 @@ let
     .${stdenv.hostPlatform.system}
       or (throw "Denial Flutter does not support ${stdenv.hostPlatform.system}");
 
-  dart = pkgs.dart-bin.overrideAttrs (_: {
+  bootstrapDart = pkgs.dart-bin.overrideAttrs (_: {
     version = dartVersion;
     src = fetchurl {
       url = "https://storage.googleapis.com/dart-archive/channels/stable/release/${dartVersion}/sdk/dartsdk-linux-x64-release.zip";
@@ -88,90 +91,49 @@ let
     "deregister-pub-dependencies-artifact.patch"
   ];
 
-  engineTools = pkgs.callPackage (flutterNix + "/engine/tools.nix") {
-    inherit (stdenv) hostPlatform buildPlatform;
-    depot_toolsCommit = sourceLock.depot_tools.revision;
-    depot_toolsHash = nixLock.depot_tools.hash;
+  sourceEngine = pkgs.callPackage ./flutter-engine-source.nix {
+    inherit flutterNixpkgs maintenanceOnly;
   };
-  enginePackageCallPackage =
-    path: args:
-    pkgs.callPackage path (
-      args
-      // lib.optionalAttrs (path == flutterNix + "/engine/source.nix") {
-        tools = engineTools;
+  # Never import the consumer's overlays or native overrides into the producer.
+  # Its derivation stays identical when the host Nixpkgs changes.
+  enginePkgs = import flutterNixpkgs { system = stdenv.hostPlatform.system; };
+  pinnedRawEngine = enginePkgs.callPackage ./flutter-engine-raw.nix {
+    inherit flutterNixpkgs;
+  };
+  hostSupportsPinnedEngine = import ./engine-compatible.nix {
+    inherit lib;
+    libcVersion = stdenv.cc.libc.version;
+    compilerVersion = stdenv.cc.cc.version;
+    isGNU = stdenv.cc.isGNU or false;
+    inherit (pinnedRawEngine) minimumGlibc minimumCompilerRuntime;
+  };
+  usePinnedEngine = !buildEngineFromSource && hostSupportsPinnedEngine;
+  releaseEngine =
+    if releaseEngineOverride != null then
+      releaseEngineOverride
+    else if usePinnedEngine then
+      pkgs.callPackage ./flutter-engine-adapt.nix {
+        rawEngine = pinnedRawEngine;
       }
-    );
-  engineCallPackage =
-    path: args:
-    let
-      isEnginePackage = path == flutterNix + "/engine/package.nix";
-      package = pkgs.callPackage path (
-        args
-        // {
-          inherit dart;
-        }
-        // lib.optionalAttrs isEnginePackage {
-          tools = engineTools;
-          callPackage = enginePackageCallPackage;
-        }
-      );
-    in
-    if isEnginePackage then
-      package.overrideAttrs (oldAttrs: {
-        configureFlags = (oldAttrs.configureFlags or [ ]) ++ [
-          "--slimpeller"
-          "--gn-args=shell_enable_vulkan=false"
-          "--gn-args=test_enable_vulkan=false"
-          "--gn-args=skia_use_vulkan=false"
-        ];
-      })
     else
-      package;
-  flutterCallPackage =
-    path: args:
-    pkgs.callPackage path (
-      args
-      // lib.optionalAttrs (path == flutterNix + "/engine/default.nix") {
-        # Nixpkgs passes the requested Dart version into engine/default.nix but
-        # does not forward the matching bootstrap SDK to engine/package.nix.
-        callPackage = engineCallPackage;
-      }
-    );
-  rawEngine = flutterCallPackage (flutterNix + "/engine/default.nix") {
-    dartSdkVersion = dart.version;
-    inherit flutterVersion;
-    swiftshaderRev = nixLock.swiftshader.revision;
-    swiftshaderHash = nixLock.swiftshader.hash;
-    version = engineVersion;
-    hashes = {
-      x86_64-linux.x86_64-linux = nixLock.engine.source_hash;
-    };
-    url = "${sourceLock.flutter.repository}@${flutterRevision}";
-    patches = [ ];
-    runtimeModes = [
-      "release"
-      "release"
-    ];
-  };
-  releaseEngine = rawEngine.overrideAttrs (_: {
-    runtimeModes = [ "release" ];
-    altRuntimeMode = "release";
-    installPhase = ''
-      runHook preInstall
-      mkdir --parents $out/out
-      ln --symbolic ${rawEngine.release}/out/${rawEngine.release.outName} \
-        $out/out/${rawEngine.release.outName}
-      runHook postInstall
-    '';
-  });
+      sourceEngine;
+  # Compiler snapshots and platform kernels require the exact SDK hash, not
+  # just the same Dart version. Keep the source-built SDK with its engine.
+  dart = releaseEngine.dart or bootstrapDart;
+  # Application compilation only needs the locked Flutter GPU declarations.
+  applicationEngineSource = runCommand "denial-engine-source-projection" { } ''
+    mkdir -p $out/src
+    ln -s ${fetchedFlutter}/engine/src/flutter $out/src/flutter
+  '';
 
   # Lock maintenance must remain evaluable after SOURCE_LOCK.json advances and
   # before the Flutter application lock has been regenerated. In particular,
   # none of these fetchers may cross the application-only assertions below.
   maintenanceSources = {
-    inherit dart fetchedFlutter;
-    depotToolsSource = engineTools.depot_tools;
-    engineSource = rawEngine.src;
+    inherit fetchedFlutter;
+    dart = bootstrapDart;
+    depotToolsSource = sourceEngine.depotToolsSource;
+    engineSource = sourceEngine.src;
   };
 
   pubspecLock = lib.importJSON ./flutter-pubspec-lock.json;
@@ -191,7 +153,7 @@ let
               runCommand "flutter-sdk-${name}" { passthru.packageRoot = "."; } ''
                 for source in \
                   ${flutterSource}/packages/${name} \
-                  ${releaseEngine}/out/${rawEngine.release.outName}/gen/dart-pkg/${name}; do
+                  ${releaseEngine}/out/${releaseEngine.outName}/gen/dart-pkg/${name}; do
                   if [ -d "$source" ]; then
                     ln --symbolic "$source" $out
                     exit 0
@@ -243,8 +205,10 @@ let
           '';
           passthru = oldAttrs.passthru // {
             engine = releaseEngine;
-            engineSource = rawEngine.src;
-            depotToolsSource = engineTools.depot_tools;
+            inherit pinnedRawEngine;
+            hostSourceEngine = sourceEngine;
+            engineSource = applicationEngineSource;
+            depotToolsSource = sourceEngine.depotToolsSource;
             inherit fetchedFlutter flutterSource;
             buildFlutterApplication =
               pkgs.callPackage (flutterNix + "/build-support/build-flutter-application.nix")
@@ -255,19 +219,25 @@ let
           };
         });
 
-    # Denial builds Linux applications only, with the locally compiled engine.
+    # Denial builds Linux applications only, with the locked release engine.
     # buildFlutterApplication normally re-enables universal and target artifact
-    # downloads through `override`; keep this wrapper source-only instead.
+    # downloads through `override`; keep this wrapper on our supplied engine instead.
     wrapped = wrappedBase // {
       override = _: packages.wrapped;
       engine = releaseEngine;
-      engineSource = rawEngine.src;
-      depotToolsSource = engineTools.depot_tools;
+      inherit pinnedRawEngine;
+      hostSourceEngine = sourceEngine;
+      engineSource = applicationEngineSource;
+      depotToolsSource = sourceEngine.depotToolsSource;
       frameworkRevision = flutterRevision;
       inherit dart;
       inherit fetchedFlutter flutterSource;
     };
-    wrappedBase = (pkgs.flutterPackages.wrapFlutter packages.unwrapped).override {
+    # The host's wrapper can change its local-engine interface independently
+    # of the pinned tool helper. Keep their definitions coupled while still
+    # resolving every native dependency through the host package set.
+    wrappedBase = pkgs.callPackage (flutterNix + "/wrapper.nix") {
+      flutter = packages.unwrapped;
       supportedTargetFlutterPlatforms = [ ];
     };
   };
@@ -275,6 +245,9 @@ in
 if maintenanceOnly then
   maintenanceSources
 else
+  assert lib.assertMsg (
+    releaseEngineOverride == null || (releaseEngineOverride.sourceLockSha256 or null) == sourceLockHash
+  ) "Engine artifacts do not match SOURCE_LOCK.json";
   assert lib.assertMsg (
     nixLock.schema_version == 1
   ) "unsupported nix/flutter-engine-lock.json schema";

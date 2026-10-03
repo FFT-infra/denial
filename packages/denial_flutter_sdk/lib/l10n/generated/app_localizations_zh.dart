@@ -4079,4 +4079,42 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get welcomeTiling => '平铺与键盘操作';
+
+  @override
+  String get polkitRunCommandAsAdministrator => '需要管理员身份验证。';
+
+  @override
+  String polkitRunCommandAsUser(String user) {
+    return '以 $user 身份运行此命令需要进行身份验证。';
+  }
+
+  @override
+  String get polkitAuthenticationRequired => '需要进行身份验证。';
+
+  @override
+  String get polkitAuthenticationUnavailable => '身份验证不可用。';
+
+  @override
+  String get polkitPassword => '密码';
+
+  @override
+  String get polkitVerifying => '正在验证…';
+
+  @override
+  String get polkitPreparing => '正在准备…';
+
+  @override
+  String get polkitCapsLock => '大写锁定';
+
+  @override
+  String get polkitConfirm => '确认';
+
+  @override
+  String get polkitContinue => '继续';
+
+  @override
+  String get polkitClose => '关闭';
+
+  @override
+  String get polkitLocked => '已暂时锁定';
 }

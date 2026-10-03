@@ -82,8 +82,15 @@ class DesktopLiveWindowPlacements {
     if (session != null && translation != Offset.zero) {
       // Retain the paint offset after clearing the live render transform. The
       // keyed position widget consumes it as the origin of its settle tween,
-      // preserving exact visual continuity across the release frame.
+      // preserving exact visual continuity across the release frame. It only
+      // describes that frame: a later release, such as an overview drag,
+      // must not start from where this native grab once ended.
       _settleTranslations[objectId] = translation;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_settleTranslations[objectId] == translation) {
+          _settleTranslations.remove(objectId);
+        }
+      });
     } else {
       _settleTranslations.remove(objectId);
     }
@@ -91,7 +98,9 @@ class DesktopLiveWindowPlacements {
     return session?.latestEvent;
   }
 
-  Offset? settleTranslationFor(int objectId) => _settleTranslations[objectId];
+  /// Consumes the release origin left by [finish] for this frame, if any.
+  Offset? takeSettleTranslation(int objectId) =>
+      _settleTranslations.remove(objectId);
 
   void clear() {
     _sessions.clear();

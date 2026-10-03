@@ -1,0 +1,15 @@
+# Installed by @LAUNCHER@
+[Unit]
+Description=Denial development authentication agent
+PartOf=denial-session.target
+After=graphical-session-pre.target
+
+[Service]
+Type=simple
+ExecStart=@LAUNCHER@ polkit-agent-run
+Restart=on-failure
+RestartSec=1s
+UMask=0077
+
+[Install]
+WantedBy=denial-session.target

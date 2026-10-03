@@ -101,7 +101,14 @@ shell_source_inputs=(
 settings_source_inputs=(
     "${shell_source_inputs[@]}"
     "$ROOT/settings_app/lib"
-    "$ROOT/settings_app/linux"
+    "$ROOT/native_app/src"
+    "$ROOT/native_app/build.rs"
+    "$ROOT/native_app/Cargo.toml"
+    "$ROOT/native_app/Cargo.lock"
+    "$ROOT/compositor/flutter-engine/src"
+    "$ROOT/compositor/flutter-engine/Cargo.toml"
+    "$ROOT/compositor/src/bin/deniald/flutter_runtime/text_input.rs"
+    "$ROOT/compositor/src/bin/deniald/flutter_runtime/mouse_cursor.rs"
     "$ROOT/settings_app/pubspec.yaml"
     "$ROOT/settings_app/pubspec.lock"
 )
@@ -113,8 +120,6 @@ shell_source_manifest="$(
 )"
 settings_source_manifest="$(
     find "${settings_source_inputs[@]}" -type f \
-        ! -path "$ROOT/settings_app/linux/flutter/ephemeral/*" \
-        ! -path "$ROOT/settings_app/linux/flutter/generated_*" \
         -print0 \
         | sort -z \
         | xargs -0 sha256sum
@@ -129,7 +134,7 @@ source_fingerprint_for_revision() {
 }
 source_fingerprint="$(source_fingerprint_for_revision "$revision")"
 # Settings imports the shared dart_shell package. Keep a separate, engine-
-# independent fingerprint so its self-contained GTK bundle can be reused only
+# independent fingerprint so its self-contained native bundle can be reused only
 # when that complete Dart dependency surface is unchanged.
 settings_source_fingerprint="$({
     printf '%s\n' "$settings_source_manifest"
@@ -153,7 +158,7 @@ for candidate in "$ARTIFACT_STORE/"*; do
         && "$(<"$candidate/SETTINGS_SOURCE_FINGERPRINT")" == "$settings_source_fingerprint" \
         && -f "$candidate/settings/denial-settings" \
         && -f "$candidate/settings/lib/libapp.so" \
-        && -f "$candidate/settings/lib/libflutter_linux_gtk.so" ]]; then
+        && -f "$candidate/settings/lib/libflutter_engine.so" ]]; then
         reusable_settings_artifact="$candidate"
     fi
 
@@ -219,7 +224,7 @@ else
         if [[ -n "$settings_dep_target" ]] \
             && make -q -rR -f "$settings_depfile" "$settings_dep_target" \
             && [[ -z "$(
-                find "$ROOT/settings_app/lib" "$ROOT/settings_app/linux" \
+                find "$ROOT/settings_app/lib" "$ROOT/native_app/src" \
                     "$ROOT/settings_app/pubspec.yaml" \
                     "$ROOT/settings_app/pubspec.lock" \
                     -type f \
@@ -233,12 +238,7 @@ else
     fi
 
     engine_targets=(libflutter_engine.so flutter_patched_sdk)
-    if [[ -z "$settings_bundle" ]]; then
-        engine_targets+=(
-            libflutter_linux_gtk.so
-            zip_archives/linux-x64-release/linux-x64-flutter-gtk.zip
-        )
-    fi
+    engine_targets+=(gen_snapshot)
     PATH="$depot_tools:$PATH" /usr/bin/ninja -C "$ENGINE_OUT" -j "$jobs" \
         "${engine_targets[@]}"
 
@@ -295,24 +295,36 @@ else
         shell_app="$assembly/lib/libapp.so"
     fi
     if [[ -z "$settings_bundle" ]]; then
+        local_runner_target="${XDG_CACHE_HOME:-$HOME/.cache}/denial/pc-build/native-app"
+        CARGO_TARGET_DIR="$local_runner_target" cargo build \
+            --manifest-path "$ROOT/native_app/Cargo.toml" --locked --release --jobs "$jobs"
+        settings_assembly="$work/settings-assembly"
         (
             cd -- "$ROOT/settings_app"
-            "$FLUTTER" build linux \
+            "$FLUTTER" pub get --enforce-lockfile
+            "$FLUTTER" assemble \
                 --local-engine=denial_host_release \
                 --local-engine-host=denial_host_release \
                 --suppress-analytics \
-                --release \
-                --target=lib/main.dart \
-                --no-tree-shake-icons
+                --output="$settings_assembly" \
+                -dTargetFile=lib/main.dart -dBuildMode=release -dTargetPlatform=linux-x64 \
+                -dDartObfuscation=false -dTrackWidgetCreation=true -dTreeShakeIcons=false \
+                release_bundle_linux-x64_assets
         )
-        settings_bundle="$ROOT/settings_app/build/linux/x64/release/bundle"
+        settings_bundle="$work/settings-native"
+        mkdir -p -- "$settings_bundle/data/flutter_assets" "$settings_bundle/lib"
+        cp -a -- "$settings_assembly/flutter_assets/." "$settings_bundle/data/flutter_assets/"
+        install -m644 -- "$ICU_DATA" "$settings_bundle/data/icudtl.dat"
+        install -m755 -- "$settings_assembly/lib/libapp.so" "$settings_bundle/lib/libapp.so"
+        install -m755 -- "$engine" "$settings_bundle/lib/libflutter_engine.so"
+        install -m755 -- "$local_runner_target/release/denial-app" "$settings_bundle/denial-settings"
     fi
     for required in \
         "$shell_app" \
         "$assembly/flutter_assets/AssetManifest.bin" \
         "$settings_bundle/denial-settings" \
         "$settings_bundle/lib/libapp.so" \
-        "$settings_bundle/lib/libflutter_linux_gtk.so" \
+        "$settings_bundle/lib/libflutter_engine.so" \
         "$engine" \
         "$ICU_DATA"; do
         [[ -f "$required" ]] || {

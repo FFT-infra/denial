@@ -10,14 +10,22 @@ class DesktopOverviewTarget {
     required this.monitorId,
     required this.bounds,
     required this.backgroundBounds,
+    required this.workArea,
     required this.objectIds,
   });
 
   final int monitorId;
   final Rect bounds;
   final Rect backgroundBounds;
+
+  /// The output area managed layouts tile into.
+  final Rect workArea;
   final Set<int> objectIds;
 
+  /// Resolves the monitor and windows for SUPER+A.
+  ///
+  /// [allWorkspaces] selects the managed-layout overview, which includes every
+  /// workspace and resolves even when the monitor has no windows.
   static DesktopOverviewTarget? resolve({
     required Size viewSize,
     required DisplayLayout? displayLayout,
@@ -25,9 +33,10 @@ class DesktopOverviewTarget {
     required DesktopWorkspaceState workspace,
     required int? foregroundObjectId,
     required int? preferredMonitorId,
+    bool allWorkspaces = false,
   }) {
     final canvas = Offset.zero & viewSize;
-    if (canvas.isEmpty || workspace.placements.isEmpty) {
+    if (canvas.isEmpty || (workspace.placements.isEmpty && !allWorkspaces)) {
       return null;
     }
 
@@ -76,7 +85,8 @@ class DesktopOverviewTarget {
       if (!DesktopOverviewLayout.isUsefulPreview(placement.frame)) {
         continue;
       }
-      if (!placement.minimized &&
+      if (!allWorkspaces &&
+          !placement.minimized &&
           !workspace.isPlacementOnActiveWorkspace(placement)) {
         continue;
       }
@@ -92,7 +102,7 @@ class DesktopOverviewTarget {
         objectIds.add(placement.objectId);
       }
     }
-    if (objectIds.isEmpty) {
+    if (objectIds.isEmpty && !allWorkspaces) {
       return null;
     }
 
@@ -135,10 +145,15 @@ class DesktopOverviewTarget {
       overviewBounds = monitorBounds;
     }
 
+    final workArea = output == null
+        ? overviewBounds
+        : displayLayout!.workAreaOf(output).intersect(monitorBounds);
+
     return DesktopOverviewTarget(
       monitorId: monitorId,
       bounds: overviewBounds,
       backgroundBounds: monitorBounds,
+      workArea: workArea.isEmpty ? overviewBounds : workArea,
       objectIds: objectIds,
     );
   }

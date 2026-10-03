@@ -35,6 +35,12 @@ in
   denialFlutter = final.callPackage ./flutter-engine.nix (
     final.lib.optionalAttrs (flutterNixpkgs != null) { inherit flutterNixpkgs; }
   );
+  denialFlutterSource = final.callPackage ./flutter-engine.nix (
+    {
+      buildEngineFromSource = true;
+    }
+    // final.lib.optionalAttrs (flutterNixpkgs != null) { inherit flutterNixpkgs; }
+  );
   denial = final.callPackage ./package.nix {
     src = cleanSrc;
     inherit version buildIdentity sourceRevision;

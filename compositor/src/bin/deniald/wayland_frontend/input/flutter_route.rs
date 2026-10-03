@@ -1,5 +1,10 @@
 //! Flutter-owned touch, pointer, gesture, and axis dispatch.
 
+#[cfg(feature = "flutter")]
+use smithay::desktop::PopupUngrabStrategy;
+#[cfg(feature = "flutter")]
+use smithay::wayland::seat::WaylandFocus;
+
 use super::super::focus::request_keyboard_focus;
 use super::*;
 
@@ -156,6 +161,20 @@ pub(super) fn process_flutter_input_event(
                     None
                 };
                 (target, local_window_region)
+            };
+            let pointer_grabbed = if pointer_grabbed
+                && button.state() == ButtonState::Pressed
+                && let InputTarget::Client(route) = &target
+            {
+                !dismiss_foreign_popup_grab(
+                    state,
+                    &pointer,
+                    &route.surface,
+                    serial,
+                    button.time_msec(),
+                )
+            } else {
+                pointer_grabbed
             };
             if button.state() == ButtonState::Released {
                 state
@@ -999,6 +1018,47 @@ pub(super) fn route_pointer_axis<E: PointerAxisEvent<LibinputInputBackend>>(
     pointer.frame(state);
 }
 
+/// End the active XDG popup grab before a press on another client's surface.
+///
+/// Smithay's popup pointer grab would dismiss the popup chain itself, but only
+/// while it still owns the press, so the press would reach its client without
+/// the activation an ordinary press receives. Returns whether the grab ended.
+#[cfg(feature = "flutter")]
+fn dismiss_foreign_popup_grab(
+    state: &mut RuntimeState,
+    pointer: &PointerHandle<RuntimeState>,
+    surface: &WlSurface,
+    serial: Serial,
+    time: u32,
+) -> bool {
+    let Some(mut grab) = state
+        .wayland
+        .as_mut()
+        .expect("missing Wayland frontend")
+        .client_popup_grab
+        .take()
+    else {
+        return false;
+    };
+    if grab.has_ended() || !pointer.has_grab(grab.serial()) {
+        return false;
+    }
+    let owner = grab
+        .current_grab()
+        .and_then(|focus| focus.wl_surface().and_then(|surface| surface.client()));
+    if owner.is_some() && owner == surface.client() {
+        state
+            .wayland
+            .as_mut()
+            .expect("missing Wayland frontend")
+            .client_popup_grab = Some(grab);
+        return false;
+    }
+    grab.ungrab(PopupUngrabStrategy::All);
+    pointer.unset_grab(state, serial, time);
+    true
+}
+
 #[cfg(feature = "flutter")]
 pub(super) fn activate_client_route(
     state: &mut RuntimeState,
@@ -1379,8 +1439,9 @@ pub(super) fn process_wayland_keyboard_transition(
         keycode.raw(),
         key_state,
     );
-    keyboard.input::<(), _>(
+    super::super::input_method::input_key(
         state,
+        &keyboard,
         keycode,
         key_state,
         SERIAL_COUNTER.next_serial(),

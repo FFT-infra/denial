@@ -41,14 +41,24 @@ List<Widget> buildDesktopWindowLayers({
   onUpdateOverviewDrag,
   required ValueChanged<DenialWindow> onEndOverviewDrag,
   required ValueChanged<DenialWindow> onCancelOverviewDrag,
+  Map<int, Rect> overviewEntryFrames = const <int, Rect>{},
+  Map<int, Rect> overviewDepartingFrames = const <int, Rect>{},
 }) {
   final layers = <Widget>[];
   for (final placement in placements) {
-    if (!placement.minimized && !desktop.isPlacementPresented(placement)) {
+    final overview = desktop.isInOverview(placement.objectId);
+    // Windows of other workspaces leave a closing workspace overview with the
+    // card they sat on, instead of disappearing as soon as it closes.
+    final departingFrame = overview
+        ? null
+        : overviewDepartingFrames[placement.objectId];
+    final departing = departingFrame != null && !placement.minimized;
+    if (!placement.minimized &&
+        !departing &&
+        !desktop.isPlacementPresented(placement)) {
       continue;
     }
     final window = windowsById[placement.objectId]!;
-    final overview = desktop.isInOverview(placement.objectId);
     final switching =
         !overview &&
         DesktopWindowSwitcherLayout.contains(switcher, placement.objectId);
@@ -89,7 +99,11 @@ List<Widget> buildDesktopWindowLayers({
     if (usesDesktopPlane != desktopPlane) {
       continue;
     }
-    final arrangedFrame = minimizingForeground
+    final arrangedFrame = departing
+        ? departingFrame
+        : overview && overviewEntryFrames.containsKey(placement.objectId)
+        ? overviewEntryFrames[placement.objectId]
+        : minimizingForeground
         ? DesktopHomeLayout.offscreenFrame(
             bounds: minimizeOffscreenBounds,
             source: placement.frame,
@@ -118,10 +132,11 @@ List<Widget> buildDesktopWindowLayers({
       contentInset: placement.frameBorder,
       devicePixelRatio: outputPixelGrid?.scale ?? devicePixelRatio,
       pixelGridOrigin: outputPixelGrid?.logicalRect.topLeft ?? Offset.zero,
-      enabled: !overview && !switching && !minimizedIdle,
+      enabled: !overview && !departing && !switching && !minimizedIdle,
       alignSize: true,
     );
     final visible =
+        departing ||
         minimizingForeground ||
         desktopWidget ||
         overview ||
@@ -133,6 +148,8 @@ List<Widget> buildDesktopWindowLayers({
             : !offscreenMinimized);
     final motionDuration = reduceMotion
         ? Duration.zero
+        : departing
+        ? Motion.overviewClose
         : minimizedIdle
         ? Motion.desktopWindowWidget
         : switching
@@ -140,7 +157,9 @@ List<Widget> buildDesktopWindowLayers({
         : overview
         ? Motion.overviewOpen
         : Motion.overviewClose;
-    final active = switching
+    final active = departing
+        ? false
+        : switching
         ? DesktopWindowSwitcherLayout.isSelected(switcher, placement.objectId)
         : overview
         ? desktop.overview?.selectedObjectId == placement.objectId
@@ -162,6 +181,7 @@ List<Widget> buildDesktopWindowLayers({
         suppressPositionAnimation: suppressPositionAnimation,
         overviewActive: desktop.overviewActive,
         overview: overview,
+        overviewDeparting: departing,
         switching: switching,
         motionDuration: motionDuration,
         active: active && !desktopVisible,
@@ -175,7 +195,7 @@ List<Widget> buildDesktopWindowLayers({
         onOverviewDragCancel: () => onCancelOverviewDrag(window),
       ),
     );
-    if (!desktopWidget) {
+    if (!desktopWidget && !departing) {
       layers.add(
         DesktopPopupSurfaceLayers(
           key: ValueKey<String>('desktop-popup-layers-${placement.objectId}'),

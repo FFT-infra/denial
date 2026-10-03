@@ -3663,6 +3663,7 @@ impl<'a> SurfaceLayer<'a> {
   pub const VT_COMPOSITION_ORDER: flatbuffers::VOffsetT = 38;
   pub const VT_OPACITY: flatbuffers::VOffsetT = 40;
   pub const VT_OPAQUE: flatbuffers::VOffsetT = 42;
+  pub const VT_WINDOW_GEOMETRY: flatbuffers::VOffsetT = 44;
 
   #[inline]
   pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -3671,7 +3672,7 @@ impl<'a> SurfaceLayer<'a> {
   #[allow(unused_mut)]
   pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
     _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
-    args: &'args SurfaceLayerArgs
+    args: &'args SurfaceLayerArgs<'args>
   ) -> flatbuffers::WIPOffset<SurfaceLayer<'bldr>> {
     let mut builder = SurfaceLayerBuilder::new(_fbb);
     builder.add_texture_source_height(args.texture_source_height);
@@ -3686,6 +3687,7 @@ impl<'a> SurfaceLayer<'a> {
     builder.add_popup_root_surface_id(args.popup_root_surface_id);
     builder.add_parent_surface_id(args.parent_surface_id);
     builder.add_surface_id(args.surface_id);
+    if let Some(x) = args.window_geometry { builder.add_window_geometry(x); }
     builder.add_opacity(args.opacity);
     builder.add_composition_order(args.composition_order);
     builder.add_scale_120(args.scale_120);
@@ -3838,6 +3840,13 @@ impl<'a> SurfaceLayer<'a> {
     // which contains a valid value in this slot
     unsafe { self._tab.get::<bool>(SurfaceLayer::VT_OPAQUE, Some(false)).unwrap()}
   }
+  #[inline]
+  pub fn window_geometry(&self) -> Option<&'a WireRect> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<WireRect>(SurfaceLayer::VT_WINDOW_GEOMETRY, None)}
+  }
 }
 
 impl flatbuffers::Verifiable for SurfaceLayer<'_> {
@@ -3867,11 +3876,12 @@ impl flatbuffers::Verifiable for SurfaceLayer<'_> {
      .visit_field::<u32>("composition_order", Self::VT_COMPOSITION_ORDER, false)?
      .visit_field::<f32>("opacity", Self::VT_OPACITY, false)?
      .visit_field::<bool>("opaque", Self::VT_OPAQUE, false)?
+     .visit_field::<WireRect>("window_geometry", Self::VT_WINDOW_GEOMETRY, false)?
      .finish();
     Ok(())
   }
 }
-pub struct SurfaceLayerArgs {
+pub struct SurfaceLayerArgs<'a> {
     pub surface_id: u64,
     pub parent_surface_id: u64,
     pub popup_root_surface_id: u64,
@@ -3892,8 +3902,9 @@ pub struct SurfaceLayerArgs {
     pub composition_order: u32,
     pub opacity: f32,
     pub opaque: bool,
+    pub window_geometry: Option<&'a WireRect>,
 }
-impl<'a> Default for SurfaceLayerArgs {
+impl<'a> Default for SurfaceLayerArgs<'a> {
   #[inline]
   fn default() -> Self {
     SurfaceLayerArgs {
@@ -3917,6 +3928,7 @@ impl<'a> Default for SurfaceLayerArgs {
       composition_order: 0,
       opacity: 1.0,
       opaque: false,
+      window_geometry: None,
     }
   }
 }
@@ -4007,6 +4019,10 @@ impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> SurfaceLayerBuilder<'a, 'b, A> 
     self.fbb_.push_slot::<bool>(SurfaceLayer::VT_OPAQUE, opaque, false);
   }
   #[inline]
+  pub fn add_window_geometry(&mut self, window_geometry: &WireRect) {
+    self.fbb_.push_slot_always::<&WireRect>(SurfaceLayer::VT_WINDOW_GEOMETRY, window_geometry);
+  }
+  #[inline]
   pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> SurfaceLayerBuilder<'a, 'b, A> {
     let start = _fbb.start_table();
     SurfaceLayerBuilder {
@@ -4044,6 +4060,7 @@ impl core::fmt::Debug for SurfaceLayer<'_> {
       ds.field("composition_order", &self.composition_order());
       ds.field("opacity", &self.opacity());
       ds.field("opaque", &self.opaque());
+      ds.field("window_geometry", &self.window_geometry());
       ds.finish()
   }
 }

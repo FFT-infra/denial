@@ -51,6 +51,9 @@ pub(super) struct RuntimeOutputConfiguration {
     pub(super) sensor_rotation: OutputTransform,
     pub(super) vrr_outputs: BTreeSet<String>,
     pub(super) disabled_outputs: BTreeSet<String>,
+    /// Transient lid position. It shapes which outputs are lit, but it is
+    /// never saved with the output preferences.
+    pub(super) lid_closed: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -94,6 +97,7 @@ impl RuntimeOutputConfiguration {
             sensor_rotation: OutputTransform::Normal,
             vrr_outputs: options.vrr_outputs.clone(),
             disabled_outputs: options.disabled_outputs.clone(),
+            lid_closed: false,
         }
     }
 
@@ -131,7 +135,21 @@ impl RuntimeOutputConfiguration {
 }
 
 fn orientation_sensor_output(name: &str) -> bool {
-    name.starts_with("DSI-") || name.starts_with("eDP-") || name.starts_with("LVDS-")
+    output_policy::is_internal_panel(name)
+}
+
+fn connector_name(connector: &connector::Info) -> String {
+    format!(
+        "{}-{}",
+        connector.interface().as_str(),
+        connector.interface_id()
+    )
+}
+
+/// The connected outputs to light, and the display policy which chose them.
+pub(super) struct ConfiguredOutputs {
+    pub(super) outputs: Vec<ConnectedOutput>,
+    pub(super) selection: output_policy::OutputSelection,
 }
 
 pub(super) fn connected_outputs(
@@ -139,7 +157,7 @@ pub(super) fn connected_outputs(
     drm: &DrmDevice,
     max_outputs: usize,
     configuration: &RuntimeOutputConfiguration,
-) -> Result<Vec<ConnectedOutput>, Box<dyn Error>> {
+) -> Result<ConfiguredOutputs, Box<dyn Error>> {
     let connected = scan_connected_connectors(scanner, drm)?;
     configured_outputs(connected, max_outputs, configuration)
 }
@@ -191,33 +209,31 @@ fn current_connected_connectors(scanner: &DrmScanner<SimpleCrtcMapper>) -> Vec<C
 }
 
 pub(super) fn configured_outputs(
-    mut connected: Vec<ConnectedConnector>,
+    connected: Vec<ConnectedConnector>,
     max_outputs: usize,
     configuration: &RuntimeOutputConfiguration,
-) -> Result<Vec<ConnectedOutput>, Box<dyn Error>> {
-    connected.retain(|connector| {
-        let name = format!(
-            "{}-{}",
-            connector.info.interface().as_str(),
-            connector.info.interface_id()
-        );
-        if configuration.disabled_outputs.contains(&name) {
-            info!(output = name, "ignoring disabled KMS output");
-            false
-        } else {
-            true
-        }
-    });
-    connected.truncate(max_outputs);
-
-    connected
+) -> Result<ConfiguredOutputs, Box<dyn Error>> {
+    let mut named = connected
         .into_iter()
-        .map(|connector| {
-            let name = format!(
-                "{}-{}",
-                connector.info.interface().as_str(),
-                connector.info.interface_id()
-            );
+        .map(|connector| (connector_name(&connector.info), connector))
+        .collect::<Vec<_>>();
+    let selection = output_policy::select_outputs(
+        named.iter().map(|(name, _)| name.as_str()),
+        &configuration.disabled_outputs,
+        configuration.lid_closed,
+    );
+    named.retain(|(name, _)| {
+        let lit = selection.lit.contains(name);
+        if !lit {
+            debug!(output = name, "leaving connected KMS output off");
+        }
+        lit
+    });
+    named.truncate(max_outputs);
+
+    let outputs = named
+        .into_iter()
+        .map(|(name, connector)| {
             let vrr_enabled = configuration.vrr_outputs.contains(&name);
             let mode_preference = configuration.modes.get(&name).copied();
             let mode = select_output_mode(&connector.info, mode_preference).ok_or_else(|| {
@@ -272,7 +288,8 @@ pub(super) fn configured_outputs(
                 vrr_enabled,
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
+    Ok(ConfiguredOutputs { outputs, selection })
 }
 
 #[cfg(feature = "flutter")]
@@ -712,13 +729,11 @@ pub(super) fn configuration_from_output_request(
             }
         }
         if output.enabled {
-            staged.disabled_outputs.remove(&name);
             power.insert(
                 OutputId(u64::from(u32::from(connector.info.handle()))),
                 output.powered,
             );
         } else {
-            staged.disabled_outputs.insert(name.clone());
             power.remove(&OutputId(u64::from(u32::from(connector.info.handle()))));
         }
         if output.adaptive_sync {
@@ -727,6 +742,19 @@ pub(super) fn configuration_from_output_request(
             staged.vrr_outputs.remove(&name);
         }
     }
+    // Settings shows a fallback output as on and a panel under the closed lid
+    // as off. Changing only the preferences this layout needs keeps such an
+    // output's saved preference when the user leaves it untouched.
+    let names = connectors
+        .iter()
+        .map(|connector| connector_name(&connector.info))
+        .collect::<Vec<_>>();
+    staged.disabled_outputs = output_policy::reconcile_disabled_outputs(
+        &names.iter().map(String::as_str).collect::<Vec<_>>(),
+        &current.disabled_outputs,
+        current.lid_closed,
+        |name| requested_by_name[name].enabled,
+    );
     Ok((staged, power))
 }
 

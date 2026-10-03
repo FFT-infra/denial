@@ -681,6 +681,7 @@ mod tests {
             composition_order: 0,
             opacity: 1.0,
             opaque: false,
+            window_geometry: None,
         };
 
         let state = finish_cursor_state(CursorStateDescription::named("pointer"), vec![layer]);

@@ -31,6 +31,20 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
       <int, _NativeWindowRevisions>{};
   final Map<int, ({Rect frame, int z})> _overviewDragOrigins =
       <int, ({Rect frame, int z})>{};
+  // Workspace overview drops are presented before the compositor echoes
+  // them. A snapshot encoded before Rust received the move must not briefly
+  // return the window to its previous card.
+  final Map<int, int> _pendingWorkspaceMoves = <int, int>{};
+  // Native layout previews for a workspace-overview drag, in scene
+  // coordinates. Rust plans them on the target workspace's real layout and
+  // the cards project them. An ended preview keeps its final rectangle until
+  // a snapshot carries the same geometry.
+  final Map<int, Rect> _overviewPreviewFrames = <int, Rect>{};
+  final Set<int> _settlingOverviewFrames = <int>{};
+  // The dragged window's planned rectangle on the workspace it was planned
+  // for; presented as the landing slot.
+  ({int objectId, int workspaceId, Rect frame})? _overviewDropSlot;
+  int? _overviewDropWorkspace;
   List<DenialWindow>? _lastSyncedWindows;
   int _lastSyncedSnapshotSequence = -1;
   double _devicePixelRatio = 1.0;
@@ -63,12 +77,18 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
         mapEquals(state.activeWorkspaces, active)) {
       return;
     }
+    final structureChanged =
+        state.workspacesEnabled != enabled || state.workspaceCount != safeCount;
     state = state.copyWith(
       workspacesEnabled: enabled,
       workspaceCount: safeCount,
       activeWorkspaces: active,
       workspaceTransitions: const <int, DesktopWorkspaceTransition>{},
-      clearOverview: state.overviewActive,
+      // A workspace overview already shows every workspace, so a new active
+      // workspace only moves its highlight. Changing their number does not.
+      clearOverview:
+          state.overviewActive &&
+          (structureChanged || state.overview!.workspaces == null),
     );
   }
 
@@ -83,6 +103,22 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
     if (previous == workspaceId) return;
     final active = Map<int, int>.of(state.activeWorkspaces)
       ..[monitorId] = workspaceId;
+    final overview = state.overview;
+    if (overview?.workspaces != null) {
+      if (overview!.monitorId == monitorId) {
+        // Both workspaces are already on screen as cards. Closing the
+        // overview zooms into the new one instead of sliding it in.
+        final transitions = Map<int, DesktopWorkspaceTransition>.of(
+          state.workspaceTransitions,
+        )..remove(monitorId);
+        state = state.copyWith(
+          activeWorkspaces: active,
+          workspaceTransitions: transitions,
+          panel: DesktopPanel.none,
+        );
+        return;
+      }
+    }
     final transitions = Map<int, DesktopWorkspaceTransition>.of(
       state.workspaceTransitions,
     );
@@ -113,7 +149,7 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
       activeWorkspaces: active,
       workspaceTransitions: transitions,
       panel: DesktopPanel.none,
-      clearOverview: state.overviewActive,
+      clearOverview: state.overviewActive && overview!.workspaces == null,
     );
   }
 
@@ -224,6 +260,9 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
       (objectId, _) => !activeIds.contains(objectId),
     );
     _nativeRevisions.removeWhere(
+      (objectId, _) => !activeIds.contains(objectId),
+    );
+    _pendingWorkspaceMoves.removeWhere(
       (objectId, _) => !activeIds.contains(objectId),
     );
     final next = <int, DesktopWindowPlacement>{
@@ -361,14 +400,27 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
             expanded: nativeMaximized && !serverFrameWhileMaximized,
           );
         }
+        final pendingWorkspace = _pendingWorkspaceMoves[window.objectId];
+        final holdsPendingWorkspace =
+            metadataIsNew &&
+            pendingWorkspace != null &&
+            (window.workspaceId != pendingWorkspace || window.minimized);
+        if (metadataIsNew &&
+            pendingWorkspace != null &&
+            !holdsPendingWorkspace) {
+          _pendingWorkspaceMoves.remove(window.objectId);
+        }
+        final adoptsNativeWorkspace = metadataIsNew && !holdsPendingWorkspace;
         current = existing.copyWith(
           frame: frame,
           monitorId: monitorId,
           serverSideDecorated: nativeServerSideDecorated,
-          workspaceId: metadataIsNew
+          workspaceId: adoptsNativeWorkspace
               ? window.workspaceId
               : existing.workspaceId,
-          minimized: metadataIsNew ? window.minimized : existing.minimized,
+          minimized: adoptsNativeWorkspace
+              ? window.minimized
+              : existing.minimized,
           maximized: nativeMaximized,
           fullscreen: nativeFullscreen,
           fullscreenRestoreFrame: fullscreenRestoreFrame,
@@ -380,6 +432,10 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
         // eligible to move every tile with the layout viewport.
         if (consumedNativeGeometry) {
           revisions.geometry = snapshotSequence;
+          if (_settlingOverviewFrames.remove(window.objectId)) {
+            _overviewPreviewFrames.remove(window.objectId);
+            changed = true;
+          }
         }
         if (metadataIsNew) {
           revisions.metadata = snapshotSequence;
@@ -432,8 +488,11 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
 
     var nextOverview = state.overview;
     if (nextOverview != null && changed) {
+      final workspaces = nextOverview.workspaces;
       if (state.viewSize != Size.zero && state.viewSize != viewSize) {
         nextOverview = null;
+      } else if (workspaces != null) {
+        nextOverview = _rearrangedWorkspaceOverview(next, nextOverview);
       } else {
         final overviewItems = <DesktopOverviewItem>[
           for (final placement in next.values)
@@ -598,14 +657,321 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
     );
   }
 
+  /// Opens the managed-layout overview: every workspace of [monitorId] as a
+  /// true-to-layout card, with minimized windows on a shelf below.
+  ///
+  /// Unlike the stacking spread, it opens even without windows so empty
+  /// workspaces remain one click away.
+  void openWorkspaceOverview({
+    required int monitorId,
+    required Rect bounds,
+    required Rect backgroundBounds,
+    required Rect viewport,
+    required WorkspaceSwitchingOrientation orientation,
+    int? selectedObjectId,
+  }) {
+    if (state.overviewActive || bounds.isEmpty || viewport.isEmpty) {
+      return;
+    }
+    _moveRemainders.clear();
+    _overviewDragOrigins.clear();
+    _clearOverviewDropPreview();
+    final settledPlacements = <int, DesktopWindowPlacement>{
+      for (final placement in state.placements.values)
+        placement.objectId: placement.dragging
+            ? placement.copyWith(dragging: false)
+            : placement,
+    };
+    final overview = _workspaceOverviewFor(
+      placements: settledPlacements,
+      monitorId: monitorId,
+      bounds: bounds,
+      backgroundBounds: backgroundBounds,
+      viewport: viewport,
+      orientation: orientation,
+      selectedObjectId: selectedObjectId,
+    );
+    if (overview == null) {
+      return;
+    }
+    state = state.copyWith(
+      placements: settledPlacements,
+      panel: DesktopPanel.none,
+      overview: overview,
+    );
+  }
+
+  DesktopOverviewState? _workspaceOverviewFor({
+    required Map<int, DesktopWindowPlacement> placements,
+    required int monitorId,
+    required Rect bounds,
+    required Rect backgroundBounds,
+    required Rect viewport,
+    required WorkspaceSwitchingOrientation orientation,
+    required int? selectedObjectId,
+    Map<int, Rect> retainedFrames = const <int, Rect>{},
+  }) {
+    final count = state.workspacesEnabled ? state.workspaceCount : 1;
+    final activeWorkspace = state.activeWorkspaceFor(monitorId);
+    final slot = _overviewDropSlot;
+    final items = <DesktopWorkspaceOverviewItem>[
+      for (final placement in placements.values)
+        if ((placement.monitorId == monitorId ||
+                (placement.monitorId < 0 &&
+                    backgroundBounds.contains(placement.frame.center))) &&
+            DesktopOverviewLayout.isUsefulPreview(placement.frame))
+          DesktopWorkspaceOverviewItem(
+            objectId: placement.objectId,
+            frame:
+                _overviewPreviewFrames[placement.objectId] ?? placement.frame,
+            z: placement.z,
+            workspaceId: !state.workspacesEnabled
+                ? 1
+                : placement.workspaceId >= 1 && placement.workspaceId <= count
+                ? placement.workspaceId
+                : activeWorkspace,
+            minimized: placement.minimized,
+          ),
+    ];
+    final arrangement = DesktopWorkspaceOverviewLayout.arrange(
+      bounds: bounds,
+      viewport: viewport,
+      workspaceCount: count,
+      orientation: orientation,
+      items: items,
+      landing:
+          slot == null ||
+              slot.workspaceId < 1 ||
+              slot.workspaceId > count ||
+              !placements.containsKey(slot.objectId)
+          ? null
+          : (workspaceId: slot.workspaceId, frame: slot.frame),
+    );
+    if (arrangement.cards.isEmpty) {
+      return null;
+    }
+    final frames = Map<int, Rect>.of(arrangement.frames);
+    for (final entry in retainedFrames.entries) {
+      if (frames.containsKey(entry.key)) {
+        frames[entry.key] = entry.value;
+      }
+    }
+    return DesktopOverviewState(
+      monitorId: monitorId,
+      bounds: bounds,
+      backgroundBounds: backgroundBounds,
+      selectedObjectId: frames.containsKey(selectedObjectId)
+          ? selectedObjectId
+          : _preferredOverviewSelection(items, frames, activeWorkspace),
+      frames: frames,
+      workspaces: DesktopWorkspaceOverview(
+        viewport: viewport,
+        orientation: orientation,
+        cards: arrangement.cards,
+        shelf: arrangement.shelf,
+        dropSlot: arrangement.landing,
+      ),
+    );
+  }
+
+  /// Re-arranges an open workspace overview after its inputs changed while
+  /// keeping dragged previews under the pointer.
+  DesktopOverviewState? _rearrangedWorkspaceOverview(
+    Map<int, DesktopWindowPlacement> placements,
+    DesktopOverviewState previous,
+  ) {
+    final workspaces = previous.workspaces!;
+    return _workspaceOverviewFor(
+      placements: placements,
+      monitorId: previous.monitorId,
+      bounds: previous.bounds,
+      backgroundBounds: previous.backgroundBounds,
+      viewport: workspaces.viewport,
+      orientation: workspaces.orientation,
+      selectedObjectId: previous.selectedObjectId,
+      retainedFrames: <int, Rect>{
+        for (final placement in placements.values)
+          if (placement.dragging)
+            placement.objectId: ?previous.frames[placement.objectId],
+      },
+    );
+  }
+
+  /// Resolves the workspace card under [objectId]'s dragged preview and the
+  /// preview centre in that workspace's own scene coordinates. The native
+  /// layout preview answering this plan is presented on that card.
+  ({int workspaceId, Offset point})? planOverviewDrop(int objectId) {
+    final workspaces = state.overview?.workspaces;
+    final preview = state.overview?.frames[objectId];
+    final card = preview == null ? null : workspaces?.cardAt(preview.center);
+    final dragging = state.placements[objectId]?.dragging ?? false;
+    _overviewDropWorkspace = dragging ? card?.workspaceId : null;
+    if (!dragging || card == null) {
+      return null;
+    }
+    return (
+      workspaceId: card.workspaceId,
+      point: card
+          .unproject(
+            Rect.fromCenter(center: preview!.center, width: 0, height: 0),
+          )
+          .center,
+    );
+  }
+
+  /// Presents a native layout preview inside the workspace overview. The
+  /// dragged window's own planned rectangle becomes its landing slot; every
+  /// other affected tile moves within its card.
+  bool _applyOverviewLayoutPreview(
+    int objectId,
+    DenialWindowPlacementEvent event,
+  ) {
+    final overview = state.overview;
+    final placement = state.placements[objectId];
+    if (overview == null || overview.workspaces == null || placement == null) {
+      return false;
+    }
+    final frame = _initialFrame(
+      event.contentRect,
+      serverSideDecorated: placement.serverSideDecorated,
+      expanded: placement.maximized && !placement.serverFrameWhileMaximized,
+    );
+    final ending = event.phase == DenialWindowPlacementPhase.end;
+    if (placement.dragging) {
+      final workspaceId = _overviewDropWorkspace;
+      _overviewDropSlot = ending || workspaceId == null
+          ? null
+          : (objectId: objectId, workspaceId: workspaceId, frame: frame);
+    } else if (ending && _framesApproximatelyEqual(frame, placement.frame)) {
+      _overviewPreviewFrames.remove(objectId);
+      _settlingOverviewFrames.remove(objectId);
+    } else {
+      _overviewPreviewFrames[objectId] = frame;
+      if (ending) {
+        _settlingOverviewFrames.add(objectId);
+      } else {
+        _settlingOverviewFrames.remove(objectId);
+      }
+    }
+    state = state.copyWith(
+      overview:
+          _rearrangedWorkspaceOverview(state.placements, overview) ?? overview,
+    );
+    return true;
+  }
+
+  void _clearOverviewDropPreview() {
+    _overviewPreviewFrames.clear();
+    _settlingOverviewFrames.clear();
+    _overviewDropSlot = null;
+    _overviewDropWorkspace = null;
+  }
+
+  /// Prefers the topmost window on the active workspace, then any workspace,
+  /// and only then the minimized shelf.
+  int? _preferredOverviewSelection(
+    List<DesktopWorkspaceOverviewItem> items,
+    Map<int, Rect> frames,
+    int activeWorkspace,
+  ) {
+    int rank(DesktopWorkspaceOverviewItem item) => item.minimized
+        ? 0
+        : item.workspaceId == activeWorkspace
+        ? 2
+        : 1;
+    DesktopWorkspaceOverviewItem? best;
+    for (final item in items) {
+      if (!frames.containsKey(item.objectId)) {
+        continue;
+      }
+      if (best == null ||
+          rank(item) > rank(best) ||
+          (rank(item) == rank(best) && item.z > best.z)) {
+        best = item;
+      }
+    }
+    return best?.objectId;
+  }
+
+  /// Presents an overview drop on [workspaceId]'s card before the compositor
+  /// echoes it. A planned landing slot is exactly where Rust will place the
+  /// window, so it lands there directly; without one, a move to another
+  /// workspace (or a restore from the shelf) joins that card and a drop on
+  /// its own workspace returns to its tile. The caller sends the native drop.
+  bool dropOverviewWindowOnWorkspace(int objectId, int workspaceId) {
+    final overview = state.overview;
+    final placement = state.placements[objectId];
+    if (overview == null ||
+        overview.workspaces == null ||
+        placement == null ||
+        !placement.dragging) {
+      return false;
+    }
+    final slot = _overviewDropSlot;
+    final landing =
+        slot != null &&
+            slot.objectId == objectId &&
+            slot.workspaceId == workspaceId
+        ? slot.frame
+        : null;
+    _overviewDropSlot = null;
+    _overviewDropWorkspace = null;
+    final moves =
+        landing != null ||
+        placement.minimized ||
+        (state.workspacesEnabled && workspaceId != placement.workspaceId);
+    if (!moves) {
+      _restoreOverviewDrag(objectId, placement, overview);
+      return true;
+    }
+    final origin = _overviewDragOrigins.remove(objectId);
+    final next = Map<int, DesktopWindowPlacement>.of(state.placements);
+    next[objectId] = placement.copyWith(
+      z: origin?.z,
+      workspaceId: workspaceId,
+      minimized: false,
+      dragging: false,
+    );
+    _pendingWorkspaceMoves[objectId] = workspaceId;
+    if (landing != null) {
+      _overviewPreviewFrames[objectId] = landing;
+      _settlingOverviewFrames.remove(objectId);
+    }
+    final rearranged = _workspaceOverviewFor(
+      placements: next,
+      monitorId: overview.monitorId,
+      bounds: overview.bounds,
+      backgroundBounds: overview.backgroundBounds,
+      viewport: overview.workspaces!.viewport,
+      orientation: overview.workspaces!.orientation,
+      selectedObjectId: objectId,
+    );
+    state = state.copyWith(placements: next, overview: rearranged ?? overview);
+    return true;
+  }
+
   bool moveOverviewSelection(DesktopOverviewDirection direction) {
     final overview = state.overview;
-    if (overview == null) {
+    if (overview == null || overview.frames.isEmpty) {
       return false;
+    }
+    final fromObjectId = overview.selectedObjectId;
+    if (fromObjectId == null) {
+      final first = overview.frames.entries.reduce((left, right) {
+        final order = left.value.top.compareTo(right.value.top);
+        if (order != 0) {
+          return order < 0 ? left : right;
+        }
+        return left.value.left <= right.value.left ? left : right;
+      });
+      state = state.copyWith(
+        overview: overview.copyWith(selectedObjectId: first.key),
+      );
+      return true;
     }
     final selectedObjectId = desktopOverviewNeighbor(
       frames: overview.frames,
-      fromObjectId: overview.selectedObjectId,
+      fromObjectId: fromObjectId,
       direction: direction,
     );
     if (selectedObjectId == null) {
@@ -631,6 +997,7 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
             : placement,
     };
     _overviewDragOrigins.clear();
+    _clearOverviewDropPreview();
     state = state.copyWith(placements: next, clearOverview: true);
   }
 
@@ -645,6 +1012,8 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
       return;
     }
     _overviewDragOrigins[objectId] = (frame: previewFrame, z: placement.z);
+    _overviewDropSlot = null;
+    _overviewDropWorkspace = null;
     final next = Map<int, DesktopWindowPlacement>.of(state.placements);
     next[objectId] = placement.copyWith(z: state.nextZ, dragging: true);
     state = state.copyWith(placements: next, nextZ: state.nextZ + 1);
@@ -766,6 +1135,18 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
     }
     final next = Map<int, DesktopWindowPlacement>.of(state.placements);
     next[objectId] = placement.copyWith(z: origin?.z, dragging: false);
+    if (overview.workspaces != null) {
+      // A landing slot already moved this window to another card in the
+      // arrangement. Re-arranging without it returns the window to its tile.
+      if (_overviewDropSlot?.objectId == objectId) {
+        _overviewDropSlot = null;
+      }
+      state = state.copyWith(
+        placements: next,
+        overview: _rearrangedWorkspaceOverview(next, overview) ?? overview,
+      );
+      return;
+    }
     state = state.copyWith(
       placements: next,
       overview: overview.copyWith(frames: frames),
@@ -861,7 +1242,8 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
 
   bool applyNativePlacement(int objectId, DenialWindowPlacementEvent event) {
     if (state.overviewActive) {
-      return false;
+      return event.change == DenialWindowPlacementChange.layoutPreview &&
+          _applyOverviewLayoutPreview(objectId, event);
     }
     final layoutPreview =
         event.change == DenialWindowPlacementChange.layoutPreview;

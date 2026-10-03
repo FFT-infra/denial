@@ -122,6 +122,8 @@ use super::frame_scheduler::FrameTick;
 use super::local_windows::{LocalFlutterWindows, LocalWindowError};
 use super::native_shortcut::ShortcutManager;
 use super::settings::SettingsManager;
+#[cfg(feature = "xwayland")]
+use super::window_grab::pointer_grab_drives_window;
 use super::window_grab::{
     MoveSurfaceGrab, ResizeEdges, ResizeSurfaceGrab, checked_pointer_grab, constrain_dimension,
 };
@@ -472,6 +474,8 @@ pub(super) struct WaylandFrontend {
     window_registry: WindowRegistry,
     window_layout: Box<dyn WindowLayout<ObjectId>>,
     #[cfg(feature = "flutter")]
+    workspace_drop_preview: Option<window_management::WorkspaceDropPreview>,
+    #[cfg(feature = "flutter")]
     input_layout: Option<InputLayoutSnapshot>,
     #[cfg(feature = "flutter")]
     shell_keyboard_focus: Option<KeyboardFocusTarget>,
@@ -493,6 +497,9 @@ pub(super) struct WaylandFrontend {
     retired_pointer_buttons: HashSet<u32>,
     #[cfg(feature = "flutter")]
     client_pointer_presses: Vec<input::ClientPointerPress>,
+    /// The newest explicit XDG popup grab installed on the seat.
+    #[cfg(feature = "flutter")]
+    client_popup_grab: Option<smithay::desktop::PopupGrab<RuntimeState>>,
     #[cfg(feature = "flutter")]
     flutter_pointer_press: Option<FlutterPointerPress>,
     #[cfg(feature = "flutter")]

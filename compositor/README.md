@@ -192,6 +192,18 @@ resident. Automatic cardinal changes animate the retained composited scene for
 300 ms on the physical output clock. The old-size scene starts rotating first;
 Flutter receives the new logical canvas during the final quarter. Projection-
 only frames do not drive Dart or advance client textures.
+
+`disabled=` is a preference rather than a hard rule. When the preferences
+disable every connected output, Denial lights one anyway: a built-in panel
+whose lid is open first, then any external output. While the lid is closed and
+another enabled output stays lit, built-in panels turn off. Neither decision is
+written to the file. The saved preferences apply again once a preferred output
+returns or the lid opens, and applying Settings in the meantime keeps them
+unless the user turns an output on or off. logind supplies the lid position at
+startup, after a VT switch, and after system sleep; libinput reports it
+otherwise. With no output it can light, Denial keeps the session alive and
+begins presenting when one appears, including at login.
+
 Command-line position assignments override the file:
 
 ```text

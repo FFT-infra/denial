@@ -4280,4 +4280,44 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get welcomeTiling => 'Tiling and keyboard control';
+
+  @override
+  String get polkitRunCommandAsAdministrator =>
+      'Administrator authentication required.';
+
+  @override
+  String polkitRunCommandAsUser(String user) {
+    return 'Authentication is required to run this command as $user.';
+  }
+
+  @override
+  String get polkitAuthenticationRequired => 'Authentication is required.';
+
+  @override
+  String get polkitAuthenticationUnavailable =>
+      'Authentication is unavailable.';
+
+  @override
+  String get polkitPassword => 'Password';
+
+  @override
+  String get polkitVerifying => 'Verifying…';
+
+  @override
+  String get polkitPreparing => 'Preparing…';
+
+  @override
+  String get polkitCapsLock => 'Caps Lock';
+
+  @override
+  String get polkitConfirm => 'Confirm';
+
+  @override
+  String get polkitContinue => 'Continue';
+
+  @override
+  String get polkitClose => 'Close';
+
+  @override
+  String get polkitLocked => 'Temporarily locked';
 }

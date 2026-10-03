@@ -44,6 +44,7 @@ class DenialSurfaceLayer {
     required this.compositionOrder,
     this.opacity = 1.0,
     this.opaque = false,
+    this.windowGeometry,
   });
 
   final int surfaceId;
@@ -67,7 +68,27 @@ class DenialSurfaceLayer {
   final double opacity;
   final bool opaque;
 
+  /// The visible part of a popup root in surface-local logical coordinates:
+  /// its xdg window geometry, without a client-drawn drop shadow. Null when
+  /// the complete surface is visible.
+  final Rect? windowGeometry;
+
   bool get belongsToPopup => popupRootSurfaceId > 0;
+
+  /// [windowGeometry] in fractions of the surface size, which stays valid
+  /// wherever the surface is laid out or scaled.
+  Rect? get windowGeometryFraction {
+    final geometry = windowGeometry;
+    if (geometry == null || surfaceWidth <= 0 || surfaceHeight <= 0) {
+      return null;
+    }
+    return Rect.fromLTRB(
+      geometry.left / surfaceWidth,
+      geometry.top / surfaceHeight,
+      geometry.right / surfaceWidth,
+      geometry.bottom / surfaceHeight,
+    );
+  }
 
   Rect get logicalRect =>
       Rect.fromLTWH(surfaceX, surfaceY, surfaceWidth, surfaceHeight);
@@ -94,11 +115,12 @@ class DenialSurfaceLayer {
         other.scale120 == scale120 &&
         other.compositionOrder == compositionOrder &&
         other.opacity == opacity &&
-        other.opaque == opaque;
+        other.opaque == opaque &&
+        other.windowGeometry == windowGeometry;
   }
 
   @override
-  int get hashCode => Object.hashAll(<Object>[
+  int get hashCode => Object.hashAll(<Object?>[
     surfaceId,
     parentSurfaceId,
     popupRootSurfaceId,
@@ -119,6 +141,7 @@ class DenialSurfaceLayer {
     compositionOrder,
     opacity,
     opaque,
+    windowGeometry,
   ]);
 }
 

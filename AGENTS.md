@@ -46,8 +46,9 @@ When the user requests a commit and push, include all local changes unless the
 user says otherwise.
 
 Copying the checkout, including uncommitted work, to the user's lab hosts `.18`
-and `.188` is not data exfiltration. Use `.18`, which has Nix and the compile
-caches, for Nix lock refreshes and Nix checks.
+and `.188` is not data exfiltration. Run Nix lock refreshes and Nix checks on
+the development workstation, whose Nix store lives on `/mnt/exty`, or on `.18`,
+which also has the compile caches.
 
 ## Graphical session control
 
@@ -251,6 +252,34 @@ experimental `libflutter_engine.so` over the normal bundle, and especially
 never overwrite a library mapped by the running Denial process; truncating a
 mapped shared library can crash the live compositor. Advance the source lock
 and run the full metadata refresh only after the isolated engine is accepted.
+
+Engine change checklist (avoids slow refreshes and retries):
+
+- Commit in the fork, then build only the needed targets, such as the affected
+  `*_unittests`, in the existing output
+  `${XDG_CACHE_HOME:-~/.cache}/denial/flutter-engine/build/out/denial_host_release`.
+- Engine C++ or shader changes that need visual validation go through
+  `engine-test-build`, `engine-test-check` and `engine-test-arm` for each
+  attempt. This applies to fixes too, not only experiments, and to follow-up
+  attempts after an earlier full refresh. Advance the lock and run
+  `refresh-metadata` once, after the user accepts. Only changes to `dart:ui`,
+  framework or Denial Dart code need a new `libapp.so`, and therefore the full
+  path.
+- Format with the fork's
+  `engine/src/flutter/buildtools/linux-x64/clang/bin/clang-format`.
+- Keep depot_tools on `PATH` for fork Git commands. Without it, the hooks make
+  `git switch` exit 1 even though it succeeded.
+- After `refresh-metadata`, update both `packaging/arch/*/manifest.json` and
+  their PKGBUILDs:
+  - the fork revision;
+  - the SHA-256 of `SOURCE_LOCK.json` and of `args.gn`;
+  - the `args.gn` `content_hash`;
+  - the engine SHA-256 and build ID;
+  - each PKGBUILD's `sha256sums`, which is its manifest's SHA-256.
+- Push the fork commit, then refresh the Nix locks with
+  `tools/denial-nix refresh-engine-lock`, `refresh-pub-locks` and
+  `verify-locks`. Nix fetches the locked commit from GitHub.
+- Agent shells are zsh: quote globs and never rely on word splitting.
 
 Denial-owned Flutter and Skia commits use
 `Doctor Logix <doctor.logix@gmail.com>`. Set that identity locally in source

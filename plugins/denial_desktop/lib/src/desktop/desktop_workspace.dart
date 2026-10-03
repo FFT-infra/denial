@@ -9,6 +9,7 @@ import 'package:denial_flutter_sdk/models.dart';
 import 'package:denial_flutter_sdk/settings.dart';
 
 import 'desktop_overview_layout.dart';
+import 'desktop_workspace_overview_layout.dart';
 import 'transient_family_order.dart';
 
 part 'desktop_workspace_controller.dart';
@@ -130,6 +131,61 @@ Rect? desktopOutputClip({
 
 enum DesktopPanel { none, launcher, dashboard }
 
+/// The per-workspace miniature presentation used by managed layouts.
+///
+/// Stacking keeps the free-form spread in [DesktopOverviewState.frames].
+/// Dwindle and scrolling instead present every workspace of the overview's
+/// monitor as a true-to-layout card, so these fields retain the inputs needed
+/// to re-arrange them as windows open, close, and move.
+@immutable
+class DesktopWorkspaceOverview {
+  DesktopWorkspaceOverview({
+    required this.viewport,
+    required this.orientation,
+    required List<DesktopWorkspaceOverviewCard> cards,
+    required this.shelf,
+    this.dropSlot,
+  }) : cards = List.unmodifiable(cards);
+
+  /// The output work area the cards miniaturize, in scene coordinates.
+  final Rect viewport;
+  final WorkspaceSwitchingOrientation orientation;
+  final List<DesktopWorkspaceOverviewCard> cards;
+
+  /// Background of the minimized-window shelf, or [Rect.zero] when empty.
+  final Rect shelf;
+
+  /// Where the dragged window will land, as planned by the compositor's
+  /// layout for the card under it.
+  final Rect? dropSlot;
+
+  DesktopWorkspaceOverviewCard? cardFor(int workspaceId) {
+    for (final card in cards) {
+      if (card.workspaceId == workspaceId) {
+        return card;
+      }
+    }
+    return null;
+  }
+
+  DesktopWorkspaceOverviewCard? cardAt(Offset position) {
+    for (final card in cards) {
+      if (card.rect.contains(position)) {
+        return card;
+      }
+    }
+    return null;
+  }
+
+  /// Maps an overview rectangle to the scene as if [workspaceId]'s card were
+  /// zoomed back to fill its output. Its windows return to their real frames,
+  /// while every other card lands beside the screen in its grid direction.
+  Rect cameraRect(Rect overviewRect, int workspaceId) {
+    final camera = cardFor(workspaceId) ?? (cards.isEmpty ? null : cards.first);
+    return camera?.unproject(overviewRect) ?? overviewRect;
+  }
+}
+
 @immutable
 class DesktopOverviewState {
   DesktopOverviewState({
@@ -138,6 +194,7 @@ class DesktopOverviewState {
     required this.backgroundBounds,
     required this.selectedObjectId,
     required Map<int, Rect> frames,
+    this.workspaces,
   }) : frames = Map.unmodifiable(frames);
 
   const DesktopOverviewState._({
@@ -146,13 +203,20 @@ class DesktopOverviewState {
     required this.backgroundBounds,
     required this.selectedObjectId,
     required this.frames,
+    required this.workspaces,
   });
 
   final int monitorId;
   final Rect bounds;
   final Rect backgroundBounds;
-  final int selectedObjectId;
+
+  /// Null only when a workspace overview has no windows to select.
+  final int? selectedObjectId;
   final Map<int, Rect> frames;
+
+  /// Present when the overview shows workspace miniatures instead of the
+  /// stacking spread.
+  final DesktopWorkspaceOverview? workspaces;
 
   bool contains(int objectId) => frames.containsKey(objectId);
 
@@ -168,6 +232,7 @@ class DesktopOverviewState {
       frames: frames == null || identical(frames, this.frames)
           ? this.frames
           : Map.unmodifiable(frames),
+      workspaces: workspaces,
     );
   }
 }
@@ -417,6 +482,7 @@ DenialWindow? desktopWindowAtPosition({
   for (final placement in workspace.placements.values) {
     final window = windowsById[placement.objectId];
     if (placement.minimized ||
+        !workspace.isPlacementOnActiveWorkspace(placement) ||
         window == null ||
         (topmost != null &&
             compareDesktopWindowStack(placement, topmost, windowsById) <= 0)) {
@@ -502,7 +568,8 @@ class DesktopWorkspaceState {
   }
 
   bool isPlacementPresented(DesktopWindowPlacement placement) {
-    if (isPlacementOnActiveWorkspace(placement)) {
+    if (isPlacementOnActiveWorkspace(placement) ||
+        isInOverview(placement.objectId)) {
       return true;
     }
     final transition = workspaceTransitions[placement.monitorId];

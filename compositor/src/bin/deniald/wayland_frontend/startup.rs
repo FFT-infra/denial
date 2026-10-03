@@ -353,6 +353,8 @@ impl WaylandFrontend {
             window_registry: WindowRegistry::default(),
             window_layout: create_window_layout(window_layout_kind),
             #[cfg(feature = "flutter")]
+            workspace_drop_preview: None,
+            #[cfg(feature = "flutter")]
             input_layout: None,
             #[cfg(feature = "flutter")]
             shell_keyboard_focus: None,
@@ -374,6 +376,8 @@ impl WaylandFrontend {
             retired_pointer_buttons: HashSet::new(),
             #[cfg(feature = "flutter")]
             client_pointer_presses: Vec::new(),
+            #[cfg(feature = "flutter")]
+            client_popup_grab: None,
             #[cfg(feature = "flutter")]
             flutter_pointer_press: None,
             #[cfg(feature = "flutter")]

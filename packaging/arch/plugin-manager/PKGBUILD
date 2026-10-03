@@ -11,7 +11,6 @@ depends=(
   "denial=$pkgver-$pkgrel"
   'dart'
   'git'
-  'gtk3'
 )
 options=('!strip' '!debug')
 source=()

@@ -1290,5 +1290,17 @@
   "welcomeWorkspaceDisabled": "工作区当前已禁用。在“设置 → 布局”中启用后即可使用这些快捷键。",
   "welcomeDesktopUsage": "桌面基本操作",
   "welcomeWorkspaces": "工作区",
-  "welcomeTiling": "平铺与键盘操作"
+  "welcomeTiling": "平铺与键盘操作",
+  "polkitRunCommandAsAdministrator": "需要管理员身份验证。",
+  "polkitRunCommandAsUser": "以 {user} 身份运行此命令需要进行身份验证。",
+  "polkitAuthenticationRequired": "需要进行身份验证。",
+  "polkitAuthenticationUnavailable": "身份验证不可用。",
+  "polkitPassword": "密码",
+  "polkitVerifying": "正在验证…",
+  "polkitPreparing": "正在准备…",
+  "polkitCapsLock": "大写锁定",
+  "polkitConfirm": "确认",
+  "polkitContinue": "继续",
+  "polkitClose": "关闭",
+  "polkitLocked": "已暂时锁定"
 }

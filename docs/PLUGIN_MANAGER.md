@@ -339,7 +339,7 @@ Additional implementation now present:
   installed-source identity matching, frame/startup confirmation, persistent
   last-working selection, rollback, interrupted-start recovery and bounded rapid
   startups. A concurrent external activation cannot overwrite a pending one.
-- `plugin_manager_app`: separate GTK/Flutter app with selected plugins, built-ins,
+- `plugin_manager_app`: separate native Wayland/Flutter app with selected plugins, built-ins,
   configurable Git catalog, root/subdirectory inspection, job progress/errors,
   prepare, plan, apply, update, previous composition and packaged restore.
 - Rollback restores roots, provider selections, ordering, and the lockfile/pins

@@ -123,6 +123,40 @@ fn workspace_request(
     builder.finished_data().to_vec()
 }
 
+fn workspace_drop_request(
+    window_id: u64,
+    monitor_id: i64,
+    workspace_id: u32,
+    flags: u32,
+    geometry: Option<fb::WireRect>,
+) -> Vec<u8> {
+    let mut builder = FlatBufferBuilder::new();
+    let request = fb::WindowRequest::create(
+        &mut builder,
+        &fb::WindowRequestArgs {
+            kind: fb::WindowRequestKind::MoveWindowToWorkspace,
+            window_id,
+            geometry: geometry.as_ref(),
+            monitor_id,
+            workspace_id,
+            flags,
+            ..Default::default()
+        },
+    );
+    let envelope = fb::Envelope::create(
+        &mut builder,
+        &fb::EnvelopeArgs {
+            protocol_version: PROTOCOL_VERSION,
+            sequence: 4,
+            request_id: 0,
+            payload_type: fb::Payload::WindowRequest,
+            payload: Some(request.as_union_value()),
+        },
+    );
+    fb::finish_envelope_buffer(&mut builder, envelope);
+    builder.finished_data().to_vec()
+}
+
 fn system_bar_request(
     side: fb::SystemBarSide,
     monitor_ids: &[i64],
@@ -282,6 +316,83 @@ fn workspace_requests_preserve_monitor_membership_and_follow_policy() {
             },
         ]
     );
+}
+
+#[test]
+fn workspace_drops_resolve_on_one_output_and_previews_end_without_geometry() {
+    let geometry = fb::WireRect::new(100.0, 200.0, 800.0, 600.0);
+    let expected = WindowGeometry {
+        x: 100.0,
+        y: 200.0,
+        width: 800.0,
+        height: 600.0,
+    };
+    let mut bridge = bridge();
+    for request in [
+        workspace_drop_request(42, 7, 3, 2, Some(geometry)),
+        workspace_drop_request(42, 7, 3, 4, Some(geometry)),
+        workspace_drop_request(42, 7, 3, 4, None),
+    ] {
+        assert!(bridge.handle(&request).unwrap().is_none());
+    }
+    assert_eq!(
+        bridge.drain_window_commands().collect::<Vec<_>>(),
+        vec![
+            WindowCommand::DropOnWorkspace {
+                window_id: 42,
+                monitor_id: 7,
+                workspace_id: 3,
+                geometry: expected,
+            },
+            WindowCommand::PreviewWorkspaceDrop {
+                window_id: 42,
+                monitor_id: 7,
+                workspace_id: 3,
+                geometry: Some(expected),
+            },
+            WindowCommand::PreviewWorkspaceDrop {
+                window_id: 42,
+                monitor_id: 7,
+                workspace_id: 3,
+                geometry: None,
+            },
+        ]
+    );
+
+    assert!(matches!(
+        bridge.handle(&workspace_drop_request(42, 7, 3, 2, None)),
+        Err(WireError::Geometry)
+    ));
+    assert!(matches!(
+        bridge.handle(&workspace_drop_request(42, -1, 3, 2, Some(geometry))),
+        Err(WireError::Identity)
+    ));
+    // Scrolling strips extend left of their output.
+    assert!(
+        bridge
+            .handle(&workspace_drop_request(
+                42,
+                7,
+                3,
+                4,
+                Some(fb::WireRect::new(-1_200.0, 300.0, 2.0, 2.0)),
+            ))
+            .unwrap()
+            .is_none()
+    );
+    assert!(matches!(
+        bridge.drain_window_commands().next(),
+        Some(WindowCommand::PreviewWorkspaceDrop {
+            geometry: Some(WindowGeometry { x: -1_200.0, .. }),
+            ..
+        })
+    ));
+    for flags in [3, 6, 8] {
+        assert!(matches!(
+            bridge.handle(&workspace_drop_request(42, 7, 3, flags, Some(geometry))),
+            Err(WireError::Flags)
+        ));
+    }
 }
 
 #[test]
@@ -618,6 +729,7 @@ fn encodes_atomic_cursor_states_and_rejects_invalid_values_without_sequence_gaps
             composition_order: 0,
             opacity: 1.0,
             opaque: false,
+            window_geometry: None,
         }],
     };
     let bytes = bridge.encode_cursor_state(&state).unwrap();

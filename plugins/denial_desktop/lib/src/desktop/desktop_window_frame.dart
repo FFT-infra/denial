@@ -151,6 +151,7 @@ class DesktopWindowFrame extends ConsumerWidget {
     required this.suppressPositionAnimation,
     required this.overviewActive,
     required this.overview,
+    this.overviewDeparting = false,
     required this.switching,
     required this.motionDuration,
     required this.active,
@@ -176,6 +177,10 @@ class DesktopWindowFrame extends ConsumerWidget {
   final bool suppressPositionAnimation;
   final bool overviewActive;
   final bool overview;
+
+  /// Leaving a workspace overview for a workspace that is not shown. The
+  /// window keeps its scaled overview presentation while it moves off screen.
+  final bool overviewDeparting;
   final bool switching;
   final Duration motionDuration;
   final bool active;
@@ -243,7 +248,11 @@ class DesktopWindowFrame extends ConsumerWidget {
     final pixelGridOrigin = outputPixelGrid?.logicalRect.topLeft ?? Offset.zero;
     final outputRect = outputPixelGrid?.logicalRect;
     final transformed =
-        overview || switching || desktopWidget || offscreenMinimized;
+        overview ||
+        overviewDeparting ||
+        switching ||
+        desktopWidget ||
+        offscreenMinimized;
     final outputClip = desktopOutputClip(
       activelyDragging: placement.dragging,
       outputRect: outputRect,
@@ -300,6 +309,7 @@ class DesktopWindowFrame extends ConsumerWidget {
       layoutRect: transformed ? placement.frame : null,
       placementObjectId: placement.objectId,
       overview: overview,
+      overviewDeparting: overviewDeparting,
       switching: switching,
       desktopWidget: desktopWidget,
       offscreenMinimized: offscreenMinimized,
@@ -329,7 +339,7 @@ class DesktopWindowFrame extends ConsumerWidget {
             objectId: window.objectId,
             enabled: window.shouldAnimateEntrance,
             suppressInitialAnimation: desktopWindowSuppressesInitialReveal(
-              overview: overview,
+              overview: overview || overviewDeparting,
               switching: switching,
               minimized: placement.minimized,
               hasWorkspaceTransition:
@@ -338,6 +348,7 @@ class DesktopWindowFrame extends ConsumerWidget {
             child: IgnorePointer(
               ignoring:
                   minimized ||
+                  overviewDeparting ||
                   desktopWidgetEntering ||
                   desktopWidgetExiting ||
                   (desktopWidget && overviewActive),
@@ -610,6 +621,7 @@ class DesktopAnimatedWindowPosition extends ConsumerStatefulWidget {
     this.layoutRect,
     required this.placementObjectId,
     required this.overview,
+    this.overviewDeparting = false,
     required this.switching,
     this.desktopWidget = false,
     this.offscreenMinimized = false,
@@ -630,6 +642,7 @@ class DesktopAnimatedWindowPosition extends ConsumerStatefulWidget {
   final Rect? layoutRect;
   final int placementObjectId;
   final bool overview;
+  final bool overviewDeparting;
   final bool switching;
   final bool desktopWidget;
   final bool offscreenMinimized;
@@ -681,7 +694,7 @@ class _DesktopAnimatedWindowPositionState
     if (oldWidget.dragging && !widget.dragging) {
       final translation = ref
           .read(desktopLiveWindowPlacementsProvider)
-          .settleTranslationFor(widget.placementObjectId);
+          .takeSettleTranslation(widget.placementObjectId);
       _dragReleaseAnimationOrigin = translation == null
           ? null
           : oldWidget.rect.shift(translation);
@@ -692,7 +705,11 @@ class _DesktopAnimatedWindowPositionState
     final interruptedOverviewTransition = _overviewTransitionActive;
     final overviewGeometryWillAnimate =
         widget.duration != Duration.zero && widget.rect != oldWidget.rect;
-    if (!oldWidget.overview && widget.overview) {
+    if (widget.overviewDeparting && !oldWidget.overviewDeparting) {
+      _curve = Motion.overviewExitCurve;
+      _overviewTransitionActive = false;
+      _overviewTransitionCompleted.value = false;
+    } else if (!oldWidget.overview && widget.overview) {
       _curve = interruptedOverviewTransition
           ? Motion.overviewReversalCurve
           : Motion.overviewEnterCurve;
@@ -737,6 +754,7 @@ class _DesktopAnimatedWindowPositionState
         pixelGridOrigin: widget.pixelGridOrigin,
         enabled:
             !widget.overview &&
+            !widget.overviewDeparting &&
             !widget.switching &&
             !widget.desktopWidget &&
             !widget.offscreenMinimized,

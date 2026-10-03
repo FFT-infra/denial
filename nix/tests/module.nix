@@ -20,6 +20,9 @@ let
             libglvnd = prev.libglvnd.overrideAttrs (_: {
               pname = "denial-module-host-libglvnd";
             });
+            fontconfig = prev.fontconfig.overrideAttrs (_: {
+              pname = "denial-module-host-fontconfig";
+            });
           })
         ];
         boot.loader.grub.enable = false;
@@ -49,12 +52,26 @@ let
           enable = true;
           polkitAgent.enable = false;
           ddc.enable = false;
+          engine.buildFromSource = true;
         };
         system.stateVersion = "26.05";
       }
     ];
   };
   disabledCfg = disabledIntegrations.config;
+  compatible =
+    args:
+    import ../engine-compatible.nix (
+      {
+        inherit (pkgs) lib;
+        libcVersion = "2.42-67";
+        compilerVersion = "15.2.0";
+        isGNU = true;
+        minimumGlibc = "2.42";
+        minimumCompilerRuntime = "15.2";
+      }
+      // args
+    );
 in
 pkgs.runCommand "denial-module-evaluation" { } ''
   test '${toString cfg.programs.denial.enable}' = 1
@@ -65,10 +82,46 @@ pkgs.runCommand "denial-module-evaluation" { } ''
       cfg.programs.denial.package.compositor.stdenv.cc.libc.drvPath == hostPkgs.stdenv.cc.libc.drvPath
     )
   }' = 1
-  test '${toString (builtins.elem (toString hostPkgs.libglvnd) (map toString hostPkgs.denialFlutter.engine.release.toolchain.paths))}' = 1
   test '${
     toString (
-      hostPkgs.denialFlutter.engine.release.stdenv.cc.libc.drvPath == hostPkgs.stdenv.cc.libc.drvPath
+      builtins.elem hostPkgs.fontconfig.drvPath (
+        map (dep: dep.drvPath) hostPkgs.denialFlutter.engine.buildInputs
+      )
+    )
+  }' = 1
+  test '${
+    toString (hostPkgs.denialFlutter.engine.nativeLibc.drvPath == hostPkgs.stdenv.cc.libc.drvPath)
+  }' = 1
+  test '${toString (hostPkgs.denialFlutter.engine.buildStrategy == "cached-engine")}' = 1
+  test '${
+    toString (hostPkgs.denialFlutter.dart.drvPath == hostPkgs.denialFlutter.engine.dart.drvPath)
+  }' = 1
+  test '${toString (builtins.elem "--slimpeller" pkgs.denialFlutter.pinnedRawEngine.sourceEngine.release.configureFlags)}' = 1
+  test '${
+    toString (
+      pkgs.lib.hasInfix "denial-args.gn" (
+        pkgs.denialFlutter.pinnedRawEngine.sourceEngine.release.preInstall or ""
+      )
+    )
+  }' = 1
+  test '${
+    toString (
+      hostPkgs.denialFlutter.engine.rawEngine.drvPath == pkgs.denialFlutter.pinnedRawEngine.drvPath
+    )
+  }' = 1
+  test '${
+    toString (disabledIntegrations.pkgs.denialFlutter.engine.buildStrategy == "host-source")
+  }' = 1
+  test '${
+    toString (
+      disabledIntegrations.pkgs.denialFlutter.dart.drvPath
+      == disabledIntegrations.pkgs.denialFlutter.engine.dart.drvPath
+    )
+  }' = 1
+  test '${
+    toString (
+      disabledIntegrations.pkgs.denialFlutter.engine.nativeLibc.drvPath
+      == disabledIntegrations.pkgs.stdenv.cc.libc.drvPath
     )
   }' = 1
   test '${toString (builtins.elem cfg.programs.denial.package cfg.services.displayManager.sessionPackages)}' = 1
@@ -81,12 +134,31 @@ pkgs.runCommand "denial-module-evaluation" { } ''
   test '${toString (cfg.xdg.portal.wlr.settings.screencast.chooser_cmd == expectedChooser)}' = 1
   test '${
     toString (
-      cfg.systemd.user.services.denial-polkit-agent.serviceConfig.ExecStart
-      == "${hostPkgs.polkit_gnome}/libexec/polkit-gnome-authentication-agent-1"
+      cfg.systemd.user.services.denial-polkit-agent.serviceConfig.ExecStart == [
+        ""
+        "${cfg.programs.denial.package}/bin/denial-polkit-agent"
+      ]
     )
   }' = 1
   test '${toString (builtins.elem "denial-session.target" cfg.systemd.user.services.denial-polkit-agent.wantedBy)}' = 1
   test '${toString (!disabledCfg.hardware.i2c.enable)}' = 1
-  test '${toString (!builtins.hasAttr "denial-polkit-agent" disabledCfg.systemd.user.services)}' = 1
+  test '${toString (!disabledCfg.systemd.user.units."denial-polkit-agent.service".enable)}' = 1
+  test '${toString (compatible { })}' = 1
+  test '${
+    toString (compatible {
+      libcVersion = "2.44";
+      compilerVersion = "16.2.0";
+    })
+  }' = 1
+  test '${toString (!(compatible { libcVersion = "2.41"; }))}' = 1
+  test '${toString (!(compatible { compilerVersion = "14.2.0"; }))}' = 1
+  test '${
+    toString (
+      !(compatible {
+        compilerVersion = "21.1.8";
+        isGNU = false;
+      })
+    )
+  }' = 1
   touch $out
 ''

@@ -14,7 +14,7 @@ kit="$4"
     printf 'Missing Plugin Manager build kit: %s\n' "$kit" >&2
     exit 1
 }
-for artifact in denial-plugin-manager data/flutter_assets/AssetManifest.bin lib/libapp.so lib/libflutter_linux_gtk.so; do
+for artifact in denial-plugin-manager data/flutter_assets/AssetManifest.bin lib/libapp.so lib/libflutter_engine.so; do
     [[ -f "$bundle/$artifact" ]] || {
         printf 'Missing Plugin Manager artifact: %s\n' "$bundle/$artifact" >&2
         exit 1

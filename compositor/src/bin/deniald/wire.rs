@@ -146,6 +146,23 @@ pub enum WindowCommand {
         workspace_id: u8,
         follow: bool,
     },
+    /// Overview drop onto one workspace of an output, which may be hidden.
+    /// `geometry` is the dragged preview in that workspace's own coordinates;
+    /// its centre resolves to a layout-owned tile operation.
+    DropOnWorkspace {
+        window_id: u64,
+        monitor_id: i64,
+        workspace_id: u8,
+        geometry: WindowGeometry,
+    },
+    /// Plans [`WindowCommand::DropOnWorkspace`] without committing it. A
+    /// missing geometry ends the preview.
+    PreviewWorkspaceDrop {
+        window_id: u64,
+        monitor_id: i64,
+        workspace_id: u8,
+        geometry: Option<WindowGeometry>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -237,7 +254,9 @@ impl WindowCommand {
             Self::Close { window_id }
             | Self::Focus { window_id }
             | Self::Configure { window_id, .. }
-            | Self::MoveToWorkspace { window_id, .. } => Some(*window_id),
+            | Self::MoveToWorkspace { window_id, .. }
+            | Self::DropOnWorkspace { window_id, .. }
+            | Self::PreviewWorkspaceDrop { window_id, .. } => Some(*window_id),
         }
     }
 }
@@ -448,6 +467,9 @@ pub struct SurfaceLayerDescription {
     pub composition_order: u32,
     pub opacity: f32,
     pub opaque: bool,
+    /// A popup root's declared xdg window geometry in surface-local logical
+    /// coordinates, when it excludes part of the surface (a client shadow).
+    pub window_geometry: Option<WindowGeometry>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

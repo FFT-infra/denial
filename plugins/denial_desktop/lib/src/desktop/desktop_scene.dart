@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:denial_desktop/src/state/reference_shell_controller.dart';
@@ -35,6 +36,7 @@ import 'desktop_window_layers.dart';
 import 'desktop_window_switcher_bounds.dart';
 import 'desktop_windows_only_scene.dart';
 import 'desktop_workspace.dart';
+import 'desktop_workspace_overview_deck.dart';
 import 'retained_animated_positioned.dart';
 import 'system_tray_module.dart';
 
@@ -287,6 +289,7 @@ class DesktopScene extends ConsumerStatefulWidget {
     required this.onActivateWindow,
     required this.onCloseWindow,
     required this.onOverviewBarrierTap,
+    required this.onSelectOverviewWorkspace,
     required this.onBeginOverviewDrag,
     required this.onUpdateOverviewDrag,
     required this.onEndOverviewDrag,
@@ -324,6 +327,7 @@ class DesktopScene extends ConsumerStatefulWidget {
   final ValueChanged<DenialWindow> onActivateWindow;
   final ValueChanged<DenialWindow> onCloseWindow;
   final ValueChanged<Offset> onOverviewBarrierTap;
+  final void Function(int monitorId, int workspaceId) onSelectOverviewWorkspace;
   final ValueChanged<DenialWindow> onBeginOverviewDrag;
   final void Function(DenialWindow window, Offset delta) onUpdateOverviewDrag;
   final ValueChanged<DenialWindow> onEndOverviewDrag;
@@ -349,6 +353,12 @@ class _DesktopSceneState extends ConsumerState<DesktopScene> {
   int _nextCloseId = 1;
   _DesktopHomeLayoutCache? _homeLayoutCache;
   _DesktopSceneTopologyCache? _topologyCache;
+  // A workspace overview behaves like a camera over every workspace. Windows
+  // of other workspaces enter from beside the screen and leave the same way,
+  // so they need a frame outside the scene's ordinary presented set.
+  Map<int, Rect> _overviewEntryFrames = const <int, Rect>{};
+  Map<int, Rect> _overviewDepartingFrames = const <int, Rect>{};
+  Timer? _overviewDepartureTimer;
 
   @override
   void initState() {
@@ -423,9 +433,78 @@ class _DesktopSceneState extends ConsumerState<DesktopScene> {
     return topology;
   }
 
+  void _updateWorkspaceOverviewMotion(
+    DesktopWorkspaceState previous,
+    DesktopWorkspaceState next,
+  ) {
+    final before = previous.overview;
+    final after = next.overview;
+    if (identical(before, after)) {
+      return;
+    }
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final opened = after?.workspaces;
+    if (opened != null && before?.workspaces == null) {
+      final departing = _overviewDepartingFrames;
+      _overviewDepartureTimer?.cancel();
+      _overviewDepartingFrames = const <int, Rect>{};
+      if (reduceMotion) {
+        return;
+      }
+      final camera = next.activeWorkspaceFor(after!.monitorId);
+      final entries = <int, Rect>{
+        for (final entry in after.frames.entries)
+          if (next.placements[entry.key] case final placement?)
+            if (!placement.minimized &&
+                !departing.containsKey(entry.key) &&
+                !previous.isPlacementPresented(placement))
+              entry.key: opened.cameraRect(entry.value, camera),
+      };
+      if (entries.isEmpty) {
+        return;
+      }
+      _overviewEntryFrames = entries;
+      // Mount at the camera position for one frame, then travel to the card.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && identical(_overviewEntryFrames, entries)) {
+          setState(() => _overviewEntryFrames = const <int, Rect>{});
+        }
+      });
+      return;
+    }
+    final closed = before?.workspaces;
+    if (closed == null || after?.workspaces != null) {
+      return;
+    }
+    _overviewEntryFrames = const <int, Rect>{};
+    _overviewDepartureTimer?.cancel();
+    if (reduceMotion) {
+      _overviewDepartingFrames = const <int, Rect>{};
+      return;
+    }
+    final camera = next.activeWorkspaceFor(before!.monitorId);
+    _overviewDepartingFrames = <int, Rect>{
+      for (final entry in before.frames.entries)
+        if (next.placements[entry.key] case final placement?)
+          if (!placement.minimized &&
+              !next.isInOverview(entry.key) &&
+              !next.isPlacementPresented(placement))
+            entry.key: closed.cameraRect(entry.value, camera),
+    };
+    if (_overviewDepartingFrames.isEmpty) {
+      return;
+    }
+    _overviewDepartureTimer = Timer(Motion.overviewClose, () {
+      if (mounted) {
+        setState(() => _overviewDepartingFrames = const <int, Rect>{});
+      }
+    });
+  }
+
   @override
   void didUpdateWidget(covariant DesktopScene oldWidget) {
     super.didUpdateWidget(oldWidget);
+    _updateWorkspaceOverviewMotion(oldWidget.desktop, widget.desktop);
 
     final activeObjectIds = <int>{
       for (final window in widget.windows) window.objectId,
@@ -588,6 +667,7 @@ class _DesktopSceneState extends ConsumerState<DesktopScene> {
 
   @override
   void dispose() {
+    _overviewDepartureTimer?.cancel();
     _minimizeLayerHandoff.dispose();
     _minimizedPlacementTransition.dispose();
     _minimizedPlacementExitFrames.clear();
@@ -640,7 +720,9 @@ class _DesktopSceneState extends ConsumerState<DesktopScene> {
     final placements = topology.placements
         .where(
           (placement) =>
-              placement.minimized || desktop.isPlacementPresented(placement),
+              placement.minimized ||
+              desktop.isPlacementPresented(placement) ||
+              _overviewDepartingFrames.containsKey(placement.objectId),
         )
         .toList(growable: false);
     final topZ = placements
@@ -810,6 +892,8 @@ class _DesktopSceneState extends ConsumerState<DesktopScene> {
                         onUpdateOverviewDrag: onUpdateOverviewDrag,
                         onEndOverviewDrag: onEndOverviewDrag,
                         onCancelOverviewDrag: onCancelOverviewDrag,
+                        overviewEntryFrames: _overviewEntryFrames,
+                        overviewDepartingFrames: _overviewDepartingFrames,
                       ),
                     ),
                   ),
@@ -821,6 +905,10 @@ class _DesktopSceneState extends ConsumerState<DesktopScene> {
                 key: const ValueKey<String>('desktop-overview-input-layer'),
                 active: desktop.overviewActive,
                 onBarrierTap: onOverviewBarrierTap,
+                decoration: DesktopWorkspaceOverviewDeck(
+                  desktop: desktop,
+                  onSelectWorkspace: widget.onSelectOverviewWorkspace,
+                ),
                 foregroundControls: <Widget>[
                   surfacePlane(ShellSurfaceLayer.desktopControls),
                 ],
@@ -867,6 +955,8 @@ class _DesktopSceneState extends ConsumerState<DesktopScene> {
                         onUpdateOverviewDrag: onUpdateOverviewDrag,
                         onEndOverviewDrag: onEndOverviewDrag,
                         onCancelOverviewDrag: onCancelOverviewDrag,
+                        overviewEntryFrames: _overviewEntryFrames,
+                        overviewDepartingFrames: _overviewDepartingFrames,
                       ),
                     ),
                   ),

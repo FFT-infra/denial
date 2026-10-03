@@ -8,8 +8,8 @@ use std::{
 use denial_flutter_engine::{EngineEvent, EngineHost, ScheduledTask, sys};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
-    delegate_compositor, delegate_keyboard, delegate_output, delegate_pointer, delegate_registry,
-    delegate_seat, delegate_xdg_shell, delegate_xdg_window,
+    delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_pointer,
+    delegate_registry, delegate_seat, delegate_xdg_shell, delegate_xdg_window,
     output::{OutputHandler, OutputState},
     reexports::{
         calloop::{EventLoop, LoopHandle, channel},
@@ -30,6 +30,10 @@ use smithay_client_toolkit::{
     },
     shell::{
         WaylandSurface,
+        wlr_layer::{
+            KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
+            LayerSurfaceConfigure,
+        },
         xdg::{
             XdgShell,
             window::{Window, WindowConfigure, WindowDecorations, WindowHandler},
@@ -48,6 +52,7 @@ pub enum Event {
     Engine(EngineEvent),
     Presented,
     Error(String),
+    PlatformReply(denial_flutter_engine::PlatformMessage, Vec<u8>),
 }
 
 pub fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
@@ -58,15 +63,32 @@ pub fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     let handle = event_loop.handle();
     WaylandSource::new(connection.clone(), queue).insert(handle.clone())?;
     let compositor = CompositorState::bind(&globals, &qh)?;
-    let shell = XdgShell::bind(&globals, &qh)?;
-    let window = shell.create_window(
-        compositor.create_surface(&qh),
-        WindowDecorations::RequestServer,
-        &qh,
-    );
-    window.set_app_id(config.app_id.clone());
-    window.set_title(config.title.clone());
-    window.set_min_size(Some((320, 240)));
+    // Shell globals stay bound for the lifetime of their surface role.
+    let (_xdg_shell, _layer_shell, surface) = if config.overlay {
+        let layer_shell = LayerShell::bind(&globals, &qh)?;
+        let layer = layer_shell.create_layer_surface(
+            &qh,
+            compositor.create_surface(&qh),
+            Layer::Overlay,
+            Some(config.app_id.clone()),
+            None,
+        );
+        // Without anchors, the compositor centers the surface on its output.
+        layer.set_size(config.width, config.height);
+        layer.set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
+        (None, Some(layer_shell), ShellSurface::Overlay(layer))
+    } else {
+        let xdg_shell = XdgShell::bind(&globals, &qh)?;
+        let window = xdg_shell.create_window(
+            compositor.create_surface(&qh),
+            WindowDecorations::RequestServer,
+            &qh,
+        );
+        window.set_app_id(config.app_id.clone());
+        window.set_title(config.title.clone());
+        window.set_min_size(Some((320, 240)));
+        (Some(xdg_shell), None, ShellSurface::Window(window))
+    };
     let (events, receiver) = channel::channel();
     handle.insert_source(receiver, |event, _, app| match event {
         channel::Event::Msg(event) => app.event(event),
@@ -75,7 +97,7 @@ pub fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     let mut app = App {
         host: None,
         renderer: None,
-        window,
+        surface,
         registry: RegistryState::new(&globals),
         seat_state: SeatState::new(&globals, &qh),
         output_state: OutputState::new(&globals, &qh),
@@ -111,9 +133,9 @@ pub fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         exit: false,
         error: None,
     };
-    // Initial empty commit obtains xdg configure. No buffer is attached until
-    // its size is acknowledged and the engine has produced a complete frame.
-    app.window.commit();
+    // Initial empty commit obtains the role's configure. No buffer is attached
+    // until its size is acknowledged and the engine has produced a frame.
+    app.surface.commit();
     let result = (|| -> Result<(), Box<dyn std::error::Error>> {
         while !app.exit {
             let timeout = app.timeout();
@@ -135,10 +157,33 @@ pub fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// The single Flutter view is presented either as a decorated window or as an
+/// undecorated overlay, such as an authentication prompt.
+enum ShellSurface {
+    Window(Window),
+    Overlay(LayerSurface),
+}
+
+impl ShellSurface {
+    fn wl_surface(&self) -> &wl_surface::WlSurface {
+        match self {
+            Self::Window(window) => window.wl_surface(),
+            Self::Overlay(layer) => layer.wl_surface(),
+        }
+    }
+
+    fn commit(&self) {
+        match self {
+            Self::Window(window) => window.commit(),
+            Self::Overlay(layer) => layer.commit(),
+        }
+    }
+}
+
 struct App {
     host: Option<EngineHost>,
     renderer: Option<Arc<Renderer>>,
-    window: Window,
+    surface: ShellSurface,
     registry: RegistryState,
     seat_state: SeatState,
     output_state: OutputState,
@@ -184,11 +229,15 @@ impl App {
     fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let renderer = Arc::new(Renderer::new(
             &self.connection,
-            self.window.wl_surface(),
+            self.surface.wl_surface(),
             self.physical_size(),
             self.events.clone(),
         )?);
-        let host = EngineHost::start(&self.config.project, renderer.clone())?;
+        let host = EngineHost::start_with_dart_arguments(
+            &self.config.project,
+            renderer.clone(),
+            &self.config.dart_arguments,
+        )?;
         self.renderer = Some(renderer);
         self.host = Some(host);
         self.metrics()?;
@@ -204,6 +253,17 @@ impl App {
             self.config.project.engine_library.display()
         );
         Ok(())
+    }
+
+    fn configured(&mut self) {
+        let result = if self.host.is_none() {
+            self.start()
+        } else {
+            self.metrics().map_err(Into::into)
+        };
+        if let Err(error) = result {
+            self.fail(error);
+        }
     }
 
     fn physical_size(&self) -> (u32, u32) {
@@ -269,6 +329,14 @@ impl App {
                 }
             }
             Event::Engine(EngineEvent::PlatformMessage(mut message)) => {
+                if crate::file_chooser::handles(&message.channel, &message.data) {
+                    let events = self.events.clone();
+                    std::thread::spawn(move || {
+                        let data = crate::file_chooser::run(&message.data);
+                        let _ = events.send(Event::PlatformReply(message, data));
+                    });
+                    return;
+                }
                 let reply = self.platform.handle(&message.channel, &message.data);
                 if let Some(cursor) = reply.cursor {
                     self.cursor = cursor;
@@ -281,6 +349,13 @@ impl App {
                 }
                 if reply.close {
                     self.exit = true;
+                }
+            }
+            Event::PlatformReply(mut message, data) => {
+                if let Some(host) = &self.host
+                    && let Err(error) = host.respond(&mut message, &data)
+                {
+                    self.fail(error);
                 }
             }
         }
@@ -466,14 +541,30 @@ impl WindowHandler for App {
     ) {
         self.width = configure.new_size.0.map(|n| n.get()).unwrap_or(self.width);
         self.height = configure.new_size.1.map(|n| n.get()).unwrap_or(self.height);
-        let result = if self.host.is_none() {
-            self.start()
-        } else {
-            self.metrics().map_err(Into::into)
-        };
-        if let Err(error) = result {
-            self.fail(error);
+        self.configured();
+    }
+}
+
+impl LayerShellHandler for App {
+    fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &LayerSurface) {
+        self.exit = true;
+    }
+    fn configure(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &LayerSurface,
+        configure: LayerSurfaceConfigure,
+        _: u32,
+    ) {
+        // Zero leaves an unanchored dimension to the requested size.
+        if configure.new_size.0 > 0 {
+            self.width = configure.new_size.0;
         }
+        if configure.new_size.1 > 0 {
+            self.height = configure.new_size.1;
+        }
+        self.configured();
     }
 }
 
@@ -631,7 +722,7 @@ impl KeyboardHandler for App {
         codes: &[u32],
         syms: &[Keysym],
     ) {
-        if surface != self.window.wl_surface() {
+        if surface != self.surface.wl_surface() {
             return;
         }
         self.focus = true;
@@ -651,7 +742,7 @@ impl KeyboardHandler for App {
         surface: &wl_surface::WlSurface,
         _: u32,
     ) {
-        if surface != self.window.wl_surface() {
+        if surface != self.surface.wl_surface() {
             return;
         }
         self.release_keys();
@@ -720,7 +811,7 @@ impl PointerHandler for App {
             FlutterPointerPhase_kUp as UP,
         };
         for event in events {
-            if &event.surface != self.window.wl_surface() {
+            if &event.surface != self.surface.wl_surface() {
                 continue;
             }
             self.pointer_position = event.position;
@@ -851,4 +942,5 @@ delegate_keyboard!(App);
 delegate_pointer!(App);
 delegate_xdg_shell!(App);
 delegate_xdg_window!(App);
+delegate_layer!(App);
 delegate_registry!(App);

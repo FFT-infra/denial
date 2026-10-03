@@ -28,7 +28,6 @@ depends="
 	font-noto-cjk
 	font-noto-emoji
 	gcompat
-	gtk+3.0
 	libgcc
 	libinput
 	libpulse
@@ -42,7 +41,6 @@ depends="
 	pipewire
 	pipewire-pulse
 	polkit-elogind
-	polkit-gnome
 	rtkit
 	seatd
 	wireplumber
@@ -177,7 +175,7 @@ _flutter_engine() {
 _plugin_manager() {
 	pkgdesc="Plugin development and composition tools for Denial"
 	license="GPL-3.0-or-later"
-	depends="denial=$pkgver-r$pkgrel git gtk+3.0"
+	depends="denial=$pkgver-r$pkgrel git"
 	amove usr/bin/denial-plugin-manager
 	amove usr/bin/denial-plugins
 	amove usr/bin/denial-plugins.installation.json
@@ -189,7 +187,7 @@ _plugin_manager() {
 }
 
 sha512sums="
-8217ee1dedcbfc525c6c79ab4bf28a941e940ad5604cd38081cba1ca67c7d6911d9ff8444cd778d0a7f909c7e82c118ed020cdf05dfc10cbc116cc1b204aa204  denial-alpine-session
+7295015136b42aa835c348e3caa33787aa9d24c04bb866d1a4a13b4eae7b0da3ac9d6b5ba137f603c1961c952fb397adf0c4f03182154b2bff0d8944314584f6  denial-alpine-session
 e52a383dec45436cd3b620c161eea9d0db14be494dbe7bf2eb573a6d42552c9176e1e7b96581424d7d12e84aecd8fab62d094843fcc0b9efb5463fe61569f316  denial-pthread-stack.c
 35dfba6492e8af3c38085e419f5513fa1ab906b4525546a59137c7b4327dd9e7cf21eccbd365a2daff79947d8b8e9373cd99ab805369a3feac77f46ca03f97be  denial-plugin-kit-adapt.py
 e9b1fc3728bdfc128d3e517e18e7e15d20eaa4643eef3623d71defa53ed5f9335b025fa74e514cd21955207f3de004caf4c69e0b953c0780dedb6a32f74ed161  denial-resolver-bridge.c

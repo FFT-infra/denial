@@ -587,7 +587,31 @@ DenialSurfaceLayer _decodeSurfaceLayer(generated.SurfaceLayer layer) {
     compositionOrder: layer.compositionOrder,
     opacity: layer.opacity,
     opaque: layer.opaque,
+    windowGeometry: _decodeSurfaceWindowGeometry(layer),
   );
+}
+
+/// Only a non-empty geometry inside the surface can restrict its materials;
+/// anything else conservatively treats the complete surface as visible.
+Rect? _decodeSurfaceWindowGeometry(generated.SurfaceLayer layer) {
+  final geometry = layer.windowGeometry;
+  if (geometry == null) {
+    return null;
+  }
+  final rect = Rect.fromLTWH(
+    geometry.x,
+    geometry.y,
+    geometry.width,
+    geometry.height,
+  );
+  final surface = Rect.fromLTWH(0, 0, layer.surfaceWidth, layer.surfaceHeight);
+  return _validRect(rect) &&
+          rect.left >= 0 &&
+          rect.top >= 0 &&
+          rect.right <= surface.right &&
+          rect.bottom <= surface.bottom
+      ? rect
+      : null;
 }
 
 bool _validXkbName(String value, {required bool emptyAllowed}) {

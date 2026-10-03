@@ -4,6 +4,7 @@
 mod app;
 mod config;
 mod egl;
+mod file_chooser;
 mod platform;
 mod renderer;
 
@@ -30,7 +31,6 @@ fn main() {
 
     let result = (|| -> Result<(), Box<dyn std::error::Error>> {
         let Some(config) = config::Config::parse()? else {
-            println!("{}", config::HELP);
             return Ok(());
         };
         if config.check {

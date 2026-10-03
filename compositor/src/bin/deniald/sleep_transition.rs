@@ -110,6 +110,9 @@ pub(super) fn synchronize_sleep_transition(scanouts: &[Scanout], events: &mut Ru
             // PrepareForSleep(false) can also report a failed sleep. Remaining
             // locked is the fail-closed result when an unlock method exists.
             ensure_session_locked(events);
+            // Opening the lid often ends the sleep, and some lid drivers report
+            // no toggle on resume.
+            events.lid.request_reading();
             let requests = events.sleep_transition.resume();
             events.queue_idle_power_requests(requests);
             info!("queued display restoration after system sleep");

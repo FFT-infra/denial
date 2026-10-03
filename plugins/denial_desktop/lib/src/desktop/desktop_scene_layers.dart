@@ -1,6 +1,8 @@
+import 'package:denial_flutter_sdk/glass_configuration.dart';
 import 'package:denial_flutter_sdk/input.dart';
 import 'package:denial_flutter_sdk/models.dart';
 import 'package:denial_flutter_sdk/rendering.dart';
+import 'package:denial_flutter_sdk/shell_theme.dart';
 import 'package:flutter/material.dart';
 
 import 'desktop_pixel_alignment.dart';
@@ -15,6 +17,36 @@ class DesktopLayerShellSurface extends StatelessWidget {
   final DenialWindow surface;
   final DisplayLayout? displayLayout;
 
+  static final _overlayMaterialThemes = Expando<ShellThemeData>();
+
+  /// Denial's own overlays, such as the authentication prompt, draw their
+  /// translucent card inside a transparent canvas. Third-party overlays such
+  /// as region selectors and color pickers keep an unfiltered desktop.
+  static bool _receivesMaterial(DenialWindow surface) =>
+      surface.contentKind == DenialWindowContentKind.layerShellOverlay &&
+      surface.appId.startsWith('dev.denial.') &&
+      surface.popupSurfaceLayers.isEmpty;
+
+  /// Frosted material without bevel optics: those would trace the canvas
+  /// rectangle instead of the card. The client draws its own rim lighting.
+  static ImageFilterConfig? _overlayBackdrop(ShellThemeData theme) {
+    final available =
+        theme.backdropBlurEnabled &&
+        (theme.transparencyMode == ShellTransparencyMode.glass ||
+            theme.backdropBlurSigma > 0) &&
+        theme.backdropBlurOpacityThreshold < 1;
+    if (!available) return null;
+    final quiet = _overlayMaterialThemes[theme] ??= theme.copyWith(
+      glass: theme.glass.copyWith(
+        edgeStrength: 0,
+        lightIntensity: 0,
+        refraction: 0,
+        dispersion: 0,
+      ),
+    );
+    return quiet.backdropFilterConfigAt(1, useWindowAlphaThreshold: true);
+  }
+
   @override
   Widget build(BuildContext context) {
     final geometry = surface.geometry;
@@ -25,6 +57,10 @@ class DesktopLayerShellSurface extends StatelessWidget {
       displayLayout,
       surface.monitorId,
     );
+    final pixelGridOrigin = outputPixelGrid?.logicalRect.topLeft ?? Offset.zero;
+    final texture = _receivesMaterial(surface)
+        ? singleWindowPlaneTexture(surface)
+        : null;
     return Positioned.fromRect(
       rect: geometry,
       // Flutter paints the client texture, while DesktopInputLayoutPublisher
@@ -33,13 +69,24 @@ class DesktopLayerShellSurface extends StatelessWidget {
       // Flutter's gesture arena.
       child: IgnorePointer(
         child: RepaintBoundary(
-          child: WindowSurfaceTree(
-            window: surface,
-            includePopups: true,
-            presentationScale: outputPixelGrid?.scale,
-            pixelGridOrigin:
-                outputPixelGrid?.logicalRect.topLeft ?? Offset.zero,
-          ),
+          child: texture == null
+              ? WindowSurfaceTree(
+                  window: surface,
+                  includePopups: true,
+                  presentationScale: outputPixelGrid?.scale,
+                  pixelGridOrigin: pixelGridOrigin,
+                )
+              // Like a toplevel, the window primitive composites the client
+              // over its material per pixel: only the card's coverage above
+              // the user's opacity threshold is frosted, never its shadow.
+              : WindowPlane.texture(
+                  texture: texture,
+                  backdrop: _overlayBackdrop(ShellTheme.of(context)),
+                  presentationScale:
+                      outputPixelGrid?.scale ??
+                      MediaQuery.devicePixelRatioOf(context),
+                  pixelGridOrigin: pixelGridOrigin,
+                ),
         ),
       ),
     );
@@ -57,12 +104,17 @@ class DesktopOverviewInputLayer extends StatelessWidget {
     required this.active,
     required this.onBarrierTap,
     required this.foregroundControls,
+    this.decoration,
     super.key,
   });
 
   final bool active;
   final ValueChanged<Offset> onBarrierTap;
   final List<Widget> foregroundControls;
+
+  /// Overview chrome above the dismissal barrier, such as workspace cards.
+  /// Its own hit regions take taps; everything else reaches the barrier.
+  final Widget? decoration;
 
   @override
   Widget build(BuildContext context) {
@@ -82,6 +134,8 @@ class DesktopOverviewInputLayer extends StatelessWidget {
         Positioned.fill(
           child: _DesktopOverviewBarrier(active: active, onTap: onBarrierTap),
         ),
+        if (decoration case final decoration?)
+          Positioned.fill(child: decoration),
         ...foregroundControls,
       ],
     );
