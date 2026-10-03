@@ -79,6 +79,7 @@ jobs:
             libxcb-composite0-dev libxcb-xfixes0-dev libxcb-render0-dev \
             libxcb-shape0-dev libdrm-dev libgbm-dev libegl1-mesa-dev \
             libgles-dev libgl1-mesa-dev mesa-common-dev libsdl2-dev libpulse-dev \
+            libpolkit-agent-1-dev libpolkit-gobject-1-dev \
             xwayland xdg-desktop-portal xdg-desktop-portal-gtk dbus-x11 \
             rpm rpm2cpio libarchive-tools
           command -v rustup
