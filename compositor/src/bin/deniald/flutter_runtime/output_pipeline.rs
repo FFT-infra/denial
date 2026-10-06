@@ -1,6 +1,20 @@
 //! Authorized output rendering, raster handoff, and scanout ownership.
 
 use super::*;
+use std::sync::atomic::AtomicU64;
+
+// Capture revisions describe scene content, not the repair work required by a
+// reused buffer. Keep them unique across renderer/topology generations too.
+static NEXT_CAPTURE_REVISION: AtomicU64 = AtomicU64::new(1);
+
+fn next_capture_revision() -> u64 {
+    loop {
+        let revision = NEXT_CAPTURE_REVISION.fetch_add(1, Ordering::Relaxed);
+        if revision != 0 {
+            return revision;
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum BufferState {
@@ -55,6 +69,7 @@ pub(super) struct OutputBufferPool {
     pub(super) size: PixelSize,
     pub(super) slots: Vec<OutputBufferSlot>,
     pub(super) authorized_request: Option<AuthorizedOutputRequest>,
+    capture_revision: u64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -78,6 +93,7 @@ pub struct ReadyOutputFrame {
     pub index: usize,
     pub fence: Option<OwnedFd>,
     pub damage: DamageRegion,
+    pub(crate) capture_revision: u64,
     pub screenshot_request_id: Option<u64>,
     pub rendered_at: Option<Instant>,
     pub request: OutputFrameRequest,
@@ -136,6 +152,7 @@ impl OutputBufferBroker {
                 size: descriptor.size,
                 slots,
                 authorized_request: None,
+                capture_revision: next_capture_revision(),
             });
         }
         if pools.is_empty() {
@@ -322,6 +339,9 @@ impl OutputBufferBroker {
         }
         let mut frame_damage_region = DamageRegion::empty(pool.size.width, pool.size.height);
         frame_damage_region.replace_from_flutter(frame_damage);
+        if frame_damage_region.rect_count() != 0 {
+            pool.capture_revision = next_capture_revision();
+        }
         let mut buffer_damage_region = DamageRegion::empty(pool.size.width, pool.size.height);
         buffer_damage_region.replace_from_flutter(buffer_damage);
         for (other_index, slot) in pool.slots.iter_mut().enumerate() {
@@ -361,6 +381,7 @@ impl OutputBufferBroker {
                 render_view_id: pool.render_view_id,
                 configuration_generation: pool.configuration_generation,
                 index,
+                capture_revision: pool.capture_revision,
                 fence: slot.fence.take(),
                 damage: slot
                     .ready_damage
@@ -483,6 +504,76 @@ impl OutputBufferBroker {
                 slot.screenshot_request_id = None;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::*;
+    use crate::frame_scheduler::FrameTick;
+
+    #[test]
+    fn repair_repaint_preserves_scene_revision_after_discarded_ready_frame() {
+        let output = OutputId(7);
+        let view = RenderViewId::for_output(output).unwrap();
+        let size = PixelSize::new(64, 64);
+        let mut broker = OutputBufferBroker::new([OutputPoolDescriptor {
+            output_id: output,
+            render_view_id: view,
+            configuration_generation: 1,
+            size,
+            initial_scanout: 0,
+            framebuffers: &[11, 12, 13],
+        }])
+        .unwrap();
+        let initial_revision = broker.pools[0].capture_revision;
+        let full = [sys::FlutterRect {
+            left: 0.0,
+            top: 0.0,
+            right: 64.0,
+            bottom: 64.0,
+        }];
+        let now = Instant::now();
+        let mut render = |sequence, scene_damage: &[sys::FlutterRect]| {
+            broker.begin_transaction();
+            let request = OutputFrameRequest {
+                tick: FrameTick {
+                    output,
+                    sequence,
+                    nominal_interval: Duration::from_millis(16),
+                    interval: Duration::from_millis(16),
+                    render_deadline: now,
+                    presentation_target: now + Duration::from_millis(16),
+                },
+                dirty_serial: sequence,
+                lock_frame_token: 0,
+                fingerprint_epoch: 0,
+            };
+            assert_eq!(broker.authorize(request, now), Some(view.get()));
+            let framebuffer = broker.acquire(view.get(), size).unwrap();
+            assert!(broker.mark_ready_with_feedback(
+                view.get(),
+                framebuffer,
+                scene_damage,
+                &full,
+                None,
+                None,
+                Vec::new(),
+            ));
+            let ready = broker.finish_transaction().pop().unwrap();
+            broker.publish(&ready).unwrap();
+            // Simulate an unreachable Ready frame being discarded before KMS
+            // presents it. Its scene content must survive in the successor.
+            broker.release_output(output, ready.index).unwrap();
+            ready
+        };
+        let changed = render(1, &full);
+        assert_ne!(changed.capture_revision, initial_revision);
+        let repair = render(2, &[]);
+        assert_eq!(repair.damage.rect_count(), 1);
+        assert_eq!(repair.capture_revision, changed.capture_revision);
+        let successor = render(3, &full);
+        assert_ne!(successor.capture_revision, repair.capture_revision);
     }
 }
 

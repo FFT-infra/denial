@@ -969,6 +969,7 @@ source_audit() {
     "$ROOT/tools/test-denial-promotion-no-build" \
     "$ROOT/tools/test-denial-repository-generators" \
     "$ROOT/tools/test-denial-repository-setup" \
+    "$ROOT/tools/test-denial-session-launchers" \
     "$ROOT/tools/verify-denial-package-payload" \
     "$ROOT/tools/verify-denial-native-package-metadata" \
     "$ROOT/tools/verify-denial-published-apk-packages" \
@@ -1003,6 +1004,11 @@ source_audit() {
     pass 'native candidate metadata rejects executable and malformed input'
   else
     fail 'native candidate metadata parser test failed'
+  fi
+  if "$ROOT/tools/test-denial-session-launchers"; then
+    pass 'session launchers preserve SDDM greeter restart on startup failure and compositor exit'
+  else
+    fail 'session launcher exit handling failed'
   fi
 
   cargo_version="$(

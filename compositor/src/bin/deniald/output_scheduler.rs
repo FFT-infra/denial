@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use denial_core::topology::{OutputId, OutputTransform, PixelRect, PixelSize, RenderViewId};
 use denial_core::volition::{self, CommitId, PlaneCommit, PlaneProperties, Submission, Volition};
 use smithay::backend::drm::DrmDevice;
+use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::reexports::calloop::ping::Ping;
 use tracing::{info, warn};
 
@@ -47,6 +48,7 @@ fn next_ready_fence_token() -> u64 {
 #[derive(Debug)]
 struct OutputFrame {
     index: usize,
+    capture_revision: u64,
     screenshot_request_id: Option<u64>,
     request: OutputFrameRequest,
     submitted_at: Instant,
@@ -1140,6 +1142,7 @@ impl OutputScheduler {
             index,
             fence,
             damage: _,
+            capture_revision,
             screenshot_request_id,
             rendered_at,
             request,
@@ -1165,6 +1168,7 @@ impl OutputScheduler {
                 .frames
                 .install_ready(OutputFrame {
                     index,
+                    capture_revision,
                     screenshot_request_id,
                     request,
                     submitted_at: Instant::now(),
@@ -1522,6 +1526,10 @@ impl OutputScheduler {
                 break;
             }
             swapchains.present(pipeline.output_id, presented.index)?;
+            if let Some(frontend) = events.wayland.as_mut() {
+                frontend
+                    .screencopy_output_presented(pipeline.output_id, presented.capture_revision);
+            }
             pipeline.wake_frame_pending = false;
 
             // A missed edge can leave the already-rendered successor targeting
@@ -1592,6 +1600,7 @@ impl OutputScheduler {
     pub(super) fn process_screencopies_at_tick(
         &self,
         tick: FrameTick,
+        renderer: &mut GlesRenderer,
         runtime: &FlutterRuntime,
         swapchains: &OutputSwapchains,
         scanouts: &[Scanout],
@@ -1611,7 +1620,7 @@ impl OutputScheduler {
             .for_output(tick.output)
             .and_then(|pool| pool.buffers.get(buffer_index))
             .ok_or("screencopy output buffer exceeds its native pool")?;
-        frontend.process_screencopies(&buffer.dmabuf, tick.output, timestamp, || {
+        frontend.process_screencopies(renderer, &buffer.dmabuf, tick.output, timestamp, || {
             runtime.retain_output(tick.output, buffer_index)
         })
     }

@@ -1921,6 +1921,7 @@ fn schedule_next_flutter_frame(
 
 #[allow(clippy::too_many_arguments)]
 fn dispatch_output_ticks(
+    renderer: &mut GlesRenderer,
     runtime: &mut flutter_runtime::FlutterRuntime,
     scheduler: &mut output_scheduler::OutputScheduler,
     swapchain: &RenderSwapchains,
@@ -1934,6 +1935,7 @@ fn dispatch_output_ticks(
         }
         scheduler.process_screencopies_at_tick(
             tick,
+            renderer,
             runtime,
             swapchain
                 .outputs()
@@ -2616,6 +2618,9 @@ pub(super) fn run_flutter_event_loop(
             continue;
         }
         synchronize_software_dimming(drm, scanouts, &mut events, flutter, &mut gamma_topology)?;
+        if let Some(frontend) = events.wayland.as_mut() {
+            frontend.reap_capture_source_reads();
+        }
         let iteration_now = Instant::now();
         if events.dpms_topology.service_deadline(iteration_now) {
             events.topology_dirty = true;
@@ -2764,6 +2769,7 @@ pub(super) fn run_flutter_event_loop(
                 )?;
 
                 dispatch_output_ticks(
+                    renderer,
                     runtime,
                     &mut scheduler,
                     swapchain,

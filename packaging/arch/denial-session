@@ -1,6 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+finish_denial_session() {
+  local status="$1"
+  # SDDM interprets status 1 as an authentication failure and leaves the
+  # stopped greeter down. A failed Denial session must restart the greeter.
+  if [[ "$status" == 1 ]]; then
+    printf 'denial-session: session exited with status 1; reporting session failure (2) to the display manager\n' >&2
+    status=2
+  fi
+  exit "$status"
+}
+
+case "${1:-}" in
+  --check | --print-output-config) ;;
+  *) trap 'finish_denial_session "$?"' EXIT ;;
+esac
+
 die() {
   printf 'denial-session: %s\n' "$*" >&2
   exit 1
@@ -430,10 +446,10 @@ terminate_denial() {
   exit 143
 }
 
-trap stop_graphical_session EXIT
+trap 'denial_exit_status=$?; stop_graphical_session; finish_denial_session "$denial_exit_status"' EXIT
 trap terminate_denial HUP INT TERM
 
-"$DENIALD" "${denial_args[@]}" "$@" &
+"$DENIALD" "${denial_args[@]}" "$@" <&0 &
 denial_pid=$!
 set +e
 wait "$denial_pid"
