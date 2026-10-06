@@ -290,6 +290,9 @@ fn complete_match(shared: &SharedAuthentication, epoch: u64) -> bool {
     state.failure_count = 0;
     state.cooldown_until = None;
     state.fingerprint_unlock = Some(PendingUnlock::Validated);
+    shared
+        .fingerprint_unlock_pending
+        .store(true, Ordering::Release);
     shared.condition.notify_all();
     true
 }
@@ -299,9 +302,15 @@ pub(super) fn advance_pending_unlock(
     now: Instant,
     outputs_ready: bool,
 ) -> bool {
+    if !shared.fingerprint_unlock_pending.load(Ordering::Acquire) {
+        return false;
+    }
     let mut state = lock_unpoisoned(&shared.state);
     if state.stopping || !shared.locked.load(Ordering::Acquire) {
         state.fingerprint_unlock = None;
+        shared
+            .fingerprint_unlock_pending
+            .store(false, Ordering::Release);
         return false;
     }
     let Some(pending) = state.fingerprint_unlock else {
@@ -322,6 +331,9 @@ pub(super) fn advance_pending_unlock(
         PendingUnlock::Validated | PendingUnlock::Settling(_) => {}
     }
     state.fingerprint_unlock = None;
+    shared
+        .fingerprint_unlock_pending
+        .store(false, Ordering::Release);
     shared.locked.store(false, Ordering::Release);
     shared.push_event(AuthenticationEvent {
         kind: AuthenticationEventKind::Result {
@@ -415,6 +427,14 @@ mod tests {
     }
 
     #[test]
+    fn idle_unlock_check_does_not_lock_authentication_state() {
+        let controller = controller(true);
+        let state = lock_unpoisoned(&controller.shared.state);
+        assert!(!controller.advance_fingerprint_unlock(Instant::now(), false));
+        drop(state);
+    }
+
+    #[test]
     fn match_unlocks_once_and_preserves_compositor_gate() {
         let controller = controller(true);
         assert!(complete_match(&controller.shared, 0));
@@ -432,9 +452,11 @@ mod tests {
     fn screen_off_match_waits_for_wake_frame_then_settles_before_unlock() {
         let controller = controller(true);
         let now = Instant::now();
+        assert!(!controller.fingerprint_unlock_pending());
         // No match means no wake, even with the screen off.
         assert!(!controller.advance_fingerprint_unlock(now, false));
         assert!(complete_match(&controller.shared, 0));
+        assert!(controller.fingerprint_unlock_pending());
         assert!(controller.advance_fingerprint_unlock(now, false));
         assert!(controller.locked());
         assert!(controller.security_gate_locked());
@@ -443,9 +465,11 @@ mod tests {
         assert!(controller.advance_fingerprint_unlock(presented, false));
         assert!(!controller.advance_fingerprint_unlock(presented, true));
         controller.advance_fingerprint_unlock(presented + WAKE_SETTLE_DELAY / 2, true);
+        assert!(controller.fingerprint_unlock_pending());
         assert!(controller.locked());
         assert!(controller.try_event().is_none());
         controller.advance_fingerprint_unlock(presented + WAKE_SETTLE_DELAY, true);
+        assert!(!controller.fingerprint_unlock_pending());
         assert!(!controller.locked());
         assert!(controller.security_gate_locked());
         let event = controller.try_event().unwrap();
@@ -468,6 +492,7 @@ mod tests {
         assert!(controller.advance_fingerprint_unlock(now, false));
         controller.advance_fingerprint_unlock(now, true);
         controller.lock();
+        assert!(!controller.fingerprint_unlock_pending());
         while controller.try_event().is_some() {}
         controller.advance_fingerprint_unlock(now + Duration::from_secs(1), true);
         assert!(controller.locked());

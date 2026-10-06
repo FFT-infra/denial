@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Preserve hidden payload inputs; only APK control entries at the root are metadata.
+set -euo pipefail
+if (($# != 2)) || [[ ! -f "$1" || ! -d "$2" || "$2" == / ]]; then
+  printf 'Usage: extract-denial-apk-payload PACKAGE EMPTY_DESTINATION\n' >&2
+  exit 2
+fi
+package="$1"
+destination="$2"
+if [[ -n "$(find "$destination" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+  printf 'APK payload destination must be empty: %s\n' "$destination" >&2
+  exit 1
+fi
+bsdtar -xpf "$package" -C "$destination"
+for metadata in .PKGINFO .INSTALL .trigger \
+  .pre-install .post-install .pre-upgrade .post-upgrade \
+  .pre-deinstall .post-deinstall; do
+  rm -f -- "$destination/$metadata"
+done
+shopt -s nullglob
+for signature in "$destination"/.SIGN.*; do
+  rm -f -- "$signature"
+done
+if [[ -n "$(find "$destination" -mindepth 1 -maxdepth 1 -name '.*' -print -quit)" ]]; then
+  printf 'APK contains unexpected root metadata: %s\n' "$package" >&2
+  exit 1
+fi

@@ -13,15 +13,19 @@ use tracing::warn;
 #[cfg(feature = "flutter")]
 use super::super::PendingWindowEvent;
 use super::super::RuntimeState;
+#[cfg(feature = "flutter")]
+use super::super::window_grab::LayoutPreviewSet;
 use super::super::window_grab::constrain_dimension;
 #[cfg(feature = "flutter")]
-use super::super::window_layout::LayoutDirection;
+use super::super::window_layout::{LayoutDirection, LayoutSpace};
 #[cfg(feature = "flutter")]
 use super::super::window_placement_store::RestoredWindowPlacement;
 #[cfg(feature = "flutter")]
 use super::super::wire::{
     WindowAction, WindowCommand, WindowGeometry, WindowPlacementChange, WindowPlacementPhase,
 };
+#[cfg(feature = "flutter")]
+use super::LayoutDropTarget;
 use super::WindowGeometryAuthority;
 #[cfg(feature = "flutter")]
 use super::clamp_window_geometry;
@@ -386,6 +390,22 @@ fn apply_window_command(state: &mut RuntimeState, command: WindowCommand) {
         } => {
             move_window_to_workspace(state, window_id, monitor_id, workspace_id, follow);
         }
+        WindowCommand::DropOnWorkspace {
+            window_id,
+            monitor_id,
+            workspace_id,
+            geometry,
+        } => {
+            drop_window_on_workspace(state, window_id, monitor_id, workspace_id, geometry);
+        }
+        WindowCommand::PreviewWorkspaceDrop {
+            window_id,
+            monitor_id,
+            workspace_id,
+            geometry,
+        } => {
+            preview_window_drop_on_workspace(state, window_id, monitor_id, workspace_id, geometry);
+        }
         command => apply_targeted_window_command(state, command),
     }
 }
@@ -474,7 +494,9 @@ fn apply_local_window_command(state: &mut RuntimeState, window_id: u64, command:
         }
         WindowCommand::CreateLocal { .. }
         | WindowCommand::SwitchWorkspace { .. }
-        | WindowCommand::MoveToWorkspace { .. } => unreachable!(),
+        | WindowCommand::MoveToWorkspace { .. }
+        | WindowCommand::DropOnWorkspace { .. }
+        | WindowCommand::PreviewWorkspaceDrop { .. } => unreachable!(),
     }
 }
 
@@ -509,7 +531,9 @@ fn apply_client_window_command(
         ),
         WindowCommand::CreateLocal { .. }
         | WindowCommand::SwitchWorkspace { .. }
-        | WindowCommand::MoveToWorkspace { .. } => unreachable!(),
+        | WindowCommand::MoveToWorkspace { .. }
+        | WindowCommand::DropOnWorkspace { .. }
+        | WindowCommand::PreviewWorkspaceDrop { .. } => unreachable!(),
     }
 }
 
@@ -830,22 +854,17 @@ pub(super) fn move_window_to_workspace(
     let requested_output = monitor_id
         .and_then(|monitor_id| u64::try_from(monitor_id).ok())
         .map(denial_core::topology::OutputId);
+    restore_minimized_window_for_move(state, window_id);
     let location = {
         let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
-        if frontend.window_is_minimized(window_id) {
-            frontend.set_local_flutter_window_minimized(window_id, false);
-        } else if let Some(window) = frontend.window_for_id(window_id)
-            && let Some(root) = frontend.window_root_surface(&window)
-            && frontend.surface_is_minimized(&root.id())
-        {
-            frontend.set_surface_minimized(root.id(), false);
-        }
         let location = frontend.move_window_to_workspace(window_id, requested_output, workspace_id);
-        if location.is_some() {
+        if let Some(location) = location {
             if let Some(destination) = requested_output {
                 move_window_geometry_to_output(frontend, window_id, destination);
             }
-            frontend.rebuild_window_layout();
+            if let Some(window) = frontend.window_for_id(window_id) {
+                frontend.move_window_layout_to_workspace(&window, location);
+            }
         }
         location
     };
@@ -889,6 +908,223 @@ pub(super) fn move_window_to_workspace(
     }
     state.scene_sync.mark_dirty();
     true
+}
+
+/// One overview drag's planned drop onto a workspace.
+///
+/// Rust keeps the decision between pointer samples so the edge hysteresis of
+/// native tile drags applies, and the commit lands exactly where the last
+/// preview showed.
+#[cfg(feature = "flutter")]
+pub(super) struct WorkspaceDropPreview {
+    window_id: u64,
+    planned: Option<(LayoutSpace, Option<LayoutDropTarget>)>,
+    windows: LayoutPreviewSet,
+}
+
+/// Plans an overview drop of `window_id` onto a workspace, which may be
+/// hidden, and publishes every affected tile as a LayoutPreview placement.
+/// The dragged window's own planned rectangle is included as its landing slot.
+/// A request without geometry ends the preview.
+#[cfg(feature = "flutter")]
+pub(super) fn preview_window_drop_on_workspace(
+    state: &mut RuntimeState,
+    window_id: u64,
+    monitor_id: i64,
+    workspace_id: u8,
+    geometry: Option<WindowGeometry>,
+) {
+    let request = geometry.and_then(|geometry| {
+        resolve_workspace_drop(state, window_id, monitor_id, workspace_id, geometry)
+    });
+    let Some((window, space, location)) = request else {
+        clear_workspace_drop_preview(state);
+        return;
+    };
+    let mut preview = take_workspace_drop_preview(state, window_id);
+    let frontend = state.wayland.as_ref().expect("missing Wayland frontend");
+    let previous = preview
+        .planned
+        .as_ref()
+        .filter(|(planned_space, _)| *planned_space == space)
+        .and_then(|(_, target)| target.as_ref());
+    let target = frontend.workspace_drop_target(&window, space, location, previous);
+    let planned = Some((space, target));
+    if preview.planned != planned {
+        let (space, target) = planned.as_ref().expect("planned drop was just resolved");
+        let placements = frontend.layout_drop_preview_in(&window, *space, target.as_ref(), true);
+        preview.windows.publish(state, placements, Some(&window));
+        preview.planned = planned;
+    }
+    state
+        .wayland
+        .as_mut()
+        .expect("missing Wayland frontend")
+        .workspace_drop_preview = Some(preview);
+}
+
+/// Takes the preview of `window_id`, ending a stale preview of another window.
+#[cfg(feature = "flutter")]
+fn take_workspace_drop_preview(state: &mut RuntimeState, window_id: u64) -> WorkspaceDropPreview {
+    match state
+        .wayland
+        .as_mut()
+        .expect("missing Wayland frontend")
+        .workspace_drop_preview
+        .take()
+    {
+        Some(preview) if preview.window_id == window_id => preview,
+        stale => {
+            if let Some(mut stale) = stale {
+                stale.windows.clear(state);
+            }
+            WorkspaceDropPreview {
+                window_id,
+                planned: None,
+                windows: LayoutPreviewSet::default(),
+            }
+        }
+    }
+}
+
+#[cfg(feature = "flutter")]
+pub(super) fn clear_workspace_drop_preview(state: &mut RuntimeState) {
+    if let Some(mut preview) = state
+        .wayland
+        .as_mut()
+        .expect("missing Wayland frontend")
+        .workspace_drop_preview
+        .take()
+    {
+        preview.windows.clear(state);
+    }
+}
+
+/// Commits an overview drop onto a workspace without switching to it.
+///
+/// A minimized window is restored and resumed first. Tiled windows land at
+/// the previewed position; windows the layout cannot hold only change
+/// workspace. Flutter's preview ends with every affected tile's final layout
+/// rectangle.
+#[cfg(feature = "flutter")]
+pub(super) fn drop_window_on_workspace(
+    state: &mut RuntimeState,
+    window_id: u64,
+    monitor_id: i64,
+    workspace_id: u8,
+    geometry: WindowGeometry,
+) -> bool {
+    let mut preview = take_workspace_drop_preview(state, window_id);
+    let Some((window, space, location)) =
+        resolve_workspace_drop(state, window_id, monitor_id, workspace_id, geometry)
+    else {
+        preview.windows.clear(state);
+        return move_window_to_workspace(state, window_id, Some(monitor_id), workspace_id, false);
+    };
+    let previewed = preview
+        .planned
+        .take()
+        .filter(|(planned_space, _)| *planned_space == space)
+        .map(|(_, target)| target);
+
+    restore_minimized_window_for_move(state, window_id);
+    {
+        let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
+        let target = previewed
+            .unwrap_or_else(|| frontend.workspace_drop_target(&window, space, location, None));
+        if frontend
+            .move_window_to_workspace(window_id, Some(space.output), space.workspace)
+            .is_some()
+        {
+            move_window_geometry_to_output(frontend, window_id, space.output);
+        }
+        if !frontend.apply_workspace_drop(&window, space, target) {
+            let location = frontend.workspace_location(window_id);
+            if let Some(location) = location {
+                frontend.move_window_layout_to_workspace(&window, location);
+            }
+        }
+    }
+    preview.windows.clear(state);
+    if !state
+        .wayland
+        .as_ref()
+        .expect("missing Wayland frontend")
+        .window_is_on_active_workspace(window_id)
+    {
+        release_window_focus(state, &window);
+    }
+    state.scene_sync.mark_dirty();
+    true
+}
+
+/// Resolves an overview drop request to a managed client window, its target
+/// layout space, and the scene point under the dragged preview's centre.
+/// Flutter-owned windows have no compositor layout leaf and return `None`.
+#[cfg(feature = "flutter")]
+fn resolve_workspace_drop(
+    state: &RuntimeState,
+    window_id: u64,
+    monitor_id: i64,
+    workspace_id: u8,
+    geometry: WindowGeometry,
+) -> Option<(Window, LayoutSpace, Point<i32, Logical>)> {
+    let frontend = state.wayland.as_ref()?;
+    if frontend.is_local_flutter_window(window_id)
+        || !(1..=frontend.layout_workspace_count()).contains(&workspace_id)
+    {
+        return None;
+    }
+    let window = frontend.window_for_id(window_id)?;
+    let output = u64::try_from(monitor_id)
+        .ok()
+        .map(denial_core::topology::OutputId)
+        .filter(|output| {
+            frontend
+                .outputs
+                .iter()
+                .any(|candidate| candidate.id == *output)
+        })?;
+    let origin = frontend.atlas_origin;
+    let location = Point::<i32, Logical>::from((
+        clamped_scene_coordinate(geometry.x + geometry.width / 2.0 + origin.x),
+        clamped_scene_coordinate(geometry.y + geometry.height / 2.0 + origin.y),
+    ));
+    Some((window, LayoutSpace::new(output, workspace_id), location))
+}
+
+/// Restores a minimized window into the workspace model before it moves.
+///
+/// Activation is not the only way back from minimization: the overview can
+/// place a minimized window directly on another workspace. Protocol clients
+/// are resumed exactly as activation resumes them, so the window never
+/// arrives suspended (XDG) or hidden (X11) on its new workspace.
+#[cfg(feature = "flutter")]
+fn restore_minimized_window_for_move(state: &mut RuntimeState, window_id: u64) {
+    let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
+    if !frontend.window_is_minimized(window_id) {
+        return;
+    }
+    let client_window = (!frontend.is_local_flutter_window(window_id))
+        .then(|| frontend.window_for_id(window_id))
+        .flatten()
+        .and_then(|window| {
+            let root = frontend.window_root_surface(&window)?;
+            Some((window, root))
+        });
+    let Some((window, root)) = client_window else {
+        frontend.set_local_flutter_window_minimized(window_id, false);
+        return;
+    };
+    if !frontend.set_surface_minimized(root.id(), false) {
+        return;
+    }
+    if let Some(managed) = ManagedWindow::new(&window) {
+        managed.prepare_minimized(false);
+    }
+    state
+        .pending_window_events
+        .push(PendingWindowEvent::Action(window_id, WindowAction::Restore));
 }
 
 #[cfg(feature = "flutter")]
@@ -1138,10 +1374,13 @@ pub(super) fn queue_restored_window_state(
     restored: RestoredWindowPlacement,
     target: Rectangle<i32, Logical>,
 ) {
-    queue_window_placement_for_monitor(
+    // Rust retains the normal restore rectangle. Flutter mirrors the applied
+    // target; publishing the restore rectangle here would shrink a maximized
+    // or fullscreen window after its authoritative snapshot arrives.
+    queue_client_window_placement_for_monitor(
         state,
         window,
-        restored.geometry,
+        target,
         target,
         WindowPlacementPhase::End,
         WindowPlacementChange::Resize,
@@ -1179,6 +1418,172 @@ fn focused_window(state: &RuntimeState) -> Option<Window> {
     let surface = focused.wl_surface()?;
     let root = frontend.owning_toplevel_surface(&surface)?;
     frontend.window_for_root_surface(&root)
+}
+
+#[cfg(feature = "flutter")]
+pub(super) fn resize_focused_toplevel(
+    state: &mut RuntimeState,
+    action: super::super::keyboard_resize::KeyboardResize,
+) -> bool {
+    let Some(frontend) = state.wayland.as_ref() else {
+        return false;
+    };
+    // Do not compete with an interactive grab or resize mobile full-output windows.
+    if frontend.mobile_shell
+        || frontend.compositor_pointer_grab_active
+        || frontend
+            .seat
+            .get_pointer()
+            .is_some_and(|pointer| pointer.is_grabbed())
+        || frontend
+            .seat
+            .get_touch()
+            .is_some_and(|touch| touch.is_grabbed())
+    {
+        return false;
+    }
+    if let Some(window_id) = focused_local_window(state) {
+        return resize_local_toplevel(state, window_id, action);
+    }
+    let Some(window) = focused_window(state) else {
+        return false;
+    };
+    let Some(managed) = ManagedWindow::new(&window) else {
+        return false;
+    };
+    let facts = managed.facts();
+    let presentation = frontend.managed_window_presentation(&window);
+    if facts.override_redirect
+        || facts.client_state.resizing
+        || presentation.fullscreen
+        || presentation.maximized
+        || frontend.window_geometry_locked(&window)
+    {
+        return false;
+    }
+    if frontend.window_is_layout_managed(&window) {
+        let changed = state
+            .wayland
+            .as_mut()
+            .expect("missing Wayland frontend")
+            .resize_layout_window_from_keyboard(&window, action);
+        if changed.is_empty() {
+            return false;
+        }
+        for (affected, geometry) in changed {
+            // Publish every sibling moved by the split, keeping layout geometry
+            // out of the floating-window placement/restore store.
+            queue_transient_window_placement(
+                state,
+                &affected,
+                geometry,
+                WindowPlacementPhase::End,
+                WindowPlacementChange::Resize,
+            );
+        }
+        state.scene_sync.mark_dirty();
+        return true;
+    }
+    if !managed_client_grab_allowed(state, &window) {
+        return false;
+    }
+    // Use the last requested geometry, so repeated keys accumulate even when a
+    // Wayland client has not yet acknowledged the preceding configure.
+    let current = frontend.window_geometry_target(&window);
+    let Some(output) = frontend.output_for_geometry(current) else {
+        return false;
+    };
+    let frame = frontend.maximize_work_area(Some(&output.output), output.logical_geometry);
+    let work_area = shell_content_geometry(frame, shell_draws_server_frame(&window));
+    let target = action.geometry(
+        current,
+        work_area,
+        facts.minimum_size,
+        facts.maximum_size,
+        frontend.settings.keyboard_resize_step(),
+    );
+    if target == current {
+        return false;
+    }
+    managed.prepare_shell_geometry(target);
+    let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
+    frontend.set_window_geometry_target_with_authority(
+        &window,
+        target,
+        WindowGeometryAuthority::Pending,
+    );
+    queue_window_placement(
+        state,
+        &window,
+        target,
+        WindowPlacementPhase::End,
+        WindowPlacementChange::Resize,
+    );
+    state.scene_sync.mark_dirty();
+    true
+}
+
+#[cfg(feature = "flutter")]
+fn resize_local_toplevel(
+    state: &mut RuntimeState,
+    window_id: u64,
+    action: super::super::keyboard_resize::KeyboardResize,
+) -> bool {
+    let frontend = state.wayland.as_ref().expect("missing Wayland frontend");
+    if frontend.input_layout.as_ref().is_some_and(|layout| {
+        layout
+            .windows
+            .iter()
+            .any(|region| region.window_id == window_id && region.geometry_locked())
+    }) {
+        return false;
+    }
+    let Some(geometry) = frontend.local_flutter_window_geometry(window_id) else {
+        return false;
+    };
+    let current = Rectangle::new(
+        Point::from((geometry.x.round() as i32, geometry.y.round() as i32)),
+        Size::from((
+            geometry.width.round() as i32,
+            geometry.height.round() as i32,
+        )),
+    );
+    let Some(output) = frontend.output_for_geometry(current) else {
+        return false;
+    };
+    let work_area = frontend.maximize_work_area(Some(&output.output), output.logical_geometry);
+    let target = action.geometry(
+        current,
+        work_area,
+        // Match the minimum used by LocalFlutterWindowGrab.
+        Size::from((64, 64)),
+        Size::from((0, 0)),
+        frontend.settings.keyboard_resize_step(),
+    );
+    if target == current {
+        return false;
+    }
+    state
+        .wayland
+        .as_mut()
+        .expect("missing Wayland frontend")
+        .set_local_flutter_window_global_geometry(
+            window_id,
+            WindowGeometry {
+                x: f64::from(target.loc.x),
+                y: f64::from(target.loc.y),
+                width: f64::from(target.size.w),
+                height: f64::from(target.size.h),
+            },
+        );
+    queue_local_flutter_window_placement(
+        state,
+        window_id,
+        WindowPlacementPhase::End,
+        WindowPlacementChange::Resize,
+    );
+    state.scene_sync.mark_dirty();
+    true
 }
 
 #[cfg(feature = "flutter")]
@@ -2166,15 +2571,13 @@ fn store_client_restore_geometry(
     state: &mut RuntimeState,
     root: &WlSurface,
     current: Rectangle<i32, Logical>,
-) -> Option<Rectangle<i32, Logical>> {
+) {
     let restore = bound_geometry_size(current);
     let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
-    match frontend.ensure_window_record_for_surface(&root.id()) {
-        Some(record) if record.restore_geometry.is_none() => {
-            record.restore_geometry = Some(restore);
-            Some(restore)
-        }
-        _ => None,
+    if let Some(record) = frontend.ensure_window_record_for_surface(&root.id())
+        && record.restore_geometry.is_none()
+    {
+        record.restore_geometry = Some(restore);
     }
 }
 
@@ -2183,7 +2586,6 @@ fn apply_client_state_geometry(
     window: &Window,
     target: Option<Rectangle<i32, Logical>>,
     restore: Option<Rectangle<i32, Logical>>,
-    restore_to_publish: Option<Rectangle<i32, Logical>>,
     unconstrained_after: bool,
 ) {
     if let Some(target) = target {
@@ -2197,18 +2599,16 @@ fn apply_client_state_geometry(
                 WindowGeometryAuthority::ClientState,
             );
         #[cfg(feature = "flutter")]
-        if let Some(restore) = restore_to_publish {
-            queue_client_window_placement_for_monitor(
-                state,
-                window,
-                restore,
-                target,
-                WindowPlacementPhase::End,
-                WindowPlacementChange::Resize,
-            );
-        }
-        #[cfg(not(feature = "flutter"))]
-        let _ = restore_to_publish;
+        // State entry has already happened in Rust. This packet describes the
+        // current rectangle, not the normal rectangle retained for state exit.
+        queue_client_window_placement_for_monitor(
+            state,
+            window,
+            target,
+            target,
+            WindowPlacementPhase::End,
+            WindowPlacementChange::Resize,
+        );
         return;
     }
     if !unconstrained_after {
@@ -2369,17 +2769,15 @@ pub(super) fn apply_managed_client_state_request(
         (None, None)
     };
 
-    let restore_to_publish = if !before.fullscreen
+    if !before.fullscreen
         && !before.maximized
         && entering
         && managed.can_store_client_restore()
         && current.size.w > 0
         && current.size.h > 0
     {
-        store_client_restore_geometry(state, &root, current)
-    } else {
-        None
-    };
+        store_client_restore_geometry(state, &root, current);
+    }
     let restore = if !entering && unconstrained_after {
         state
             .wayland
@@ -2396,14 +2794,7 @@ pub(super) fn apply_managed_client_state_request(
         return false;
     }
 
-    apply_client_state_geometry(
-        state,
-        window,
-        target,
-        restore,
-        restore_to_publish,
-        unconstrained_after,
-    );
+    apply_client_state_geometry(state, window, target, restore, unconstrained_after);
     if scrolling_layout_maximize {
         state
             .wayland

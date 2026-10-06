@@ -1,125 +1,87 @@
 # Custom Flutter shells
 
-Denial's Flutter code has two explicit layers:
+A complete shell is a plugin implementing `ShellApplication` from
+`package:denial_flutter_sdk/application.dart`. The generated application selects
+one provider, calls `createShell()`, and passes that widget to the SDK's
+`runDenialShell` bootstrap. `dart_shell/lib/main.dart` is only the handwritten
+development composition; it has no public runtime API or default UI implementation.
 
-- `package:denial_dart_shell/denial.dart` is the reusable shell framework;
-- `package:denial_dart_shell/denial_default_shell.dart` assembles Denial's
-  stock launcher, desktop, dashboard, shade, notification, and wallpaper
-  features.
+Use [PLUGIN_DEVELOPMENT.md](PLUGIN_DEVELOPMENT.md) for contribution declarations,
+constructor injection, shortcut actions, and build/activation instructions.
+The [minimal custom root](../dart_shell/example/custom_shell.dart) demonstrates
+an alternative composition using only SDK imports. It deliberately displays status
+rather than pretending to be a complete window manager.
 
-Code outside the package should never import `lib/src`. That tree is free to
-change while the public framework library remains the custom-shell boundary.
+## SDK ownership
 
-## Minimal entry point
+`denial_sdk` contains Flutter-independent models and composition contracts.
+`denial_flutter_sdk` contains the Flutter platform client, reactive providers,
+bootstrap, system services, input/layout models, surface rendering, theme and
+materials. SDK libraries never depend on a UI plugin. Native Wayland ownership,
+resource lifetimes, authentication enforcement, engine integration and recovery
+remain in Rust. Dart clients use the shared SDK bridge and its provider lifetime.
 
-A custom entry point does not need to initialize the native bridge, Riverpod,
-startup configuration, telemetry, input publication, cursor, localization,
-theme, lock screen, software keyboard, or screenshot selection:
+The reference desktop owns its complete UI tree, including desktop and mobile
+scenes, window decorations and transitions, lock UI, keyboard, notifications,
+settings and welcome screens. It consumes exactly the same public SDK libraries
+available to an external plugin. It is an example implementation, not an API that
+alternative shells must wrap or import. Its `ShellServices` adapter supplies
+reference-desktop behavior to its panel and action contributions.
+The adapter implements focused capability interfaces from `services.dart`;
+feature helpers can request only window, application, workspace, desktop,
+telemetry, media, presentation or tray services. The complete bundle remains
+available at composition boundaries.
 
-```dart
-import 'package:denial_dart_shell/denial.dart';
-import 'package:flutter/widgets.dart';
+## Building a complete replacement
 
-void main() {
-  runDenialShell(
-    shell: const DenialShell(
-      mobile: DenialShellScene(content: MyMobileShell()),
-      desktop: DenialShellScene(content: MyDesktopShell()),
-    ),
-  );
-}
+Bootstrap creates Flutter bindings and the root `ProviderScope`, captures the
+startup environment, and initializes common configuration. It does not secretly
+mount stock chrome. The selected root owns presentation and its subscriptions.
 
-class MyMobileShell extends StatelessWidget {
-  const MyMobileShell({super.key});
+Use `state.dart` for shared window, display, authentication, configuration and
+system-service providers. Subscribe with Riverpod and obtain the existing bridge
+with `ref.read(denialBridgeProvider)`; do not create a second embedded bridge or
+replace native channel handlers. `platform.dart` exposes its typed operations.
+The bridge connects native reply handlers as soon as its provider is read.
+Display, settings and shortcut providers work independently of window state;
+`bridge.start` is only a compatibility API for optional window callbacks.
+Use `windowSnapshots`, `windowsChanged` and `windowActivations` streams for
+cancellable subscriptions.
 
-  @override
-  Widget build(BuildContext context) {
-    return const Stack(
-      fit: StackFit.expand,
-      children: [
-        ShellWallpaper(),
-        Center(child: Text('My mobile shell')),
-      ],
-    );
-  }
-}
+`rendering.dart` exposes live surface trees, native window planes, geometry,
+retained transforms, cursor and wallpaper primitives. `input.dart` exposes the
+input/visibility layout and shell interaction registry. `wire.dart` exposes raw
+versioned codecs when implementing platform integration; import it with a prefix
+to distinguish protocol records from SDK models.
 
-class MyDesktopShell extends StatelessWidget {
-  const MyDesktopShell({super.key});
+`shellControllerProvider` owns the shared native window subscription and exposes
+snapshots, focus and authoritative lock state. Keep gesture, shade, keyboard and
+transition state in your root plugin; the reference desktop's controller, profile
+and layout constants are internal examples. `ShellWindowsBuilder` offers filtered
+windows and actions; `ShellPrimaryWindow` displays the focused application. Its
+optional `contentPadding` supplies your shell's safe-area insets to in-bundle apps.
 
-  @override
-  Widget build(BuildContext context) {
-    return const Stack(
-      fit: StackFit.expand,
-      children: [
-        ShellWallpaper(),
-        Center(child: Text('My desktop shell')),
-      ],
-    );
-  }
-}
-```
+A replacement that paints native windows must publish input and visibility layouts
+consistent with those surfaces, their transforms, clipping and popup geometry.
+It also owns output/workspace placement, configured work-area reservations,
+transient surfaces, keyboard presentation and lock-screen presentation. Consume
+SDK authentication and lock-frame state; UI cannot authenticate a session by
+changing a local boolean. Keep lock acknowledgements tied to actual frame layout.
+These responsibilities require real implementation; painting a client texture alone
+does not create a complete shell.
 
-`runDenialShell` is the process bootstrap. `DenialShell` is the reusable
-compositor-aware widget host. `DenialShellScene` is feature configuration, not
-platform plumbing. The checked
-[custom shell example](../dart_shell/example/custom_shell.dart) is compiled by
-the normal Dart analyzer and also demonstrates the high-level window helpers.
+Use `ShellPopupHost` with `shellPopupControllerProvider` from `popups.dart` for managed popup
+lifetimes, and `ShellActionsBinding` for the generated action collection. Register
+one action catalog owner. Dispose ordinary widget-owned resources normally and
+let provider-owned services retain their existing lifecycle.
 
-## Scene slots
+Assets and fonts use the SDK's package namespace and travel with its Pub package.
+Generated applications do not copy assets from a hidden runtime manifest.
+The old `denial_dart_shell/denial.dart` and `denial_default_shell.dart` facades are
+removed. Plugin planning rejects legacy runtime dependencies and private SDK
+imports, including conditional imports and relative access to `lib/src`.
 
-Each profile scene has three slots:
-
-- `content` is the main feature scene;
-- `chrome` is persistent shell UI, such as a gesture handle or shade, which
-  participates in the secure-session transition with the content;
-- `overlays` are transient feature layers such as notifications and HUDs.
-
-Denial places all three behind its secure lock stage. It then installs managed
-popup surfaces, input publication, the mobile software keyboard, desktop
-screenshot selection, Flutter's root overlay, and the native cursor host in
-the required order.
-
-For Bluetooth pairing, pass `pairingSurfaceBuilder` to `DenialShell`. Omitting
-it is safe: incoming pairing requests are rejected rather than accepted or
-left pending without UI. `onLocked` can close feature-owned transient state;
-Denial always dismisses its managed popup surfaces itself.
-
-## Reading shell state
-
-The framework exports stable models, semantic actions, theme extensions, and
-surface components from the same library. A feature can render the focused
-native window without touching Riverpod, the bridge, or protocol messages:
-
-```dart
-import 'package:denial_dart_shell/denial.dart';
-import 'package:flutter/widgets.dart';
-
-class FocusedWindow extends StatelessWidget {
-  const FocusedWindow({super.key});
-
-  @override
-  Widget build(BuildContext context) => const ShellPrimaryWindow();
-}
-```
-
-Use `ShellWindowsBuilder` when a feature needs the complete user-visible window
-list plus focus and close actions; it applies Denial's helper-surface filtering
-automatically. Lower-level providers remain exported for features with custom
-state-management needs.
-`ShellSurfaceHost` and `shellSurfaceControllerProvider` provide managed popup
-lifetimes and dismissal policy. `LocalFlutterApplication` registers trusted
-built-in applications through the optional `localApplications` callback on
-`runDenialShell`.
-
-## Stock composition as an example
-
-The reference assembly is intentionally small and lives in
-`lib/src/features/default_shell/default_shell_app.dart`. It constructs a
-`DenialShell` from stock mobile and desktop feature widgets. Those features use
-the public framework import for core state and components, so the same path is
-exercised by the product rather than existing only for third-party code.
-
-An independently built replacement bundle remains trusted session code. Read
-the [live UI trust boundary](UI_DEVELOPMENT.md#trust-boundary) and keep
-`denialctl ui restore` available while experimenting.
+This is trusted compiled shell code, not a security sandbox. Read the
+[live UI trust boundary](UI_DEVELOPMENT.md#trust-boundary). Build a new composition
+and activate it through the manager; never overwrite mapped libraries. Visual
+validation belongs to the user.

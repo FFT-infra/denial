@@ -48,6 +48,7 @@ pub(super) fn try_synchronize_flutter_buffers(
 
 #[cfg(feature = "flutter")]
 pub(super) fn synchronize_flutter_scene(
+    output_control: &output_control::OutputControlPublisher,
     runtime: &mut flutter_runtime::FlutterRuntime,
     events: &mut RuntimeState,
 ) -> Result<(), Box<dyn Error>> {
@@ -84,7 +85,12 @@ pub(super) fn synchronize_flutter_scene(
     let (windows, textures) = events
         .wayland
         .as_mut()
-        .map(wayland_frontend::WaylandFrontend::flutter_scene)
+        .map(|frontend| {
+            frontend.flutter_scene(
+                events.scene_sync.metadata_windows(),
+                runtime.published_window_descriptions(),
+            )
+        })
         .transpose()?
         .unwrap_or_default();
     let flutter_runtime::SyncedWaylandScene {
@@ -92,6 +98,7 @@ pub(super) fn synchronize_flutter_scene(
         textures,
         window_snapshot_changed,
     } = runtime.sync_wayland_scene(revision, windows, textures, &events.restored_window_ids)?;
+    output_control.publish_wallpaper(runtime.published_window_descriptions());
     if window_snapshot_changed {
         // Buffer-only commits take the texture-source fast path above. Rehash
         // IDs only after accepting a new authoritative metadata revision.

@@ -120,7 +120,7 @@ sudo pacman -Syu denial
 Inspect the selected package source and version if desired:
 
 ```sh
-pacman -Si denial denial-flutter-engine denial-ui-development
+pacman -Si denial denial-flutter-engine denial-plugin-manager denial-ui-development
 ```
 
 Then log out, choose **Denial** in the display manager, and sign in. From an
@@ -129,10 +129,19 @@ and hardware preflight without starting the compositor. Inside a running
 Denial session, `denialctl status` verifies the native control connection and
 reports the compositor, output, and Flutter UI state.
 
-Denial renders through its compositor-integrated Impeller GLES backend by
-default. If a GPU-driver issue requires the retained Skia/Ganesh fallback, add
-`DENIAL_FLUTTER_RENDERER=skia` to `/etc/denial/session.conf` and restart the
-Denial session. Removing the override returns to Impeller.
+Denial renders through its compositor-integrated Impeller GLES backend. The
+packaged Flutter engine is a Slimpeller build and does not include a
+Skia/Ganesh compatibility renderer.
+
+Install the separate Plugin Manager only when you want to discover, install, or
+develop plugins. Pacman installs its Dart dependency with it:
+
+```sh
+sudo pacman -S denial-plugin-manager
+```
+
+See [Developing Denial plugins](../../PLUGIN_DEVELOPMENT.md) for the manual
+project and editor setup.
 
 The standard display-manager entry starts unlocked because the display manager
 has already authenticated the user. An autologin or other direct boot path

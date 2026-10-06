@@ -63,11 +63,11 @@ a distinct source rectangle from the same framebuffer, so output count does
 not introduce a compositor copy. Flutter renders through one shared atlas pool
 whose ownership is synchronized with the independently clocked outputs.
 
-Impeller GLES is the default Flutter renderer. Denial's locked engine fork
-connects it directly to the rotating compositor-owned FBOs, preserves atlas
-damage, and keeps external client textures alive through native GPU fences.
-Skia/Ganesh remains compiled into the same engine as an explicit compatibility
-fallback.
+Denial's Flutter engine is a Slimpeller build: it runs Impeller GLES, while
+Skia's Ganesh and Graphite renderers are disabled at engine-generation time.
+The locked engine fork connects Impeller directly to the rotating
+compositor-owned FBOs, preserves atlas damage, and keeps external client
+textures alive through native GPU fences.
 
 Atomic presentation synchronization lives in the in-tree
 `denial_core::volition` library module at `compositor/src/volition/`. Volition
@@ -133,7 +133,9 @@ unit.
 - one external input-method client may bind `zwp_input_method_v2` for the seat;
   later contenders receive `unavailable`, and its `zwp_virtual_keyboard_v1`
   companion is accepted only from that same Wayland client. Its keyboard grab
-  and loop-safe key pass-through stay on the Smithay seat: Flutter participates
+  and loop-safe key pass-through stay on the Smithay seat, but the grab routes
+  keys before Smithay's single keyboard-grab slot so that XDG popup grabs can
+  coexist with an active input method. Flutter participates
   as a real keyboard focus target alongside Wayland and Xwayland, while editing
   transactions use the active text endpoint. Candidate surfaces join the same
   Flutter scene and native input layout.
@@ -200,6 +202,15 @@ seeds are normalized into contrast-safe roles separately for each brightness.
 Content-bearing translucent panels enforce a palette-specific backing floor,
 so the user-controlled glass opacity cannot make semantic foregrounds
 illegible over an extreme wallpaper.
+
+Scrolling-layout swaps preserve each window's strip size by default when both
+windows occupy single-window columns in the same workspace and output. This
+applies to keyboard swaps and drag swaps (including previews): widths follow
+the windows on horizontal strips, and heights follow them on vertical strips.
+Split columns and swaps across workspaces or outputs retain their slot sizes.
+Disable **Keep window sizes when swapping** in Layout settings, or set
+`layout.scrollingLayoutPreserveSwapSizes` to `false` in `settings.json`, to
+retain slot sizes for every swap. Dwindle swaps are unaffected.
 
 Keyboard settings live in the native-owned `keyboard` section:
 

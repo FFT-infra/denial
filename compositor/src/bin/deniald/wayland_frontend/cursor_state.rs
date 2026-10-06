@@ -19,6 +19,69 @@ fn finish_cursor_state(
 
 impl WaylandFrontend {
     #[cfg(feature = "flutter")]
+    pub(super) fn start_client_drag(&mut self, icon: Option<WlSurface>) {
+        self.client_drag_active = true;
+        self.drag_icon = icon;
+        self.drag_icon_offset = self
+            .drag_icon
+            .as_ref()
+            .and_then(|icon| {
+                with_states(icon, |states| {
+                    states
+                        .cached_state
+                        .get::<SurfaceAttributes>()
+                        .current()
+                        .buffer_delta
+                        .take()
+                })
+            })
+            .unwrap_or_default();
+        if let Some(icon) = self.drag_icon.as_ref() {
+            self.pending_frame_callback_windows.remove(&icon.id());
+            self.pending_drag_frame_callback_roots.insert(icon.id());
+        }
+        self.cursor_output = None;
+        self.cursor_output_scale = None;
+        self.pending_cursor_state = Some(self.resolved_client_cursor_publication());
+        self.pending_drag_icon = true;
+        // Ordinary click capture must not pin the DnD target to its origin.
+        self.client_pointer_capture = None;
+        self.queue_cursor_position();
+    }
+
+    #[cfg(feature = "flutter")]
+    pub(super) fn finish_drag(&mut self) {
+        if let Some(icon) = self.drag_icon.take() {
+            self.leave_cursor_surface(&icon);
+        }
+        self.client_drag_active = false;
+        self.pending_drag_icon = true;
+        self.set_clipboard_drag_active(false);
+        self.pending_cursor_state = Some(self.resolved_client_cursor_publication());
+        self.queue_cursor_position();
+    }
+
+    #[cfg(feature = "flutter")]
+    pub(super) fn drag_icon_root_for(&self, surface: &WlSurface) -> Option<WlSurface> {
+        let icon = self.drag_icon.as_ref()?;
+        let mut root = surface.clone();
+        while let Some(parent) = get_parent(&root) {
+            root = parent;
+        }
+        (root == *icon).then_some(root)
+    }
+
+    #[cfg(feature = "flutter")]
+    pub(super) fn record_drag_icon_commits(&mut self, commits: PublishedSurfaceCommits) {
+        self.pending_drag_icon |=
+            commits.metadata_changed || !commits.buffer_surface_ids.is_empty();
+        self.recycle_published_surface_ids(commits.buffer_surface_ids);
+        self.cursor_output = None;
+        self.cursor_output_scale = None;
+        self.update_cursor_output_membership();
+    }
+
+    #[cfg(feature = "flutter")]
     pub(super) fn update_cursor_image(&mut self, image: CursorImageStatus) {
         let previous_surface = match &self.cursor_status {
             CursorImageStatus::Surface(surface) => Some(surface.clone()),
@@ -33,7 +96,8 @@ impl WaylandFrontend {
             self.cursor_output_scale = None;
         }
         if self.pointer_cursor_visible
-            && matches!(self.routed_pointer_target, RoutedPointerTarget::Client(_))
+            && (self.client_drag_active
+                || matches!(self.routed_pointer_target, RoutedPointerTarget::Client(_)))
         {
             self.queue_cursor_image_publication();
             self.update_cursor_output_membership();
@@ -81,7 +145,7 @@ impl WaylandFrontend {
         if !self.pointer_cursor_visible {
             return;
         }
-        if self.clipboard_drag_active {
+        if self.clipboard_drag_active || self.client_drag_active {
             self.queue_cursor_publication(CursorPublication::Named("default"));
             return;
         }
@@ -142,7 +206,7 @@ impl WaylandFrontend {
             self.update_cursor_output_membership();
             return;
         }
-        if self.clipboard_drag_active {
+        if self.clipboard_drag_active || self.client_drag_active {
             self.pending_cursor_state = Some(CursorPublication::Named("default"));
             self.update_cursor_output_membership();
             return;
@@ -163,7 +227,13 @@ impl WaylandFrontend {
 
     #[cfg(feature = "flutter")]
     pub(crate) fn take_cursor_state_update(&mut self) -> Option<CursorPublication> {
-        let state = self.pending_cursor_state.take()?;
+        let state = if std::mem::take(&mut self.pending_drag_icon) {
+            self.pending_cursor_state
+                .take()
+                .unwrap_or_else(|| self.resolved_client_cursor_publication())
+        } else {
+            self.pending_cursor_state.take()?
+        };
         self.published_cursor_state = Some(state.clone());
         Some(state)
     }
@@ -236,6 +306,8 @@ impl WaylandFrontend {
                         hotspot_x: f64::from(hotspot.x),
                         hotspot_y: f64::from(hotspot.y),
                         surfaces: std::mem::take(&mut layers),
+                        drag_active: false,
+                        drag_surfaces: Vec::new(),
                     }
                 }
             }
@@ -243,6 +315,21 @@ impl WaylandFrontend {
         self.pending_cursor_metadata = false;
         self.pending_cursor_buffer_surface_ids.clear();
         state = finish_cursor_state(state, layers);
+        state.drag_active = self.client_drag_active;
+        if let Some(icon) = self.drag_icon.as_ref() {
+            let mut composition_order = 0;
+            self.append_surface_tree(
+                icon,
+                self.drag_icon_offset,
+                SurfaceRoleDescription::Root,
+                0,
+                0,
+                true,
+                &mut composition_order,
+                &mut state.drag_surfaces,
+                &mut textures,
+            );
+        }
         (state, textures)
     }
 
@@ -354,7 +441,7 @@ impl WaylandFrontend {
             return;
         }
 
-        let active_state = if self.clipboard_drag_active {
+        let active_state = if self.clipboard_drag_active || self.client_drag_active {
             CursorPublication::Named("default")
         } else {
             match self.routed_pointer_target {
@@ -396,7 +483,9 @@ impl WaylandFrontend {
         match resolved_client_cursor_intent(
             intent,
             self.settings.allow_client_cursor_surfaces(),
-            self.clipboard_drag_active || self.compositor_pointer_grab_active,
+            self.clipboard_drag_active
+                || self.client_drag_active
+                || self.compositor_pointer_grab_active,
         ) {
             ClientCursorIntent::Hidden => CursorPublication::Hidden,
             ClientCursorIntent::Named(shape) => CursorPublication::Named(shape),
@@ -491,48 +580,52 @@ impl WaylandFrontend {
             self.pointer_location.x.floor() as i32,
             self.pointer_location.y.floor() as i32,
         ));
-        let next_output_entry = cursor_surface.as_ref().and_then(|_| {
-            self.outputs
-                .iter()
-                .find(|entry| entry.logical_geometry.contains(pointer))
-        });
+        let next_output_entry = (cursor_surface.is_some() || self.drag_icon.is_some())
+            .then(|| {
+                self.outputs
+                    .iter()
+                    .find(|entry| entry.logical_geometry.contains(pointer))
+            })
+            .flatten();
         let next_output = next_output_entry.map(|entry| entry.id);
         let next_output_scale =
             next_output_entry.map(|entry| entry.output.current_scale().fractional_scale());
         if self.cursor_output == next_output
             && self.cursor_output_scale == next_output_scale
-            && cursor_surface.is_some()
+            && (cursor_surface.is_some() || self.drag_icon.is_some())
         {
             return;
         }
         self.cursor_output = next_output;
         self.cursor_output_scale = next_output_scale;
-        let Some(surface) = cursor_surface else {
+        if cursor_surface.is_none() {
             if let CursorImageStatus::Surface(surface) = &self.cursor_status {
                 self.leave_cursor_surface(surface);
             }
-            return;
-        };
+        }
+        let surfaces = cursor_surface.iter().chain(self.drag_icon.iter());
         let output_scale = next_output_scale.unwrap_or(1.0);
-        for entry in &self.outputs {
-            let entered = Some(entry.id) == next_output;
-            with_surface_tree_downward(
-                &surface,
-                (),
-                |_, _, &()| TraversalAction::DoChildren(()),
-                |child, states, &()| {
-                    if entered {
-                        entry.output.enter(child);
-                    } else {
-                        entry.output.leave(child);
-                    }
-                    let preferred_scale = Self::client_preferred_scale(child, output_scale);
-                    with_fractional_scale(states, |fractional_scale| {
-                        fractional_scale.set_preferred_scale(preferred_scale);
-                    });
-                },
-                |_, _, &()| true,
-            );
+        for surface in surfaces {
+            for entry in &self.outputs {
+                let entered = Some(entry.id) == next_output;
+                with_surface_tree_downward(
+                    surface,
+                    (),
+                    |_, _, &()| TraversalAction::DoChildren(()),
+                    |child, states, &()| {
+                        if entered {
+                            entry.output.enter(child);
+                        } else {
+                            entry.output.leave(child);
+                        }
+                        let preferred_scale = Self::client_preferred_scale(child, output_scale);
+                        with_fractional_scale(states, |fractional_scale| {
+                            fractional_scale.set_preferred_scale(preferred_scale);
+                        });
+                    },
+                    |_, _, &()| true,
+                );
+            }
         }
     }
 
@@ -588,6 +681,7 @@ mod tests {
             composition_order: 0,
             opacity: 1.0,
             opaque: false,
+            window_geometry: None,
         };
 
         let state = finish_cursor_state(CursorStateDescription::named("pointer"), vec![layer]);

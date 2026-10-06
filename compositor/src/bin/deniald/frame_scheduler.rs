@@ -61,7 +61,10 @@ pub(super) struct OutputFrameRequest {
 #[derive(Debug, Default)]
 struct DirtyOutput {
     serial: u64,
-    texture_ids: BTreeSet<i64>,
+    // A newer buffer can arrive while an older render is in flight. Track
+    // which update last dirtied each texture so completing that older render
+    // retires only the texture generations it actually covered.
+    texture_ids: BTreeMap<i64, u64>,
 }
 
 #[derive(Debug)]
@@ -211,7 +214,9 @@ impl FrameScheduler {
         let serial = self.allocate_dirty_serial();
         let dirty = self.dirty_outputs.entry(output).or_default();
         dirty.serial = serial;
-        dirty.texture_ids.extend(texture_ids);
+        for texture_id in texture_ids {
+            dirty.texture_ids.insert(texture_id, serial);
+        }
         if let Some(audit) = self.audit.as_mut() {
             audit.dirty_updates = audit.dirty_updates.saturating_add(1);
         }
@@ -230,11 +235,16 @@ impl FrameScheduler {
     }
 
     pub(super) fn complete_render(&mut self, output: OutputId, dirty_serial: u64) {
-        if self
-            .dirty_outputs
-            .get(&output)
-            .is_some_and(|dirty| dirty.serial == dirty_serial)
-        {
+        let remove_output = self.dirty_outputs.get_mut(&output).is_some_and(|dirty| {
+            if dirty_serial == 0 || !serial_at_or_before(dirty_serial, dirty.serial) {
+                return false;
+            }
+            dirty
+                .texture_ids
+                .retain(|_, texture_serial| !serial_at_or_before(*texture_serial, dirty_serial));
+            dirty.serial == dirty_serial
+        });
+        if remove_output {
             self.dirty_outputs.remove(&output);
         }
     }
@@ -349,7 +359,7 @@ impl FrameScheduler {
                 fingerprint_epoch: 0,
             });
             self.render_texture_ids
-                .extend(dirty.texture_ids.iter().copied());
+                .extend(dirty.texture_ids.keys().copied());
         }
         if let Some(audit) = self.audit.as_mut() {
             audit.record_step(self.outputs.ticks().len(), dirty_ticks, unavailable_ticks);
@@ -395,6 +405,13 @@ impl FrameScheduler {
     pub(super) fn limit_dispatch_timeout(&self, now: Instant, timeout: Duration) -> Duration {
         self.outputs.limit_dispatch_timeout(now, timeout)
     }
+}
+
+// Serial zero is reserved. Outstanding renders are bounded, so the usual
+// half-range wrapping comparison also handles the practically unreachable
+// u64 rollover without treating a newer texture as already presented.
+fn serial_at_or_before(candidate: u64, reference: u64) -> bool {
+    reference.wrapping_sub(candidate) < (1_u64 << 63)
 }
 
 #[derive(Debug)]
@@ -628,6 +645,71 @@ mod tests {
     use super::*;
 
     #[test]
+    fn completing_an_older_render_retires_only_its_texture_updates() {
+        let output = OutputId(7);
+        let mut scheduler = FrameScheduler::new(&[], Instant::now());
+        scheduler.configured_outputs.insert(output);
+        scheduler.mark_app_dirty(output, [4, 10]);
+        let first_serial = scheduler.dirty_outputs[&output].serial;
+
+        // The active window commits again while the frame including both
+        // windows is still in flight. Its new buffer must survive completion,
+        // but the idle window must not stay dirty for every later frame.
+        scheduler.mark_app_dirty(output, [10]);
+        let second_serial = scheduler.dirty_outputs[&output].serial;
+        scheduler.complete_render(output, first_serial);
+
+        let dirty = &scheduler.dirty_outputs[&output];
+        assert_eq!(dirty.serial, second_serial);
+        assert_eq!(dirty.texture_ids.keys().copied().collect::<Vec<_>>(), [10]);
+        assert_eq!(dirty.texture_ids[&10], second_serial);
+
+        scheduler.complete_render(output, second_serial);
+        assert!(!scheduler.dirty_outputs.contains_key(&output));
+    }
+
+    #[test]
+    fn completing_an_older_render_keeps_newer_non_texture_damage() {
+        let output = OutputId(7);
+        let mut scheduler = FrameScheduler::new(&[], Instant::now());
+        scheduler.configured_outputs.insert(output);
+        scheduler.mark_app_dirty(output, [4]);
+        let first_serial = scheduler.dirty_outputs[&output].serial;
+        scheduler.mark_output_dirty(output);
+        let second_serial = scheduler.dirty_outputs[&output].serial;
+
+        scheduler.complete_render(output, first_serial);
+        let dirty = &scheduler.dirty_outputs[&output];
+        assert_eq!(dirty.serial, second_serial);
+        assert!(dirty.texture_ids.is_empty());
+        scheduler.complete_render(output, second_serial);
+        assert!(!scheduler.dirty_outputs.contains_key(&output));
+    }
+
+    #[test]
+    fn texture_retirement_handles_serial_wraparound() {
+        let output = OutputId(7);
+        let mut scheduler = FrameScheduler::new(&[], Instant::now());
+        scheduler.configured_outputs.insert(output);
+        scheduler.next_dirty_serial = u64::MAX - 1;
+        scheduler.mark_app_dirty(output, [4]);
+        scheduler.mark_app_dirty(output, [10]);
+        assert_eq!(scheduler.dirty_outputs[&output].serial, 1);
+
+        scheduler.complete_render(output, u64::MAX);
+        assert_eq!(
+            scheduler.dirty_outputs[&output]
+                .texture_ids
+                .keys()
+                .copied()
+                .collect::<Vec<_>>(),
+            [10]
+        );
+        scheduler.complete_render(output, 1);
+        assert!(!scheduler.dirty_outputs.contains_key(&output));
+    }
+
+    #[test]
     fn phase_correction_does_not_change_cadence_identity() {
         let now = Instant::now();
         let nominal = Duration::from_micros(8_333);
@@ -654,5 +736,57 @@ mod tests {
             second.presentation_target,
             second.render_deadline + second.interval
         );
+    }
+
+    #[test]
+    fn unrelated_wakes_do_not_duplicate_ticks_or_delay_new_client_damage() {
+        let now = Instant::now();
+        let output = OutputId(7);
+        let mut scheduler = FrameScheduler::new(&[], now);
+        scheduler.configured_outputs.insert(output);
+        scheduler.outputs.replace(
+            &[TimelineSource {
+                output,
+                interval: Duration::from_millis(16),
+            }],
+            now,
+        );
+
+        let mut dispatched_ticks = 0;
+        if scheduler.output_tick_due(now) {
+            assert_eq!(
+                scheduler
+                    .step_with_output_readiness(now, PendingFrame::default(), |_| { (true, true) }),
+                FrameAction::Skip
+            );
+            dispatched_ticks += scheduler.output_ticks().len();
+        }
+        let next_tick = scheduler.outputs.timelines[0].next_tick;
+        for wake in [
+            now + Duration::from_millis(2),
+            now + Duration::from_millis(9),
+        ] {
+            assert!(!scheduler.output_tick_due(wake));
+        }
+
+        // A client becomes ready just before the deadline. The event loop
+        // collects its damage, and the next due tick must render it once.
+        scheduler.mark_app_dirty(output, [42]);
+        assert!(!scheduler.output_tick_due(next_tick - Duration::from_micros(1)));
+        assert_eq!(dispatched_ticks, 1);
+        assert!(scheduler.output_tick_due(next_tick));
+        assert_eq!(
+            scheduler.step_with_output_readiness(next_tick, PendingFrame::default(), |_| {
+                (true, true)
+            }),
+            FrameAction::Render {
+                flutter_output: None
+            }
+        );
+        dispatched_ticks += scheduler.output_ticks().len();
+        assert_eq!(dispatched_ticks, 2);
+        assert_eq!(scheduler.render_requests().len(), 1);
+        assert_eq!(scheduler.render_requests()[0].tick.output, output);
+        assert_eq!(scheduler.render_texture_ids().collect::<Vec<_>>(), [42]);
     }
 }

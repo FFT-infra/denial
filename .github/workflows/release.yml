@@ -485,7 +485,7 @@ jobs:
           for expected_package in \
             "denial-${RELEASE_VERSION}-1-x86_64.pkg.tar.zst" \
             "denial-flutter-engine-1:${RELEASE_VERSION}-1-x86_64.pkg.tar.zst" \
-            "denial-ui-development-${RELEASE_VERSION}-1-x86_64.pkg.tar.zst"; do
+            "denial-plugin-manager-${RELEASE_VERSION}-1-x86_64.pkg.tar.zst"; do
             test -f "$PROMOTED_PACKAGE_ROOT/$expected_package"
           done
           cp --reflink=auto -- "${packages[@]}" "$UNSIGNED_ROOT/packages/"
@@ -498,16 +498,18 @@ jobs:
               -print0 \
               | sort -z
           )
-          if ((${#native_packages[@]} != 4)); then
-            printf 'Expected four promoted native packages, found %d\n' \
+          if ((${#native_packages[@]} != 6)); then
+            printf 'Expected six promoted native packages, found %d\n' \
               "${#native_packages[@]}" >&2
             exit 1
           fi
           for expected_package in \
             "denial_${RELEASE_VERSION}-1_amd64.deb" \
             "denial-flutter-engine_${RELEASE_VERSION}-1_amd64.deb" \
+            "denial-plugin-manager_${RELEASE_VERSION}-1_amd64.deb" \
             "denial-${RELEASE_VERSION}-1.x86_64.rpm" \
-            "denial-flutter-engine-${RELEASE_VERSION}-1.x86_64.rpm"; do
+            "denial-flutter-engine-${RELEASE_VERSION}-1.x86_64.rpm" \
+            "denial-plugin-manager-${RELEASE_VERSION}-1.x86_64.rpm"; do
             test -f "$PROMOTED_NATIVE_ROOT/$expected_package"
           done
           cp --reflink=auto -- \
@@ -521,14 +523,15 @@ jobs:
               -print0 \
               | sort -z
           )
-          if ((${#apk_packages[@]} != 2)); then
-            printf 'Expected two promoted Alpine packages, found %d\n' \
+          if ((${#apk_packages[@]} != 3)); then
+            printf 'Expected three promoted Alpine packages, found %d\n' \
               "${#apk_packages[@]}" >&2
             exit 1
           fi
           for expected_package in \
             "denial-${RELEASE_VERSION}-r1.apk" \
-            "denial-flutter-engine-${RELEASE_VERSION}-r1.apk"; do
+            "denial-flutter-engine-${RELEASE_VERSION}-r1.apk" \
+            "denial-plugin-manager-${RELEASE_VERSION}-r1.apk"; do
             test -f \
               "$RUNNER_TEMP/denial-promoted-apk/packages/$expected_package"
           done

@@ -8,7 +8,7 @@ url="https://github.com/denialwm/denial"
 arch="x86_64"
 license="GPL-3.0-or-later AND CC-BY-SA-4.0 AND GPL-3.0-only AND OFL-1.1"
 options="!check !strip !tracedeps"
-subpackages="$pkgname-flutter-engine:_flutter_engine"
+subpackages="$pkgname-flutter-engine:_flutter_engine $pkgname-plugin-manager:_plugin_manager"
 builddir="$srcdir"
 install="$pkgname.post-install $pkgname.pre-deinstall"
 
@@ -16,6 +16,7 @@ install="$pkgname.post-install $pkgname.pre-deinstall"
 # usable shell contract: Latin UI, Denial's Simplified Chinese locale, and
 # color emoji must render immediately after the package transaction.
 depends="
+	git
 	bash
 	coreutils
 	dbus
@@ -27,7 +28,6 @@ depends="
 	font-noto-cjk
 	font-noto-emoji
 	gcompat
-	gtk+3.0
 	libgcc
 	libinput
 	libpulse
@@ -41,7 +41,6 @@ depends="
 	pipewire
 	pipewire-pulse
 	polkit-elogind
-	polkit-gnome
 	rtkit
 	seatd
 	wireplumber
@@ -58,12 +57,13 @@ if [ -n "$prepared_stage" ]; then
 	# prove that no bridge or Denial binary is compiled again.
 	makedepends=""
 else
-	makedepends="coreutils gcc musl-dev patchelf"
+	makedepends="coreutils gcc musl-dev patchelf python3"
 fi
 
 source="
 	denial-alpine-session
 	denial-pthread-stack.c
+	denial-plugin-kit-adapt.py
 	denial-resolver-bridge.c
 	denial-runtime-dirs
 	denial.desktop
@@ -86,11 +86,14 @@ package() {
 	if [ -n "$prepared_stage" ]; then
 		[ -d "$prepared_stage/denial" ] || return 1
 		[ -d "$prepared_stage/denial-flutter-engine" ] || return 1
+		[ -d "$prepared_stage/denial-plugin-manager" ] || return 1
 		install -d -m 0755 "$pkgdir"
 		cp -a --no-preserve=ownership \
 			"$prepared_stage/denial/." "$pkgdir/"
 		cp -a --no-preserve=ownership \
 			"$prepared_stage/denial-flutter-engine/." "$pkgdir/"
+		cp -a --no-preserve=ownership \
+			"$prepared_stage/denial-plugin-manager/." "$pkgdir/"
 		return 0
 	fi
 
@@ -98,10 +101,13 @@ package() {
 
 	[ -d "$stage_root/denial" ] || return 1
 	[ -d "$stage_root/denial-flutter-engine" ] || return 1
+	[ -d "$stage_root/denial-plugin-manager" ] || return 1
 	install -d -m 0755 "$pkgdir"
 	cp -a --no-preserve=ownership "$stage_root/denial/." "$pkgdir/"
 	cp -a --no-preserve=ownership \
 		"$stage_root/denial-flutter-engine/." "$pkgdir/"
+	cp -a --no-preserve=ownership \
+		"$stage_root/denial-plugin-manager/." "$pkgdir/"
 	# The neutral payload may have been staged by an older adapter that used
 	# Arch's /usr/bin/bash path.  Alpine installs Bash at /bin/bash.
 	sed -i '1s|^#!/usr/bin/bash$|#!/usr/bin/env bash|' \
@@ -134,6 +140,14 @@ package() {
 		--add-needed libdenial-resolver-bridge.so.0 \
 		--add-needed libdenial-pthread-stack.so.0 \
 		"$pkgdir/usr/lib/denial/settings/denial-settings"
+	patchelf --set-rpath '$ORIGIN/lib:/usr/lib/denial/alpine' \
+		--add-needed libgcompat.so.0 \
+		--add-needed libdenial-resolver-bridge.so.0 \
+		--add-needed libdenial-pthread-stack.so.0 \
+		"$pkgdir/usr/lib/denial/plugin-manager/denial-plugin-manager"
+	python3 "$srcdir/denial-plugin-kit-adapt.py" \
+		"$pkgdir/usr/lib/denial/plugin-build-kit" \
+		"$pkgdir/usr/bin/denial-plugins"
 
 	# This target has meaning only to a systemd user manager.  Alpine uses the
 	# launcher's already-supported direct-child lifecycle instead.
@@ -150,7 +164,7 @@ _flutter_engine() {
 	depends="fontconfig gcompat"
 	# Alpine versions cannot encode Denial's dotted engine-generation token as
 	# a version relation, so preserve it losslessly in the capability name.
-	provides="denial-flutter-engine-abi-3.44.7.denial1"
+	provides="denial-flutter-engine-abi-3.47.5.denial1"
 	amove usr/lib/denial/flutter/data/icudtl.dat
 	amove usr/lib/denial/flutter/lib/libflutter_engine.so
 	amove usr/share/denial/flutter-engine
@@ -158,9 +172,24 @@ _flutter_engine() {
 	amove usr/share/licenses/denial-flutter-engine
 }
 
+_plugin_manager() {
+	pkgdesc="Plugin development and composition tools for Denial"
+	license="GPL-3.0-or-later"
+	depends="denial=$pkgver-r$pkgrel git"
+	amove usr/bin/denial-plugin-manager
+	amove usr/bin/denial-plugins
+	amove usr/bin/denial-plugins.installation.json
+	amove usr/lib/denial/plugin-manager
+	amove usr/lib/denial/plugin-build-kit
+	amove usr/share/applications/dev.denial.PluginManager.desktop
+	amove usr/share/doc/denial-plugin-manager
+	amove usr/share/licenses/denial-plugin-manager
+}
+
 sha512sums="
-8217ee1dedcbfc525c6c79ab4bf28a941e940ad5604cd38081cba1ca67c7d6911d9ff8444cd778d0a7f909c7e82c118ed020cdf05dfc10cbc116cc1b204aa204  denial-alpine-session
+7295015136b42aa835c348e3caa33787aa9d24c04bb866d1a4a13b4eae7b0da3ac9d6b5ba137f603c1961c952fb397adf0c4f03182154b2bff0d8944314584f6  denial-alpine-session
 e52a383dec45436cd3b620c161eea9d0db14be494dbe7bf2eb573a6d42552c9176e1e7b96581424d7d12e84aecd8fab62d094843fcc0b9efb5463fe61569f316  denial-pthread-stack.c
+35dfba6492e8af3c38085e419f5513fa1ab906b4525546a59137c7b4327dd9e7cf21eccbd365a2daff79947d8b8e9373cd99ab805369a3feac77f46ca03f97be  denial-plugin-kit-adapt.py
 e9b1fc3728bdfc128d3e517e18e7e15d20eaa4643eef3623d71defa53ed5f9335b025fa74e514cd21955207f3de004caf4c69e0b953c0780dedb6a32f74ed161  denial-resolver-bridge.c
 bc0d2106ca0820c6ea45be62c413a3d05d5234beceb6b321124c38a27527479c2261ff5652db3e009db5c41162767b5ebb570b4ed773f32c4164402564fa5e92  denial-runtime-dirs
 38c5a72ab4f519373c7e7d6e2ff650eb24d957b521d6c4525ef5aeb7d8a4531b7106b7dba280532a5ed0936d61ccf6aed981ce3ee45dd63c7a6d8b3ea50a9473  denial.desktop

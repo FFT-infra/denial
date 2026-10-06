@@ -1,0 +1,251 @@
+#!/usr/bin/env python3
+"""Assemble relocatable release-only plugin build inputs; never compile an engine.
+
+Run after denial-flutter-engine prepare-app-build. No installed path or source
+checkout is modified. The destination must be new so a mapped compiler cannot
+be overwritten. Flutter's writable cache is provisioned per user by the manager.
+"""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import stat
+import subprocess
+from urllib.parse import unquote, urljoin, urlparse
+
+
+def digest(file):
+    with file.open('rb') as stream:
+        return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
+DEVELOPMENT_ONLY_TREES = {
+    'benchmark', 'benchmarks', 'doc', 'docs', 'example', 'examples', 'test', 'tests',
+}
+
+
+def copy(source, destination, *, omit_development=False):
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if source.is_dir():
+        source_root = source.resolve()
+        disposable = shutil.ignore_patterns(
+            '.git', '.dart_tool', 'build', '*.d', '*.pyc', '__pycache__',
+            'pubspec_overrides.yaml', '.flutter-plugins*')
+
+        def ignored(directory, names):
+            result = set(disposable(directory, names))
+            if omit_development and Path(directory).resolve() == source_root:
+                result.update(DEVELOPMENT_ONLY_TREES.intersection(names))
+            return result
+
+        shutil.copytree(source, destination, ignore=ignored)
+    else:
+        shutil.copy2(source, destination)
+
+
+def link(source, destination):
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.symlink_to(os.path.relpath(source, destination.parent),
+                           target_is_directory=source.is_dir())
+
+
+def prune_compiled_tool_dependency(package):
+    """Retain Pub's package marker and notices after snapshot compilation."""
+    # Nix store sources are read-only. These are private output copies, so make
+    # their directories writable while reducing the compiled dependency tree.
+    for path in [package, *package.rglob('*')]:
+        if not path.is_symlink():
+            path.chmod(path.stat().st_mode | stat.S_IWUSR)
+    for child in package.iterdir():
+        if child.is_symlink():
+            child.unlink()
+        elif child.is_dir() and child.name.lower() not in {
+                'copying', 'license', 'licenses', 'notice'}:
+            shutil.rmtree(child)
+    # Flutter validates every configured tool dependency as a package before
+    # each command. The manifest is required; an empty package URI root keeps
+    # the generated package configuration structurally complete.
+    (package / 'lib').mkdir(exist_ok=True)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--flutter-root', type=Path, required=True)
+    parser.add_argument('--engine-root', type=Path, required=True)
+    parser.add_argument(
+        '--engine-source-root',
+        type=Path,
+        help='Engine source used when generated SDK packages are unavailable',
+    )
+    parser.add_argument('--engine-target', default='denial_host_release')
+    parser.add_argument('--platform', choices=['linux-x64', 'linux-arm64'], required=True)
+    parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--source-root', type=Path,
+                        default=Path(__file__).resolve().parent.parent)
+    parser.add_argument('--source-revision', help='Packager-supplied source identity without a Git checkout')
+    parser.add_argument(
+        '--flutter-revision',
+        help='Packager-attested Flutter revision when SDK metadata is synthetic',
+    )
+    args = parser.parse_args()
+    root = args.source_root.resolve()
+    flutter = args.flutter_root.resolve()
+    engine = args.engine_root.resolve() / 'out' / args.engine_target
+    output = args.output.absolute()
+    if output.exists():
+        parser.error('destination already exists; use a new build directory')
+    lock = json.loads((root / 'prebuilt/flutter-engine/SOURCE_LOCK.json').read_text())
+    version_file = flutter / 'bin/cache/flutter.version.json'
+    if not version_file.is_file():
+        parser.error(f'Flutter version metadata is missing: {version_file}')
+    version = json.loads(version_file.read_text())
+    locked_flutter_revision = lock['flutter']['revision']
+    if (args.flutter_revision is not None and
+            args.flutter_revision != locked_flutter_revision):
+        parser.error('packager Flutter revision differs from SOURCE_LOCK.json')
+    if (version['frameworkRevision'] != locked_flutter_revision and
+            args.flutter_revision != locked_flutter_revision):
+        parser.error('Flutter revision differs from SOURCE_LOCK.json')
+    release = root / f'prebuilt/flutter-engine/{args.platform}-release'
+    expected = (release / 'libflutter_engine.so.sha256').read_text().split()[0]
+    if digest(engine / 'libflutter_engine.so') != expected:
+        parser.error('local engine differs from the pinned release engine')
+    output.mkdir(parents=True)
+    runtime = output / 'runtime'
+    for path in ['packages/denial_sdk', 'packages/denial_flutter_sdk',
+                 'plugins/denial_top_bar', 'plugins/denial_desktop', 'plugins/denial_launcher', 'plugins/denial_clock',
+                 'plugins/builtins.yaml', 'protocol/generated/dart', 'LICENSE',
+                 'prebuilt/flutter-engine/SOURCE_LOCK.json']:
+        copy(root / path, runtime / path, omit_development=True)
+    for name in ['libflutter_engine.so.sha256', 'LICENSE.flutter', 'LICENSE.third_party']:
+        copy(release / name, runtime / f'prebuilt/flutter-engine/{args.platform}-release' / name)
+    copy(engine / 'libflutter_engine.so', runtime / f'prebuilt/flutter-engine/{args.platform}-release/libflutter_engine.so')
+    generation = re.search(r'FLUTTER_ENGINE_ABI: &str = "([^"]+)"',
+                           (root / 'compositor/src/lib.rs').read_text()).group(1)
+    identity = {
+        'schema': 1, 'flutter_generation': generation,
+        'required_native_capabilities': ['pluginActionsV1'],
+        'source_revision': args.source_revision or subprocess.check_output(
+            ['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip(),
+        'engine_source_lock_sha256': digest(root / 'prebuilt/flutter-engine/SOURCE_LOCK.json'),
+        'source_sha256': hashlib.sha256(json.dumps({
+            str(file.relative_to(runtime)): digest(file)
+            for file in sorted(runtime.rglob('*')) if file.is_file()
+        }, sort_keys=True).encode()).hexdigest(),
+    }
+    (runtime / '.denial-ui-source.json').write_text(json.dumps(identity, indent=2) + '\n')
+    sdk = output / 'flutter'
+    dart_version = (flutter / 'bin/cache/dart-sdk/version').read_text().strip()
+    dart_major, dart_minor, *_ = map(int, dart_version.split('.')[:3])
+    dart_constraint = f'>={dart_major}.{dart_minor}.0 <{dart_major + 1}.0.0'
+    for path in ['AUTHORS', 'LICENSE', 'PATENT_GRANT', 'bin/internal',
+                 'bin/cache/artifacts/material_fonts',
+                 'packages/flutter/lib', 'packages/flutter/pubspec.yaml', 'packages/flutter/LICENSE',
+                 'packages/flutter_localizations/lib', 'packages/flutter_localizations/pubspec.yaml',
+                 'packages/flutter_test/lib', 'packages/flutter_test/pubspec.yaml',
+                 'packages/flutter_tools/bin', 'packages/flutter_tools/lib',
+                 'packages/flutter_tools/templates', 'packages/flutter_tools/static',
+                 'packages/flutter_tools/pubspec.yaml']:
+        copy(flutter / path, sdk / path)
+    for package in ['sky_engine', 'flutter_gpu']:
+        # Analysis must see Denial's dart:ui additions, not the upstream SDK's
+        # cached declarations. These are generated by the locked release build.
+        if package == 'sky_engine':
+            package_source = engine / 'gen/dart-pkg' / package
+        else:
+            package_source = flutter / 'bin/cache/pkg' / package
+            if not package_source.exists() and args.engine_source_root is not None:
+                package_source = args.engine_source_root.resolve() / 'src/flutter/lib/gpu'
+        if not package_source.exists():
+            parser.error(f'Flutter SDK package is missing: {package}')
+        copy(package_source, sdk / 'bin/cache/pkg' / package)
+    # Android tooling is not required for release Linux shell compilation.
+    if (flutter / 'bin/cache/artifacts/gradle_wrapper').exists():
+        copy(flutter / 'bin/cache/artifacts/gradle_wrapper',
+             sdk / 'bin/cache/artifacts/gradle_wrapper')
+    for file in (flutter / 'bin/cache').iterdir():
+        if file.is_file() and (file.suffix in ['.stamp', '.json'] or file.name == 'engine.realm'):
+            copy(file, sdk / 'bin/cache' / file.name)
+    # Nixpkgs gives its immutable Flutter wrapper a synthetic framework
+    # revision. The explicit packager attestation above ties that wrapper to
+    # SOURCE_LOCK.json; publish the actual revision in the relocatable kit so
+    # every later plugin plan and build can verify it normally.
+    version['frameworkRevision'] = locked_flutter_revision
+    version['repositoryUrl'] = lock['flutter']['repository']
+    version_target = sdk / 'bin/cache/flutter.version.json'
+    version_replacement = version_target.with_suffix('.json.new')
+    version_replacement.write_text(json.dumps(version, indent=2) + '\n')
+    version_replacement.replace(version_target)
+    # Vendor a relative package configuration, then compile the tool once. Running
+    # flutter_tools.dart directly recompiles the entire tool on every Pub/version
+    # invocation, which dominates otherwise cached plugin changes.
+    config_path = flutter / 'packages/flutter_tools/.dart_tool/package_config.json'
+    config = json.loads(config_path.read_text())
+    for package in config['packages']:
+        source = Path(unquote(urlparse(urljoin(config_path.as_uri(), package['rootUri'])).path))
+        target = sdk / 'packages/flutter_tools' if package['name'] == 'flutter_tools' else output / 'tool-packages' / package['name']
+        if package['name'] != 'flutter_tools':
+            copy(source, target, omit_development=True)
+        package['rootUri'] = os.path.relpath(target, sdk / 'packages/flutter_tools/.dart_tool') + '/'
+    config.pop('pubCache', None)
+    config.pop('flutterRoot', None)
+    target_config = sdk / 'packages/flutter_tools/.dart_tool/package_config.json'
+    target_config.parent.mkdir(parents=True)
+    target_config.write_text(json.dumps(config, indent=2) + '\n')
+    subprocess.run([
+        str(flutter / 'bin/cache/dart-sdk/bin/dart'),
+        '--snapshot-kind=kernel',
+        f'--snapshot={sdk / "bin/cache/flutter_tools.snapshot"}',
+        f'--packages={target_config}',
+        str(sdk / 'packages/flutter_tools/bin/flutter_tools.dart'),
+    ], check=True)
+    # The snapshot now contains dependency code. Flutter only needs each root's
+    # pubspec for its cache self-check; retaining sources would add tens of MiB.
+    for package in (output / 'tool-packages').iterdir():
+        prune_compiled_tool_dependency(package)
+    wrapper = sdk / 'bin/flutter'
+    wrapper.write_text(f'''#!/bin/sh
+set -eu
+FLUTTER_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+export FLUTTER_ROOT
+exec "$FLUTTER_ROOT/bin/cache/dart-sdk/bin/dart" \\
+  --packages="$FLUTTER_ROOT/packages/flutter_tools/.dart_tool/package_config.json" \\
+  "$FLUTTER_ROOT/bin/cache/flutter_tools.snapshot" \\
+  --local-engine-src-path="$FLUTTER_ROOT/../engine" \\
+  --local-engine={args.engine_target} --local-engine-host={args.engine_target} "$@"
+''')
+    wrapper.chmod(0o755)
+    target_engine = output / 'engine/out' / args.engine_target
+    for path in ['gen_snapshot', 'font-subset', 'impellerc', 'icudtl.dat',
+                 'flutter_patched_sdk', 'flutter_linux', 'libflutter_linux_gtk.so',
+                 'shader_lib', 'gen/const_finder.dart.snapshot']:
+        copy(engine / path, target_engine / path)
+    (target_engine / 'libflutter_engine.so').symlink_to(
+        f'../../../runtime/prebuilt/flutter-engine/{args.platform}-release/libflutter_engine.so')
+    # Local-engine shader lookup and static analysis also consult Flutter cache.
+    # Keep one immutable copy of these compiler inputs and link the cache view to
+    # it; the complete kit is copied as a unit into each user's writable cache.
+    for path in ['shader_lib', 'font-subset', 'impellerc', 'icudtl.dat']:
+        link(target_engine / path,
+             sdk / f'bin/cache/artifacts/engine/{args.platform}' / path)
+    link(target_engine / 'gen/const_finder.dart.snapshot',
+         sdk / f'bin/cache/artifacts/engine/{args.platform}/const_finder.dart.snapshot')
+    # Fingerprint the entire shipped input set, including dirty development inputs.
+    files = {str(file.relative_to(output)): digest(file)
+             for file in sorted(output.rglob('*')) if file.is_file() and not file.is_symlink()}
+    links = {str(file.relative_to(output)): os.readlink(file)
+             for file in sorted(output.rglob('*')) if file.is_symlink()}
+    manifest = {'schema': 1, 'platform': args.platform, 'engineTarget': args.engine_target,
+                'dartVersion': dart_version,
+                'dartConstraint': dart_constraint,
+                'identity': identity, 'files': files, 'links': links}
+    encoded = json.dumps(manifest, sort_keys=True, indent=2) + '\n'
+    (output / 'kit.json').write_text(encoded)
+    print(f'Prepared plugin build inputs at {output} ({hashlib.sha256(encoded.encode()).hexdigest()})')
+
+
+if __name__ == '__main__':
+    main()

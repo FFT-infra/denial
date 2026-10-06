@@ -3,6 +3,8 @@
 use smithay::backend::input::ButtonState;
 use smithay::desktop::Window;
 use smithay::input::Seat;
+#[cfg(feature = "xwayland")]
+use smithay::input::pointer::PointerHandle;
 use smithay::input::pointer::{
     AxisFrame, ButtonEvent, GestureHoldBeginEvent, GestureHoldEndEvent, GesturePinchBeginEvent,
     GesturePinchEndEvent, GesturePinchUpdateEvent, GestureSwipeBeginEvent, GestureSwipeEndEvent,
@@ -208,6 +210,29 @@ pub(super) fn checked_pointer_grab(
         .then_some(start_data)
 }
 
+/// Whether `pointer` already drives an interactive move or resize of `window`.
+///
+/// Chromium-based X11 clients such as Steam can send `_NET_WM_MOVERESIZE`
+/// twice for one press. Replacing the active grab would end its placement
+/// transaction, which leaves Flutter painting the window at its pre-drag
+/// position until release, and would restart the delta from the original
+/// press with an already-moved origin.
+#[cfg(feature = "xwayland")]
+pub(super) fn pointer_grab_drives_window(
+    pointer: &PointerHandle<RuntimeState>,
+    window: &Window,
+) -> bool {
+    pointer
+        .with_grab(|_, grab| {
+            grab.downcast_ref::<MoveSurfaceGrab>()
+                .is_some_and(|grab| &grab.window == window)
+                || grab
+                    .downcast_ref::<ResizeSurfaceGrab>()
+                    .is_some_and(|grab| &grab.window == window)
+        })
+        .unwrap_or(false)
+}
+
 fn window_is_mapped(data: &RuntimeState, window: &Window) -> bool {
     let Some(frontend) = data.wayland.as_ref() else {
         return false;
@@ -376,7 +401,7 @@ pub(super) struct TileMoveGrab {
     last_geometry: Rectangle<i32, Logical>,
     last_pointer_location: Point<f64, Logical>,
     preview_target: Option<LayoutDropTarget>,
-    preview_windows: Vec<Window>,
+    preview: LayoutPreviewSet,
 }
 
 #[cfg(feature = "flutter")]
@@ -394,7 +419,7 @@ impl TileMoveGrab {
             last_geometry: initial_geometry,
             last_pointer_location,
             preview_target: None,
-            preview_windows: Vec::new(),
+            preview: LayoutPreviewSet::default(),
         }
     }
 
@@ -412,37 +437,54 @@ impl TileMoveGrab {
                     .layout_drop_preview(&self.window, target)
             })
             .unwrap_or_default();
-        let previous = std::mem::take(&mut self.preview_windows);
+        self.preview.publish(data, planned, None);
+        self.preview_target = target;
+    }
 
+    fn clear_preview(&mut self, data: &mut RuntimeState) {
+        self.preview_target = None;
+        self.preview.clear(data);
+    }
+}
+
+/// Windows speculatively configured for one planned layout drop.
+///
+/// SUPER+drag and overview drops publish the same transient transaction:
+/// affected tiles begin or update toward their planned rectangles, and tiles
+/// that are no longer affected end at their authoritative layout geometry.
+#[cfg(feature = "flutter")]
+#[derive(Default)]
+pub(super) struct LayoutPreviewSet {
+    windows: Vec<Window>,
+}
+
+#[cfg(feature = "flutter")]
+impl LayoutPreviewSet {
+    /// `dragged` is reported without a speculative configure. Its drag
+    /// presents it; the planned rectangle only marks where it will land.
+    pub(super) fn publish(
+        &mut self,
+        data: &mut RuntimeState,
+        planned: Vec<(Window, Rectangle<i32, Logical>)>,
+        dragged: Option<&Window>,
+    ) {
+        let previous = std::mem::take(&mut self.windows);
         for window in &previous {
             if planned.iter().any(|(candidate, _)| candidate == window)
                 || !window_is_mapped(data, window)
             {
                 continue;
             }
-            let geometry = data
-                .wayland
-                .as_ref()
-                .expect("missing Wayland frontend")
-                .window_geometry_target(window);
-            data.wayland
-                .as_mut()
-                .expect("missing Wayland frontend")
-                .finish_window_layout_preview(window);
-            super::wayland_frontend::queue_transient_window_placement(
-                data,
-                window,
-                geometry,
-                WindowPlacementPhase::End,
-                WindowPlacementChange::LayoutPreview,
-            );
+            end_layout_preview(data, window);
         }
         for (window, geometry) in planned {
             let continuing = previous.iter().any(|candidate| candidate == &window);
-            data.wayland
-                .as_mut()
-                .expect("missing Wayland frontend")
-                .update_window_layout_preview(&window, geometry.size);
+            if dragged != Some(&window) {
+                data.wayland
+                    .as_mut()
+                    .expect("missing Wayland frontend")
+                    .update_window_layout_preview(&window, geometry.size);
+            }
             super::wayland_frontend::queue_transient_window_placement(
                 data,
                 &window,
@@ -454,34 +496,37 @@ impl TileMoveGrab {
                 },
                 WindowPlacementChange::LayoutPreview,
             );
-            self.preview_windows.push(window);
+            self.windows.push(window);
         }
-        self.preview_target = target;
     }
 
-    fn clear_preview(&mut self, data: &mut RuntimeState) {
-        self.preview_target = None;
-        for window in std::mem::take(&mut self.preview_windows) {
+    pub(super) fn clear(&mut self, data: &mut RuntimeState) {
+        for window in std::mem::take(&mut self.windows) {
             if window_is_mapped(data, &window) {
-                let geometry = data
-                    .wayland
-                    .as_ref()
-                    .expect("missing Wayland frontend")
-                    .window_geometry_target(&window);
-                data.wayland
-                    .as_mut()
-                    .expect("missing Wayland frontend")
-                    .finish_window_layout_preview(&window);
-                super::wayland_frontend::queue_transient_window_placement(
-                    data,
-                    &window,
-                    geometry,
-                    WindowPlacementPhase::End,
-                    WindowPlacementChange::LayoutPreview,
-                );
+                end_layout_preview(data, &window);
             }
         }
     }
+}
+
+#[cfg(feature = "flutter")]
+fn end_layout_preview(data: &mut RuntimeState, window: &Window) {
+    let geometry = data
+        .wayland
+        .as_ref()
+        .expect("missing Wayland frontend")
+        .window_geometry_target(window);
+    data.wayland
+        .as_mut()
+        .expect("missing Wayland frontend")
+        .finish_window_layout_preview(window);
+    super::wayland_frontend::queue_transient_window_placement(
+        data,
+        window,
+        geometry,
+        WindowPlacementPhase::End,
+        WindowPlacementChange::LayoutPreview,
+    );
 }
 
 #[cfg(feature = "flutter")]

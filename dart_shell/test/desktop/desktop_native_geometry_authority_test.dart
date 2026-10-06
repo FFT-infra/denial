@@ -1,7 +1,6 @@
-import 'package:denial_dart_shell/src/desktop/desktop_workspace.dart';
-import 'package:denial_dart_shell/src/models/denial_window.dart';
-import 'package:denial_dart_shell/src/models/denial_window_event.dart';
-import 'package:denial_dart_shell/src/settings/shell_settings.dart';
+import 'package:denial_desktop/src/desktop/desktop_workspace.dart';
+import 'package:denial_flutter_sdk/models.dart';
+import 'package:denial_flutter_sdk/settings.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -48,6 +47,49 @@ DenialWindow nativeWindow({
 }
 
 void main() {
+  test('placement events retain immutable prior workspace snapshots', () {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    final workspace = container.read(desktopWorkspaceProvider.notifier);
+    final window = nativeWindow(
+      objectKind: 'xdg',
+      geometry: const Rect.fromLTWH(100, 80, 900, 700),
+      fullscreen: false,
+    );
+    workspace.syncWindows(
+      [window],
+      const Size(1920, 1080),
+      1,
+      snapshotSequence: 1,
+    );
+    final before = container.read(desktopWorkspaceProvider);
+    final original = before.placements[window.objectId]!;
+    expect(
+      workspace.applyNativePlacement(
+        window.objectId,
+        DenialWindowPlacementEvent(
+          sequence: 2,
+          windowId: window.windowId,
+          contentRect: const Rect.fromLTWH(100, 80, 1000, 750),
+          monitorId: 1,
+          workspaceId: 1,
+          phase: DenialWindowPlacementPhase.update,
+          change: DenialWindowPlacementChange.resize,
+        ),
+      ),
+      isTrue,
+    );
+    final after = container.read(desktopWorkspaceProvider);
+    expect(identical(before.placements[window.objectId], original), isTrue);
+    expect(
+      after.placements[window.objectId]!.contentRect,
+      const Rect.fromLTWH(100, 80, 1000, 750),
+    );
+    expect(after.inputLayoutRevision, before.inputLayoutRevision + 1);
+    expect(() => after.placements.clear(), throwsUnsupportedError);
+    expect(identical(after.activeWorkspaces, before.activeWorkspaces), isTrue);
+  });
+
   for (final objectKind in <String>['xdg', 'x11']) {
     test(
       '$objectKind startup-fullscreen action cannot block a later layout split',
@@ -280,45 +322,48 @@ void main() {
     expect(placement.drawsLiveServerFrame, isTrue);
   });
 
-  test('late layout restore rebases a replacement runtime from native geometry', () {
-    final container = ProviderContainer();
-    addTearDown(container.dispose);
-    final workspace = container.read(desktopWorkspaceProvider.notifier);
-    const content = Rect.fromLTWH(9, 41, 1902, 1030);
-    final window = nativeWindow(
-      objectKind: 'xdg',
-      geometry: content,
-      fullscreen: false,
-      maximized: true,
-    );
+  test(
+    'late layout restore rebases a replacement runtime from native geometry',
+    () {
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      final workspace = container.read(desktopWorkspaceProvider.notifier);
+      const content = Rect.fromLTWH(9, 41, 1902, 1030);
+      final window = nativeWindow(
+        objectKind: 'xdg',
+        geometry: content,
+        fullscreen: false,
+        maximized: true,
+      );
 
-    // A replacement Dart isolate can receive the scene snapshot before the
-    // persisted tiling setting. Its initial default is stacking.
-    workspace.syncWindows(
-      <DenialWindow>[window],
-      const Size(1920, 1080),
-      1,
-      snapshotSequence: 27,
-    );
-    expect(
-      container.read(desktopWorkspaceProvider).placements[7]!.frame,
-      content,
-    );
+      // A replacement Dart isolate can receive the scene snapshot before the
+      // persisted tiling setting. Its initial default is stacking.
+      workspace.syncWindows(
+        <DenialWindow>[window],
+        const Size(1920, 1080),
+        1,
+        snapshotSequence: 27,
+      );
+      expect(
+        container.read(desktopWorkspaceProvider).placements[7]!.frame,
+        content,
+      );
 
-    // Loading settings does not produce another native scene revision. The
-    // same snapshot must still be reinterpreted with managed-layout framing.
-    workspace.syncWindows(
-      <DenialWindow>[window],
-      const Size(1920, 1080),
-      1,
-      snapshotSequence: 27,
-      windowLayout: DesktopWindowLayout.dwindle,
-    );
-    final placement = container.read(desktopWorkspaceProvider).placements[7]!;
-    expect(placement.frame, const Rect.fromLTWH(8, 40, 1904, 1032));
-    expect(placement.contentRect, content);
-    expect(placement.serverFrameWhileMaximized, isTrue);
-  });
+      // Loading settings does not produce another native scene revision. The
+      // same snapshot must still be reinterpreted with managed-layout framing.
+      workspace.syncWindows(
+        <DenialWindow>[window],
+        const Size(1920, 1080),
+        1,
+        snapshotSequence: 27,
+        windowLayout: DesktopWindowLayout.dwindle,
+      );
+      final placement = container.read(desktopWorkspaceProvider).placements[7]!;
+      expect(placement.frame, const Rect.fromLTWH(8, 40, 1904, 1032));
+      expect(placement.contentRect, content);
+      expect(placement.serverFrameWhileMaximized, isTrue);
+    },
+  );
 
   test('local maximize-fullscreen-maximize-restore is reversible', () {
     final container = ProviderContainer();

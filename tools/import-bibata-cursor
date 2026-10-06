@@ -3,8 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
-DESTINATION="$ROOT/dart_shell/assets/cursors/bibata_modern_ice"
-MANIFEST="$ROOT/dart_shell/assets/cursors/bibata_modern_ice.sha256"
+DESTINATION="$ROOT/packages/denial_flutter_sdk/assets/cursors/bibata_modern_ice"
+MANIFEST="$ROOT/packages/denial_flutter_sdk/assets/cursors/bibata_modern_ice.sha256"
 
 LINUX_SHA256='a68cae60c4dc706350e194ebc91c5fe48bc7bc9d59e119555834a2a7ee5078ef'
 WINDOWS_SHA256='0045e40324da5b540b3bee260f53d0792df62be9cdef91655a024ae9f151bd04'
@@ -152,7 +152,7 @@ install -d -- "$(dirname -- "$DESTINATION")"
 cp -a -- "$WORK/stage" "$DESTINATION"
 (
   cd "$ROOT"
-  find dart_shell/assets/cursors/bibata_modern_ice \
+  find packages/denial_flutter_sdk/assets/cursors/bibata_modern_ice \
     -type f \
     -name '*.png' \
     -print0 \

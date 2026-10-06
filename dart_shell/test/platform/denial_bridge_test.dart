@@ -1,23 +1,112 @@
 import 'dart:typed_data';
 
-import 'package:denial_dart_shell/src/models/denial_cursor_state.dart';
-import 'package:denial_dart_shell/src/models/power_button_action.dart';
-import 'package:denial_dart_shell/src/models/suspend_mode.dart';
-import 'package:denial_dart_shell/src/platform/denial_bridge.dart';
-import 'package:denial_dart_shell/src/platform/denial_wire.dart' as wire;
+import 'package:denial_flutter_sdk/models.dart';
+import 'package:denial_flutter_sdk/platform.dart';
+import 'package:denial_flutter_sdk/state.dart';
+import 'package:denial_flutter_sdk/wire.dart' as wire;
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   test(
+    'shared bridge receives replies without the window controller',
+    () async {
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMessageHandler(wire.denialWireToNativeChannel, (
+        data,
+      ) async {
+        final request = wire.Envelope(
+          data!.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+        );
+        final reply = wire.EnvelopeObjectBuilder(
+          protocolVersion: 1,
+          sequence: 1,
+          requestId: request.requestId,
+          payloadType: wire.PayloadTypeId.SettingsResponse,
+          payload: wire.SettingsResponseObjectBuilder(
+            kind: wire.SettingsResponseKind.Document,
+            success: true,
+            revision: 7,
+            document: '{"version":28}',
+          ),
+        ).toBytes('DENW');
+        await messenger.handlePlatformMessage(
+          wire.denialWireToFlutterChannel,
+          ByteData.sublistView(reply),
+          null,
+        );
+        return null;
+      });
+      final container = ProviderContainer();
+      try {
+        final bridge = container.read(denialBridgeProvider);
+        final settings = await bridge.readSettingsDocument();
+        expect(settings.revision, 7);
+        expect(settings.json, '{"version":28}');
+        expect(container.exists(shellControllerProvider), isFalse);
+      } finally {
+        container.dispose();
+        messenger.setMockMessageHandler(wire.denialWireToNativeChannel, null);
+      }
+    },
+  );
+
+  for (final hasPendingRead in [false, true]) {
+    test(
+      'audio listener reads wait for a new response ($hasPendingRead)',
+      () async {
+        final messenger =
+            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+        messenger.setMockMessageHandler('denial/audio', (_) async => null);
+        final bridge = DenialBridge();
+        final states = <DenialAudioState>[];
+        Future<double?>? listenerRead;
+        var listenerReadCompleted = false;
+        final subscription = bridge.audioStates.listen((state) {
+          states.add(state);
+          listenerRead ??= bridge.readAudioLevel().then((value) {
+            listenerReadCompleted = true;
+            return value;
+          });
+        });
+        try {
+          final initialRead = hasPendingRead ? bridge.readAudioLevel() : null;
+          await messenger.handlePlatformMessage(
+            'denial/audio_state',
+            ByteData(1)..setUint8(0, 25),
+            null,
+          );
+          await Future<void>.delayed(Duration.zero);
+          if (initialRead != null) expect(await initialRead, 0.25);
+          expect(states.single.completesRead, hasPendingRead);
+          expect(listenerReadCompleted, isFalse);
+
+          await messenger.handlePlatformMessage(
+            'denial/audio_state',
+            ByteData(1)..setUint8(0, 75),
+            null,
+          );
+          expect(await listenerRead, 0.75);
+          expect(states.last.completesRead, isTrue);
+        } finally {
+          await subscription.cancel();
+          bridge.dispose();
+          messenger.setMockMessageHandler('denial/audio', null);
+        }
+      },
+    );
+  }
+
+  test(
     'atomic client cursor surface state crosses the native bridge',
     () async {
       final messenger =
           TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-      final bridge = DenialBridge()
-        ..start(onWindowsChanged: () {}, onWindowActivated: (_) {});
+      final bridge = DenialBridge();
       final states = <DenialCursorState>[];
       final subscription = bridge.cursorStates.listen(states.add);
 

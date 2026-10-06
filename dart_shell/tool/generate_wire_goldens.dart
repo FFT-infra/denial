@@ -16,9 +16,8 @@ void main() {
     };
     File('${output.path}/dart_input_$label.denw').writeAsBytesSync(bytes);
   }
-  File(
-    '${output.path}/dart_system_bar.denw',
-  ).writeAsBytesSync(_systemBarConfiguration());
+  File('${output.path}/dart_system_bar.denw')
+      .writeAsBytesSync(_systemBarConfiguration());
 }
 
 List<int> _systemBarConfiguration() {

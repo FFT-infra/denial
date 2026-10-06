@@ -62,6 +62,25 @@ Zypper repository or GitHub Release binary. Build the package pair with
 See the [openSUSE package guide](../packaging/opensuse/README.md) for the build
 requirements, output path, and command.
 
+## Optional Plugin Manager
+
+The Plugin Manager, its backend, and the release compiler kit are distributed as
+the separate `denial-plugin-manager` package. It is not part of the Denial desktop
+package. Install the matching package when you want to discover, install, or
+develop plugins. On Arch Linux, CachyOS, and Omarchy the package also installs its
+`dart` dependency:
+
+```sh
+sudo pacman -S denial-plugin-manager
+```
+
+Other package formats keep Dart external where no simple native dependency is
+available. Plugins checks `PATH` and tells the user to install the required Dart
+version before it prepares a compiler cache. NixOS users can set
+`programs.denial.plugins.enable = true`; the Nix package supplies its exact Dart
+derivation automatically. The complete authoring and installation workflow is in
+[Developing Denial plugins](PLUGIN_DEVELOPMENT.md).
+
 ### Alpine Linux 3.24
 
 Alpine is currently a direct-download lane rather than a native APK

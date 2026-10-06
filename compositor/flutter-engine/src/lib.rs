@@ -84,10 +84,28 @@ pub struct RenderOutput {
     pub source_to_target_transform: RenderOutputTransform,
 }
 
+/// Denial's private raw-embedder extension; this is intentionally kept out of
+/// the bindings generated from Flutter's pristine upstream `embedder.h`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+struct DenialFlutterRenderOutput {
+    struct_size: usize,
+    render_view_id: i64,
+    configuration_generation: u64,
+    source_physical_x: f64,
+    source_physical_y: f64,
+    source_physical_width: f64,
+    source_physical_height: f64,
+    target_width: usize,
+    target_height: usize,
+    scale_120: u32,
+    source_to_target_transform: sys::FlutterTransformation,
+}
+
 impl RenderOutput {
-    fn as_ffi(self) -> sys::DenialFlutterRenderOutput {
-        sys::DenialFlutterRenderOutput {
-            struct_size: mem::size_of::<sys::DenialFlutterRenderOutput>(),
+    fn as_ffi(self) -> DenialFlutterRenderOutput {
+        DenialFlutterRenderOutput {
+            struct_size: mem::size_of::<DenialFlutterRenderOutput>(),
             render_view_id: self.render_view_id,
             configuration_generation: self.configuration_generation,
             source_physical_x: self.source_physical_x,
@@ -104,7 +122,7 @@ impl RenderOutput {
 
 #[derive(Debug, Default)]
 pub struct RenderOutputFfiScratch {
-    outputs: Vec<sys::DenialFlutterRenderOutput>,
+    outputs: Vec<DenialFlutterRenderOutput>,
 }
 
 impl RenderOutputFfiScratch {
@@ -207,7 +225,7 @@ pub struct EngineLibrary {
     table: sys::FlutterEngineProcTable,
     set_render_outputs: unsafe extern "C" fn(
         sys::FlutterEngine,
-        *const sys::DenialFlutterRenderOutput,
+        *const DenialFlutterRenderOutput,
         usize,
     ) -> sys::FlutterEngineResult,
     request_frame_for_external_textures:
@@ -292,7 +310,7 @@ impl EngineLibrary {
         };
         type SetRenderOutputs = unsafe extern "C" fn(
             sys::FlutterEngine,
-            *const sys::DenialFlutterRenderOutput,
+            *const DenialFlutterRenderOutput,
             usize,
         ) -> sys::FlutterEngineResult;
         // SAFETY: this Denial-specific symbol is declared by the versioned

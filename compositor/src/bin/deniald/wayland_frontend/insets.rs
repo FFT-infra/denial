@@ -230,16 +230,27 @@ impl WaylandFrontend {
             }
         }
         let root = &mut layers[root_index];
-        let presentation = denial_flutter_engine::ExternalTexturePresentation {
-            struct_size: std::mem::size_of::<denial_flutter_engine::ExternalTexturePresentation>(),
-            width,
-            height,
-            source: [
+        let root_texture = textures
+            .iter_mut()
+            .find(|texture| texture.texture_id == root_id as i64);
+        // A cropped root is published in canvas coordinates; this presentation
+        // replaces that canvas, so address the original buffer directly.
+        let source = super::surface_pipeline::canvas_rect_to_buffer(
+            root_texture
+                .as_ref()
+                .and_then(|texture| texture.presentation.as_ref()),
+            [
                 root.texture_source_x,
                 root.texture_source_y,
                 root.texture_source_width,
                 root.texture_source_height,
             ],
+        );
+        let presentation = denial_flutter_engine::ExternalTexturePresentation {
+            struct_size: std::mem::size_of::<denial_flutter_engine::ExternalTexturePresentation>(),
+            width,
+            height,
+            source,
             destination: [
                 (root.surface_x - f64::from(frame.loc.x)) * sx,
                 (root.surface_y - f64::from(frame.loc.y)) * sy,
@@ -250,10 +261,7 @@ impl WaylandFrontend {
             // The engine samples the current app image; black is the empty-source fallback.
             background_argb: 0xff000000,
         };
-        if let Some(texture) = textures
-            .iter_mut()
-            .find(|texture| texture.texture_id == root_id as i64)
-        {
+        if let Some(texture) = root_texture {
             texture.presentation = Some(presentation);
         }
         root.width = width as u32;

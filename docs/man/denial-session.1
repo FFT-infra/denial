@@ -52,7 +52,6 @@ Root-owned shell-compatible machine configuration. Supported overrides include
 .BR DENIAL_DRM_DEVICE ,
 .BR DENIAL_RENDER_DEVICE ,
 .BR DENIAL_SHELL_PROFILE ,
-.BR DENIAL_FLUTTER_RENDERER ,
 .BR LIBGL_ALWAYS_SOFTWARE ,
 .BR QT_QPA_PLATFORMTHEME ,
 and
@@ -137,6 +136,9 @@ available.
 Zero indicates that validation succeeded or that the compositor exited
 normally. Installation, configuration, device-discovery, and compositor
 failures return nonzero.
+For an actual session launch, status 1 is reported as status 2 so SDDM treats
+the failure as an ended session and restarts its greeter. The original status
+is recorded in the session log. Validation commands retain their exit status.
 .SH SEE ALSO
 .BR deniald (1),
 .BR denialctl (1)

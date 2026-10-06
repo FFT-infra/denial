@@ -181,6 +181,26 @@ pub struct FlutterRuntimeFactory {
 }
 
 impl FlutterRuntimeFactory {
+    pub(super) fn bundle(&self) -> &Path {
+        &self.bundle
+    }
+
+    pub(super) fn with_engine(
+        bundle: &Path,
+        engine_bundle: &Path,
+        runtime: DartRuntimeMode,
+        renderer_backend: RendererBackend,
+    ) -> Result<Self, Box<dyn Error>> {
+        let mut project = project_from_bundle(bundle, runtime, renderer_backend)?;
+        let official = project_from_bundle(engine_bundle, DartRuntimeMode::Aot, renderer_backend)?;
+        project.engine_library = official.engine_library;
+        let library = Arc::new(EngineLibrary::load(&project.engine_library)?);
+        Ok(Self {
+            bundle: bundle.to_owned(),
+            project,
+            library,
+        })
+    }
     pub fn new(
         bundle: &Path,
         runtime: DartRuntimeMode,
@@ -537,6 +557,7 @@ pub struct FlutterRuntime {
     fingerprint_scene: fingerprint_scene::FingerprintScene,
     published_text_input_state: Option<(bool, bool, bool, u32, u32, u64)>,
     frame_ready_observed: bool,
+    first_frame_received: bool,
     last_pointer_timestamp_micros: usize,
 }
 
@@ -575,6 +596,12 @@ fn encode_key_event(event: KeyboardRecord, output: &mut Vec<u8>) {
             event.modifiers, event.unicode,
         )
         .expect("writing JSON into a Vec cannot fail");
+    }
+}
+
+impl FlutterRuntime {
+    pub(super) fn has_produced_frame(&self) -> bool {
+        self.first_frame_received
     }
 }
 

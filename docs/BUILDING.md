@@ -46,12 +46,45 @@ Xwayland implementation and `x11rb` are absent from the resolved build graph.
 A normal binary can instead disable only server startup for one invocation
 with `deniald --no-xwayland`.
 
+Validate the Dart-only plugin SDK without building a Flutter development engine:
+
+```sh
+tools/denial-pc sdk-test
+```
+
+This checks formatting, analysis, and SDK tests with the pinned Dart toolchain.
+It is also included in `tools/denial-pc test` and branch validation.
+
+The Dart suite focuses on wire compatibility, authentication, power actions,
+persistence, plugin composition/build/activation, and native geometry authority.
+Widget appearance, layout, animation, and per-feature smoke tests are omitted.
+
+Check the Flutter-facing SDK and first-party plugins without building a
+development engine:
+
+```sh
+tools/denial-pc plugin-check
+```
+
+This resolves each package's locked dependencies and checks formatting and static
+analysis. The normal release bundle build compiles their shell integration.
+It is also included in `tools/denial-pc test` and branch validation.
+
+The default composition selects the built-in top bar. Taskbar is a development
+dependency for alternative-composition validation, resolved from the locked
+[`denialwm/denial-plugins`](https://github.com/denialwm/denial-plugins)
+collection at `plugins/denial_taskbar`. Pub records its exact Git commit in
+`dart_shell/pubspec.lock`; no adjacent checkout is required. UI development
+snapshots and Nix sources vendor
+that package into `plugins/denial_taskbar` so their offline builds remain
+self-contained. The flake pins the same collection commit as an explicit input.
+
 Run only the lock-matched Flutter shell tests, optionally forwarding a test
 path or other `flutter test` arguments:
 
 ```sh
 tools/denial-pc flutter-test
-tools/denial-pc flutter-test test/settings/settings_application_test.dart
+tools/denial-pc flutter-test test/platform/denial_wire_test.dart
 ```
 
 The release compositor is written to:
@@ -87,13 +120,13 @@ Set `DENIAL_PC_DEPENDENCY_ROOT`, `DENIAL_PC_BUILD_ROOT`, or
 
 The current development generation couples:
 
-- Flutter `3.44.7`;
+- Flutter `3.47.5`;
 - the exact Denial Flutter and Skia fork commits in
   `prebuilt/flutter-engine/SOURCE_LOCK.json`;
 - upstream Flutter compatibility revision
-  `84fc5cbb223bc12f83d65b647ff8a56caf779ffd`;
-- Dart `3.12.2`;
-- engine artifact revision `69c8c61792f04cc809dfef0c910414fb9afc06cd`;
+  `6a19cca56475dbfba1478ee68d7bd0c2ef891da1`;
+- Dart `3.13.4`;
+- engine artifact revision `af7e796e161ae0bb1ff0758c71a7105418bd9ded`;
 - the generated Rust embedder ABI in
   `compositor/flutter-engine/src/sys.rs`.
 
@@ -188,13 +221,15 @@ scheduling when neither grant is available.
 
 ## Local Arch package prototype
 
-Build the two required Stage 1 packages with:
+Build the two required runtime packages and the optional Plugin Manager package
+with:
 
 ```sh
 tools/denial-pc arch-package
 ```
 
-This produces `denial-flutter-engine` and `denial` below:
+This produces `denial-flutter-engine`, `denial`, and
+`denial-plugin-manager` below:
 
 ```text
 $XDG_CACHE_HOME/denial/pc-build/packages/
@@ -220,17 +255,18 @@ compiled payloads to tag-derived package metadata, signs them, and publishes
 them without compiling again. Stage 2 later adds offline input closure. See the
 [branch validation boundary](packaging/arch/BRANCH_VALIDATION.md).
 
-Live Flutter UI editing is deliberately split into a third, optional package.
-After the pinned debug and profile engines described under
-`prebuilt/flutter-engine/` have been rebuilt and staged, create and validate
-it with the repository's Rust task:
+Live Flutter UI editing remains split into another optional package. Debug
+and profile engines are excluded from the routine build and release path. The
+legacy package can only be refreshed after an explicitly requested engine
+build with `DENIAL_FLUTTER_ENGINE_DEVELOPMENT_MODES=1`; then create and
+validate it with the repository's Rust task:
 
 ```sh
 cargo xtask ui-development-package
 ```
 
-The resulting `denial-ui-development` archive is written beside the two
-required packages. It contains the coupled JIT engine, optimized AOT profile
+The resulting legacy `denial-ui-development` archive is written beside the
+release packages. It contains the coupled JIT engine, optimized AOT profile
 engine, curated Dart and Flutter runtime needed for shell assembly and editor
 attach, matching browser DevTools assets needed for Inspector and performance
 profiling, locked dependency sources needed by Denial's shell, a

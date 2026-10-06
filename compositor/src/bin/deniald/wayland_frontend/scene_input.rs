@@ -77,6 +77,7 @@ impl WaylandFrontend {
 
     #[cfg(feature = "flutter")]
     pub(super) fn queue_cursor_state_for_flutter_generation(&mut self) {
+        self.pending_drag_icon = true;
         self.published_cursor_state = None;
         if !self.pointer_cursor_visible {
             self.pending_cursor_state = Some(CursorPublication::Hidden);
@@ -356,6 +357,21 @@ impl WaylandFrontend {
                     surface,
                     callback_millis,
                 ));
+            }
+        }
+        if cursor_frame_callback_matches(self.cursor_output, tick.output) {
+            let pending = std::mem::take(&mut self.pending_drag_frame_callback_roots);
+            for root_id in pending {
+                if let Some(surface) = self
+                    .surface_ids
+                    .get(&root_id)
+                    .and_then(|id| self.surfaces_by_id.get(id))
+                {
+                    sent = sent.saturating_add(presentation::send_surface_frame_callbacks(
+                        surface,
+                        callback_millis,
+                    ));
+                }
             }
         }
         if !self.pending_input_method_frame_callbacks.is_empty() {

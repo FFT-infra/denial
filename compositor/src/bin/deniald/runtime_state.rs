@@ -68,6 +68,7 @@ pub(super) struct RuntimeState {
     pub(super) pending_unpublished_window_events: PendingWindowEventQueue,
     #[cfg(feature = "flutter")]
     pub(super) pending_shell_actions: VecDeque<PendingShellAction>,
+    pub(super) plugin_actions: plugin_actions::ActionCatalog,
     #[cfg(feature = "flutter")]
     pub(super) pending_shortcut_launches: VecDeque<native_shortcut::ShortcutTarget>,
     #[cfg(feature = "flutter")]
@@ -104,6 +105,8 @@ pub(super) struct RuntimeState {
     pub(super) pending_system_control_waits: VecDeque<PendingSystemControlWait>,
     #[cfg(feature = "flutter")]
     pub(super) pending_orientation: Option<orientation_sensor::Orientation>,
+    #[cfg(feature = "flutter")]
+    pub(super) lid: lid_switch::LidSwitch,
     #[cfg(feature = "flutter")]
     pub(super) output_control_dirty: bool,
     #[cfg(feature = "flutter")]

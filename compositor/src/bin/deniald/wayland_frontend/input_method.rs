@@ -12,8 +12,8 @@ use std::sync::{Arc, Mutex};
 use smithay::backend::input::{KeyState, Keycode};
 use smithay::input::Seat;
 use smithay::input::keyboard::{
-    GrabStartData as KeyboardGrabStartData, KeyboardGrab, KeyboardHandle, KeyboardInnerHandle,
-    KeyboardTarget, KeymapFile, ModifiersState, SerializedMods, xkb,
+    FilterResult, KeyboardHandle, KeyboardTarget, KeymapFile, KeysymHandle, ModifiersState,
+    SerializedMods, xkb,
 };
 use smithay::reexports::wayland_protocols::wp::text_input::zv3::server::zwp_text_input_v3::{
     ChangeCause, ContentHint, ContentPurpose,
@@ -41,7 +41,6 @@ use smithay::wayland::input_method::INPUT_POPUP_SURFACE_ROLE;
 use tracing::{debug, info, warn};
 
 use super::RuntimeState;
-use super::focus::KeyboardFocusTarget;
 use super::handlers::DenialClientState;
 
 const MANAGER_VERSION: u32 = 1;
@@ -182,10 +181,14 @@ impl<R: PartialEq> KeyboardRouteState<R> {
     }
 }
 
+/// Routes seat keys to the input method's keyboard grab.
+///
+/// The route is consulted before Smithay's keyboard grab instead of occupying
+/// it: the seat has a single grab slot, and an XDG popup grab must be able to
+/// take it while an editor keeps its input method active.
 #[derive(Clone, Debug, Default)]
 struct InputMethodKeyboardRoute {
     inner: Arc<Mutex<KeyboardRouteState>>,
-    forwarding_virtual_key: Arc<AtomicBool>,
 }
 
 impl InputMethodKeyboardRoute {
@@ -225,62 +228,19 @@ impl InputMethodKeyboardRoute {
             .filter(Resource::is_alive)
     }
 
-    fn forward_virtual_key(
+    /// Deliver a key transition to the input method when it owns the key.
+    ///
+    /// Presses reach the input method only while an editor is active; each
+    /// release follows its press even after the editor deactivates.
+    fn intercept(
         &self,
-        keyboard: &KeyboardHandle<RuntimeState>,
-        state: &mut RuntimeState,
-        keycode: u32,
-        key_state: KeyState,
-        time: u32,
-    ) {
-        if self
-            .forwarding_virtual_key
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
-            warn!(keycode, "discarding recursive virtual-keyboard event");
-            return;
-        }
-        let _guard = VirtualForwardGuard(&self.forwarding_virtual_key);
-        // The physical event has already updated the seat's XKB state before
-        // the input-method grab received it. Forwarding here deliberately
-        // bypasses both that update and the grab, preventing an IM -> virtual
-        // keyboard -> IM loop while preserving the original modifier state.
-        keyboard.input_forward(
-            state,
-            Keycode::new(keycode + XKB_KEYCODE_OFFSET),
-            key_state,
-            SERIAL_COUNTER.next_serial(),
-            time,
-            false,
-        );
-    }
-}
-
-struct VirtualForwardGuard<'a>(&'a AtomicBool);
-
-impl Drop for VirtualForwardGuard<'_> {
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
-    }
-}
-
-impl KeyboardGrab<RuntimeState> for InputMethodKeyboardRoute {
-    fn input(
-        &mut self,
-        data: &mut RuntimeState,
-        handle: &mut KeyboardInnerHandle<'_, RuntimeState>,
         keycode: Keycode,
         state: KeyState,
         modifiers: Option<ModifiersState>,
         serial: Serial,
         time: u32,
-    ) {
-        if self.forwarding_virtual_key.load(Ordering::Acquire) {
-            handle.input(data, keycode, state, modifiers, serial, time);
-            return;
-        }
-        let raw = keycode.raw().saturating_sub(8);
+    ) -> bool {
+        let raw = keycode.raw().saturating_sub(XKB_KEYCODE_OFFSET);
         let mut inner = self
             .inner
             .lock()
@@ -291,44 +251,99 @@ impl KeyboardGrab<RuntimeState> for InputMethodKeyboardRoute {
                 inner.input_method_keys.insert(raw);
                 true
             }
-            KeyState::Released if inner.input_method_keys.remove(&raw) => true,
-            _ => false,
+            KeyState::Released => inner.input_method_keys.remove(&raw),
+            KeyState::Pressed => false,
         };
-        if route_to_input_method {
-            if let Some(resource) = resource {
-                resource.key(serial.into(), time, raw, state.into());
-                if let Some(modifiers) = modifiers {
-                    let serialized = modifiers.serialized;
-                    resource.modifiers(
-                        serial.into(),
-                        serialized.depressed,
-                        serialized.latched,
-                        serialized.locked,
-                        serialized.layout_effective,
-                    );
-                }
-            }
-            return;
+        if !route_to_input_method {
+            return false;
         }
-        drop(inner);
-        handle.input(data, keycode, state, modifiers, serial, time);
+        if let Some(resource) = resource {
+            resource.key(serial.into(), time, raw, state.into());
+            if let Some(modifiers) = modifiers {
+                let serialized = modifiers.serialized;
+                resource.modifiers(
+                    serial.into(),
+                    serialized.depressed,
+                    serialized.latched,
+                    serialized.locked,
+                    serialized.layout_effective,
+                );
+            }
+        }
+        true
     }
+}
 
-    fn set_focus(
-        &mut self,
-        data: &mut RuntimeState,
-        handle: &mut KeyboardInnerHandle<'_, RuntimeState>,
-        focus: Option<KeyboardFocusTarget>,
-        serial: Serial,
-    ) {
-        handle.set_focus(data, focus, serial);
+/// Process a seat key transition like [`KeyboardHandle::input`], offering it
+/// to the input method before Smithay's keyboard grab and focus.
+pub(super) fn input_key<F>(
+    state: &mut RuntimeState,
+    keyboard: &KeyboardHandle<RuntimeState>,
+    keycode: Keycode,
+    key_state: KeyState,
+    serial: Serial,
+    time: u32,
+    filter: F,
+) where
+    F: FnOnce(&mut RuntimeState, &ModifiersState, KeysymHandle<'_>) -> FilterResult<()>,
+{
+    let (filter_result, mods_changed) = keyboard.input_intercept(state, keycode, key_state, filter);
+    if matches!(filter_result, FilterResult::Intercept(())) {
+        return;
     }
+    forward_key(
+        state,
+        keyboard,
+        keycode,
+        key_state,
+        serial,
+        time,
+        mods_changed,
+    );
+}
 
-    fn start_data(&self) -> &KeyboardGrabStartData<RuntimeState> {
-        &KeyboardGrabStartData { focus: None }
+/// Forward a key transition whose XKB state is already applied, offering it
+/// to the input method before Smithay's keyboard grab and focus.
+pub(super) fn forward_key(
+    state: &mut RuntimeState,
+    keyboard: &KeyboardHandle<RuntimeState>,
+    keycode: Keycode,
+    key_state: KeyState,
+    serial: Serial,
+    time: u32,
+    mods_changed: bool,
+) {
+    let modifiers = mods_changed.then(|| keyboard.modifier_state());
+    if state.wayland.as_ref().is_some_and(|frontend| {
+        frontend
+            .input_method
+            .keyboard_route
+            .intercept(keycode, key_state, modifiers, serial, time)
+    }) {
+        return;
     }
+    keyboard.input_forward(state, keycode, key_state, serial, time, mods_changed);
+}
 
-    fn unset(&mut self, _data: &mut RuntimeState) {}
+fn forward_virtual_key(
+    keyboard: &KeyboardHandle<RuntimeState>,
+    state: &mut RuntimeState,
+    keycode: u32,
+    key_state: KeyState,
+    time: u32,
+) {
+    // The physical event has already updated the seat's XKB state before the
+    // input method received it. Forwarding here deliberately bypasses both
+    // that update and input-method routing, preventing an IM -> virtual
+    // keyboard -> IM loop while preserving the original modifier state.
+    keyboard.input_forward(
+        state,
+        Keycode::new(keycode + XKB_KEYCODE_OFFSET),
+        key_state,
+        SERIAL_COUNTER.next_serial(),
+        time,
+        false,
+    );
 }
 
 #[derive(Debug)]
@@ -792,7 +807,6 @@ pub(super) struct InputMethodPopupUserData {
 #[derive(Clone, Debug)]
 pub(super) struct InputMethodKeyboardUserData {
     accepted: bool,
-    grab_serial: Option<Serial>,
 }
 
 #[derive(Debug)]
@@ -964,20 +978,15 @@ impl Dispatch<ZwpVirtualKeyboardV1, VirtualKeyboardUserData> for RuntimeState {
                     warn!(key, "discarding out-of-range virtual-keyboard keycode");
                     return;
                 }
-                let Some((keyboard, route)) = state.wayland.as_ref().and_then(|frontend| {
+                let Some(keyboard) = state.wayland.as_ref().and_then(|frontend| {
                     frontend
                         .input_method
                         .accepts_virtual_keyboard(resource)
-                        .then(|| {
-                            Some((
-                                frontend.seat.get_keyboard()?,
-                                frontend.input_method.keyboard_route(),
-                            ))
-                        })?
+                        .then(|| frontend.seat.get_keyboard())?
                 }) else {
                     return;
                 };
-                route.forward_virtual_key(&keyboard, state, key, key_state, time);
+                forward_virtual_key(&keyboard, state, key, key_state, time);
             }
             zwp_virtual_keyboard_v1::Request::Modifiers {
                 mods_depressed,
@@ -1220,14 +1229,7 @@ fn install_keyboard_grab(
         .wayland
         .as_ref()
         .is_some_and(|frontend| frontend.input_method.accepts(owner));
-    let grab_serial = accepted.then(|| SERIAL_COUNTER.next_serial());
-    let resource = data_init.init(
-        keyboard_resource,
-        InputMethodKeyboardUserData {
-            accepted,
-            grab_serial,
-        },
-    );
+    let resource = data_init.init(keyboard_resource, InputMethodKeyboardUserData { accepted });
     if !accepted {
         return;
     }
@@ -1244,11 +1246,6 @@ fn install_keyboard_grab(
         return;
     };
     route.install(resource);
-    keyboard.set_grab(
-        state,
-        route.clone(),
-        grab_serial.expect("accepted grab has a serial"),
-    );
     InputMethodManager::refresh_keyboard(&route, &keyboard, state, repeat_rate, repeat_delay);
 }
 
@@ -1319,23 +1316,10 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, InputMethodKeyboardUserData> for Run
         resource: &ZwpInputMethodKeyboardGrabV2,
         data: &InputMethodKeyboardUserData,
     ) {
-        if !data.accepted {
-            return;
-        }
-        let Some((keyboard, route)) = state.wayland.as_ref().and_then(|frontend| {
-            Some((
-                frontend.seat.get_keyboard()?,
-                frontend.input_method.keyboard_route(),
-            ))
-        }) else {
-            return;
-        };
-        route.remove(resource);
-        if data
-            .grab_serial
-            .is_some_and(|serial| keyboard.has_grab(serial))
+        if data.accepted
+            && let Some(frontend) = state.wayland.as_ref()
         {
-            keyboard.unset_grab(state);
+            frontend.input_method.keyboard_route.remove(resource);
         }
     }
 }

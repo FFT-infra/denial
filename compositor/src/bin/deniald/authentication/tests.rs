@@ -229,3 +229,57 @@ fn cancellation_invalidates_late_success() {
     assert!(controller.locked());
     assert!(controller.security_gate_locked());
 }
+
+#[test]
+fn automatic_lock_skips_unusable_accounts_but_explicit_lock_still_closes_gate() {
+    let controller = AuthenticationController::with_backend(
+        Box::new(FakeBackend {
+            result: BackendResult::Success,
+            calls: Arc::new(AtomicUsize::new(0)),
+        }),
+        false,
+    )
+    .unwrap();
+    for capability in [
+        lock_capability::Capability::Pending,
+        lock_capability::Capability::Unavailable,
+    ] {
+        lock_unpoisoned(&controller.shared.state).automatic_lock = capability;
+        assert!(!controller.lock_automatically());
+        assert!(!controller.locked());
+        assert!(!controller.security_gate_locked());
+    }
+    controller
+        .handle_packet(&packet(KIND_LOCK, 0, 0, b""))
+        .unwrap();
+    assert!(controller.locked());
+    assert!(controller.security_gate_locked());
+    // An unavailable probe must never release an already established lock.
+    assert!(controller.lock_automatically());
+    assert!(controller.locked());
+}
+
+#[test]
+fn automatic_lock_requires_native_authentication_and_preserves_unknown_policy() {
+    let controller = AuthenticationController::with_backend(
+        Box::new(UnavailableBackend {
+            reason: "no PAM".into(),
+        }),
+        false,
+    )
+    .unwrap();
+    lock_unpoisoned(&controller.shared.state).automatic_lock =
+        lock_capability::Capability::Available;
+    assert!(!controller.lock_automatically());
+    assert!(!controller.locked());
+    let controller = AuthenticationController::with_backend(
+        Box::new(FakeBackend {
+            result: BackendResult::Success,
+            calls: Arc::new(AtomicUsize::new(0)),
+        }),
+        false,
+    )
+    .unwrap();
+    assert!(controller.lock_automatically());
+    assert!(controller.security_gate_locked());
+}

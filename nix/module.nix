@@ -13,6 +13,22 @@ in
     enable = lib.mkEnableOption "Denial, a Flutter-native Wayland compositor";
     package = lib.mkPackageOption pkgs "denial" { };
 
+    engine.buildFromSource = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Build the locked release engine with the host's package set instead of
+        reusing the pinned cache producer. Older libc or compiler runtimes
+        automatically use this path. A cache miss otherwise builds the pinned
+        producer from source without requiring this option.
+      '';
+    };
+
+    plugins = {
+      enable = lib.mkEnableOption "Denial's plugin development and composition tools";
+      package = lib.mkPackageOption pkgs "denialPluginManager" { };
+    };
+
     polkitAgent = {
       enable = lib.mkOption {
         type = lib.types.bool;
@@ -24,9 +40,9 @@ in
       };
       command = lib.mkOption {
         type = lib.types.str;
-        default = "${pkgs.polkit_gnome}/libexec/polkit-gnome-authentication-agent-1";
+        default = "${cfg.package}/bin/denial-polkit-agent";
         defaultText = lib.literalExpression ''
-          "''${pkgs.polkit_gnome}/libexec/polkit-gnome-authentication-agent-1"
+          "''${config.programs.denial.package}/bin/denial-polkit-agent"
         '';
         description = "Absolute command used for the PolicyKit authentication agent.";
       };
@@ -42,10 +58,16 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    nixpkgs.overlays = lib.mkAfter (
+      lib.optional cfg.engine.buildFromSource (
+        final: _prev: { denialFlutter = final.denialFlutterSource; }
+      )
+    );
     environment.systemPackages = [
       cfg.package
       pkgs.zenity
-    ];
+    ]
+    ++ lib.optional cfg.plugins.enable cfg.plugins.package;
     fonts.packages = [ pkgs.source-han-sans ];
 
     services.displayManager.sessionPackages = [ cfg.package ];
@@ -57,14 +79,20 @@ in
     programs.dconf.enable = lib.mkDefault true;
     programs.xwayland.enable = lib.mkDefault true;
 
-    systemd.user.services.denial-polkit-agent = lib.mkIf cfg.polkitAgent.enable {
+    systemd.user.services.denial-polkit-agent = {
+      enable = cfg.polkitAgent.enable;
       description = "PolicyKit authentication agent for Denial";
       documentation = [ "https://github.com/denialwm/denial" ];
       wantedBy = [ "denial-session.target" ];
       partOf = [ "denial-session.target" ];
-      after = [ "denial-session.target" ];
+      after = [ "graphical-session-pre.target" ];
       serviceConfig = {
-        ExecStart = cfg.polkitAgent.command;
+        # This becomes a drop-in for the packaged unit. Clear its command
+        # before applying the configurable one; simple services allow only one.
+        ExecStart = [
+          ""
+          cfg.polkitAgent.command
+        ];
         Restart = "on-failure";
         RestartSec = "250ms";
       };

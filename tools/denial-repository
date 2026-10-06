@@ -185,10 +185,9 @@ IFS=. read -r release_major release_minor release_patch <<<"$release_version"
   && "$release_minor" =~ ^[0-9]+$ \
   && "$release_patch" =~ ^[0-9]+$ ]] \
   || fail "release tag has an invalid semantic version: $RELEASE_TAG"
-ui_denial_before="${release_major}.$((release_minor + 1)).0"
 engine_packages=0
 denial_packages=0
-ui_development_packages=0
+plugin_manager_packages=0
 for package in "${package_inputs[@]}"; do
   package_filename="$(basename -- "$package")"
   package_info="$(bsdtar -xOf "$package" .PKGINFO)"
@@ -214,7 +213,7 @@ for package in "${package_inputs[@]}"; do
       [[ "$package_version" == "1:${release_version}-1" ]] \
         || fail "unexpected engine package version: $package_version"
       grep -Fqx \
-        'provides = denial-flutter-engine-abi=3.44.7.denial1' \
+        'provides = denial-flutter-engine-abi=3.47.5.denial1' \
         <<<"$package_info" \
         || fail 'engine package does not provide the expected Flutter ABI'
       engine_packages=$((engine_packages + 1))
@@ -227,111 +226,37 @@ for package in "${package_inputs[@]}"; do
         || fail \
           "Denial package version is $package_version, expected ${release_version}-1"
       grep -Fqx \
-        'depend = denial-flutter-engine-abi=3.44.7.denial1' \
+        'depend = denial-flutter-engine-abi=3.47.5.denial1' \
         <<<"$package_info" \
         || fail 'Denial package does not require the exact Flutter Engine ABI'
       grep -Fqx 'depend = rtkit' <<<"$package_info" \
         || fail 'Denial package does not require rtkit'
-      grep -Fqx \
-        'optdepend = denial-ui-development: live Flutter UI editing and hot reload' \
-        <<<"$package_info" \
-        || fail 'Denial package does not advertise its optional development package'
       [[ "$(
         bsdtar -xOf "$package" usr/share/denial/version
       )" == "$release_version" ]] \
         || fail 'Denial package runtime version does not match its signed tag'
       denial_packages=$((denial_packages + 1))
       ;;
-    denial-ui-development)
+    denial-plugin-manager)
       [[ "$package_filename" == \
-        "denial-ui-development-${release_version}-1-x86_64.pkg.tar.zst" ]] \
-        || fail \
-          "unexpected UI-development package filename: $package_filename"
+        "denial-plugin-manager-${release_version}-1-x86_64.pkg.tar.zst" ]] \
+        || fail "unexpected Plugin Manager package filename: $package_filename"
       [[ "$package_version" == "${release_version}-1" ]] \
-        || fail \
-          "UI-development package version is $package_version, expected ${release_version}-1"
-      for dependency in \
-        "depend = denial>=${release_version}" \
-        "depend = denial<${ui_denial_before}" \
-        'depend = denial-flutter-engine-abi=3.44.7.denial1'; do
-        grep -Fqx "$dependency" <<<"$package_info" \
-          || fail "UI-development package is missing $dependency"
-      done
-      bsdtar -tf "$package" | grep -Fxq usr/bin/denial-ui \
-        || fail 'UI-development package has no denial-ui client'
-      bsdtar -tf "$package" \
-        | grep -Fxq \
-          usr/lib/denial/ui-development/flutter/bin/cache/flutter_tools.snapshot \
-        || fail 'UI-development package has no pinned Flutter tool snapshot'
-      bsdtar -xOf \
-        "$package" \
-        usr/share/denial/ui-development/manifest.json \
-        | grep -Fq '"stage": "public-beta"' \
-        || fail 'UI-development package does not declare its public-beta stage'
-      expected_debug_engine_sha="$(
-        awk 'NR == 1 { print $1 }' \
-          "$ROOT/prebuilt/flutter-engine/linux-x64-debug/libflutter_engine.so.sha256"
-      )"
-      actual_debug_engine_sha="$(
-        bsdtar -xOf \
-          "$package" \
-          usr/lib/denial/ui-development/lib/libflutter_engine.so \
-          | sha256sum \
-          | awk '{ print $1 }'
-      )"
-      [[ "$actual_debug_engine_sha" == "$expected_debug_engine_sha" ]] \
-        || fail 'UI-development package contains the wrong debug engine'
-      expected_profile_engine_sha="$(
-        awk 'NR == 1 { print $1 }' \
-          "$ROOT/prebuilt/flutter-engine/linux-x64-profile/libflutter_engine.so.sha256"
-      )"
-      actual_profile_engine_sha="$(
-        bsdtar -xOf \
-          "$package" \
-          usr/lib/denial/ui-development/profile/lib/libflutter_engine.so \
-          | sha256sum \
-          | awk '{ print $1 }'
-      )"
-      [[ "$actual_profile_engine_sha" == "$expected_profile_engine_sha" ]] \
-        || fail 'UI-development package contains the wrong profile engine'
-      expected_flutter_tool_sha="$(
-        awk 'NR == 1 { print $1 }' \
-          "$ROOT/prebuilt/flutter-tools/3.44.7/flutter_tools.snapshot.sha256"
-      )"
-      actual_flutter_tool_sha="$(
-        bsdtar -xOf \
-          "$package" \
-          usr/lib/denial/ui-development/flutter/bin/cache/flutter_tools.snapshot \
-          | sha256sum \
-          | awk '{ print $1 }'
-      )"
-      [[ "$actual_flutter_tool_sha" == "$expected_flutter_tool_sha" ]] \
-        || fail 'UI-development package contains the wrong Flutter tool'
-      expected_ui_manifest_sha="$(
-        sha256sum "$ROOT/packaging/arch/ui-development/manifest.json" \
-          | awk '{ print $1 }'
-      )"
-      actual_ui_manifest_sha="$(
-        bsdtar -xOf \
-          "$package" \
-          usr/share/denial/ui-development/manifest.json \
-          | sha256sum \
-          | awk '{ print $1 }'
-      )"
-      [[ "$actual_ui_manifest_sha" == "$expected_ui_manifest_sha" ]] \
-        || fail 'UI-development package contains the wrong release manifest'
-      ui_development_packages=$((ui_development_packages + 1))
+        || fail "unexpected Plugin Manager package version: $package_version"
+      grep -Fqx "depend = denial=${release_version}-1" <<<"$package_info" \
+        || fail 'Plugin Manager package does not require matching Denial'
+      grep -Fqx 'depend = dart' <<<"$package_info" \
+        || fail 'Plugin Manager package does not require Dart'
+      plugin_manager_packages=$((plugin_manager_packages + 1))
       ;;
     *)
       fail "unexpected package name: ${package_name:-unset}"
       ;;
   esac
 done
-((engine_packages == 1 \
-  && denial_packages == 1 \
-  && ui_development_packages == 1)) \
-  || fail \
-    'the package set must contain denial, denial-flutter-engine, and denial-ui-development'
+((engine_packages == 1 && denial_packages == 1 \
+  && plugin_manager_packages == 1)) \
+  || fail 'the package set must contain denial, its engine, and Plugin Manager'
 
 mapfile -d '' deb_inputs < <(
   find "$PACKAGE_INPUT" \
@@ -357,12 +282,12 @@ mapfile -d '' apk_inputs < <(
     -print0 \
     | sort -z
 )
-((${#deb_inputs[@]} == 2)) \
-  || fail "expected exactly two Debian packages, found ${#deb_inputs[@]}"
-((${#rpm_inputs[@]} == 2)) \
-  || fail "expected exactly two RPM packages, found ${#rpm_inputs[@]}"
-((${#apk_inputs[@]} == 2)) \
-  || fail "expected exactly two Alpine packages, found ${#apk_inputs[@]}"
+((${#deb_inputs[@]} == 3)) \
+  || fail "expected exactly three Debian packages, found ${#deb_inputs[@]}"
+((${#rpm_inputs[@]} == 3)) \
+  || fail "expected exactly three RPM packages, found ${#rpm_inputs[@]}"
+((${#apk_inputs[@]} == 3)) \
+  || fail "expected exactly three Alpine packages, found ${#apk_inputs[@]}"
 
 deb_names=()
 for package in "${deb_inputs[@]}"; do
@@ -380,15 +305,19 @@ for package in "${deb_inputs[@]}"; do
     denial-flutter-engine)
       expected_filename="denial-flutter-engine_${release_version}-1_amd64.deb"
       ;;
+    denial-plugin-manager)
+      expected_filename="denial-plugin-manager_${release_version}-1_amd64.deb"
+      ;;
     *) fail "unexpected Debian package: ${package_name:-unset}" ;;
   esac
   [[ "$(basename -- "$package")" == "$expected_filename" ]] \
     || fail "unexpected Debian package filename: $(basename -- "$package")"
   "$ROOT/tools/verify-denial-native-package-metadata" \
-    deb "$package" "$release_version" 1 '3.44.7.denial1' 2.39
+    deb "$package" "$release_version" 1 '3.47.5.denial1' 2.39
   deb_names+=("$package_name")
 done
-[[ "${deb_names[*]}" == 'denial-flutter-engine denial' ]] \
+[[ "${deb_names[*]}" == \
+  'denial-flutter-engine denial-plugin-manager denial' ]] \
   || fail 'Debian package set is incomplete'
 
 rpm_names=()
@@ -407,15 +336,19 @@ for package in "${rpm_inputs[@]}"; do
     denial-flutter-engine)
       expected_filename="denial-flutter-engine-${release_version}-1.x86_64.rpm"
       ;;
+    denial-plugin-manager)
+      expected_filename="denial-plugin-manager-${release_version}-1.x86_64.rpm"
+      ;;
     *) fail "unexpected RPM package: ${package_name:-unset}" ;;
   esac
   [[ "$(basename -- "$package")" == "$expected_filename" ]] \
     || fail "unexpected RPM package filename: $(basename -- "$package")"
   "$ROOT/tools/verify-denial-native-package-metadata" \
-    rpm "$package" "$release_version" 1 '3.44.7.denial1' 2.39
+    rpm "$package" "$release_version" 1 '3.47.5.denial1' 2.39
   rpm_names+=("$package_name")
 done
-[[ "${rpm_names[*]}" == 'denial denial-flutter-engine' ]] \
+[[ "${rpm_names[*]}" == \
+  'denial denial-flutter-engine denial-plugin-manager' ]] \
   || fail 'RPM package set is incomplete'
 
 apk_names=()
@@ -452,9 +385,15 @@ for package in "${apk_inputs[@]}"; do
     denial-flutter-engine)
       expected_filename="denial-flutter-engine-${release_version}-r1.apk"
       grep -Fqx \
-        'provides = denial-flutter-engine-abi-3.44.7.denial1' \
+        'provides = denial-flutter-engine-abi-3.47.5.denial1' \
         <<<"$package_info" \
         || fail 'Alpine engine package has the wrong ABI capability'
+      ;;
+    denial-plugin-manager)
+      expected_filename="denial-plugin-manager-${release_version}-r1.apk"
+      grep -Fqx "depend = denial=${release_version}-r1" \
+        <<<"$package_info" \
+        || fail 'Alpine Plugin Manager has the wrong Denial dependency'
       ;;
     *) fail "unexpected Alpine package: ${package_name:-unset}" ;;
   esac
@@ -463,7 +402,7 @@ for package in "${apk_inputs[@]}"; do
   apk_names+=("$package_name")
 done
 [[ "$(printf '%s\n' "${apk_names[@]}" | sort | paste -sd' ' -)" == \
-  'denial denial-flutter-engine' ]] \
+  'denial denial-flutter-engine denial-plugin-manager' ]] \
   || fail 'Alpine package set is incomplete'
 
 readonly INSTALLER="${ROOT}/install.sh"
@@ -566,8 +505,8 @@ mapfile -d '' signed_rpm_packages < <(
     -print0 \
     | sort -z
 )
-((${#signed_rpm_packages[@]} == 2)) \
-  || fail 'signed DNF repository does not contain two RPM packages'
+((${#signed_rpm_packages[@]} == 3)) \
+  || fail 'signed DNF repository does not contain three RPM packages'
 for package in "${signed_rpm_packages[@]}"; do
   destination="${DOWNLOAD_ROOT}/$(basename -- "$package")"
   cp --reflink=auto -- "$package" "$destination"
@@ -689,7 +628,7 @@ This is a signed x86-64 public-beta release of Denial.
 - Source commit: \`${SOURCE_SHA}\`
 - Signing fingerprint: \`${FINGERPRINT}\`
 - Required packages: \`denial\` and \`denial-flutter-engine\`
-- Optional live-development package: \`denial-ui-development\`
+- Optional plugin tools: \`denial-plugin-manager\`
 - Direct downloads: Arch, Alpine 3.24, Debian-family (Debian 13 / Ubuntu 24.04), and Fedora
 - Every direct package has an adjacent detached OpenPGP signature
 - APT repository: Debian 13 (trixie) and Ubuntu 24.04 (noble)

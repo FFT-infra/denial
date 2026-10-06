@@ -91,6 +91,11 @@ isolate can freeze the interactive desktop until it is resumed.
 
 ## Development package
 
+The Flutter 3.47.5 engines and tool snapshot have been refreshed. Publication
+of the matching development package remains paused until its complete archive,
+offline workspace preparation, and live editor attach are validated for that
+generation. See the [engine validation report](flutter-engine/3.47.5/VALIDATION.md).
+
 Live development is intentionally optional. The normal `denial` package keeps
 shipping only the optimized runtime; the version-coupled
 `denial-ui-development` package owns the fork-built JIT and AOT profile

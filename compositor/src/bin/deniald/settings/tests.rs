@@ -45,6 +45,9 @@ fn shell_document(value: Value) -> String {
         .as_object_mut()
         .expect("test shell layout must be an object");
     layout
+        .entry("scrollingLayoutPreserveSwapSizes")
+        .or_insert(Value::Bool(true));
+    layout
         .entry("windowLayout")
         .or_insert_with(|| Value::String("stacking".to_owned()));
     layout
@@ -88,6 +91,7 @@ fn migrates_existing_shell_document_without_losing_sections() {
     assert_eq!(document["appearance"]["allowClientCursorSurfaces"], true);
     assert_eq!(document["appearance"]["cursorSize"], DEFAULT_CURSOR_SIZE);
     assert_eq!(document["layout"]["windowLayout"], "stacking");
+    assert_eq!(document["layout"]["scrollingLayoutPreserveSwapSizes"], true);
     assert_eq!(
         document["layout"]["scrollingLayoutWheelSpeed"],
         DEFAULT_SCROLLING_LAYOUT_WHEEL_SPEED
@@ -96,7 +100,7 @@ fn migrates_existing_shell_document_without_losing_sections() {
         document["layout"]["scrollingLayoutWheelUpDirection"],
         "left"
     );
-    assert_eq!(document["layout"]["workspacesEnabled"], false);
+    assert_eq!(document["layout"]["workspacesEnabled"], true);
     assert_eq!(document["layout"]["workspaceCount"], 4);
     assert_eq!(
         document["layout"]["workspaceSwitchingOrientation"],
@@ -642,4 +646,98 @@ fn gtk_input_method_policy_is_split_by_display_backend() {
         Some(&Some(OsStr::new("@im=fcitx")))
     );
     assert!(!child_environment.contains_key(OsStr::new("GTK_IM_MODULE")));
+}
+
+#[test]
+fn scrolling_swap_size_setting_is_validated_and_persisted() {
+    let temporary = TemporaryDirectory::new("settings-scrolling-swap-size");
+    let path = temporary.settings_path();
+    let mut manager = SettingsManager::load_path(path.clone()).unwrap();
+    assert!(manager.scrolling_layout_preserve_swap_sizes());
+    for enabled in [false, true] {
+        let update = manager
+            .prepare_shell_update(
+                manager.revision(),
+                &shell_document(serde_json::json!({
+                    "appearance": {"colorSchemePreference": "preferDark"},
+                    "layout": {"scrollingLayoutPreserveSwapSizes": enabled}
+                })),
+            )
+            .unwrap();
+        manager.commit(update).unwrap();
+        assert_eq!(manager.scrolling_layout_preserve_swap_sizes(), enabled);
+        assert_eq!(
+            SettingsManager::load_path(path.clone())
+                .unwrap()
+                .scrolling_layout_preserve_swap_sizes(),
+            enabled
+        );
+    }
+    for invalid in [Value::Null, Value::from(1), Value::from("false")] {
+        let document = shell_document(serde_json::json!({
+            "appearance": {"colorSchemePreference": "preferDark"},
+            "layout": {"scrollingLayoutPreserveSwapSizes": invalid}
+        }));
+        assert!(matches!(
+            manager.prepare_shell_update(manager.revision(), &document),
+            Err(SettingsError::Document(_))
+        ));
+    }
+}
+
+#[test]
+fn keyboard_resize_step_defaults_and_validates_on_load_and_update() {
+    use super::super::keyboard_resize::ResizeStep;
+    let temporary = TemporaryDirectory::new("keyboard-resize-step");
+    let path = temporary.settings_path();
+    let mut manager = SettingsManager::load_path(path.clone()).unwrap();
+    assert_eq!(manager.keyboard_resize_step(), ResizeStep::Percent(2.0));
+    for (value, expected) in [
+        ("32px", ResizeStep::Pixels(32.0)),
+        ("5%", ResizeStep::Percent(5.0)),
+    ] {
+        let document = shell_document(serde_json::json!({
+            "appearance": {"colorSchemePreference": "preferDark"},
+            "layout": {"keyboardResizeStep": value}
+        }));
+        let update = manager
+            .prepare_shell_update(manager.revision(), &document)
+            .unwrap();
+        manager.commit(update).unwrap();
+        assert_eq!(manager.keyboard_resize_step(), expected);
+        assert_eq!(
+            SettingsManager::load_path(path.clone())
+                .unwrap()
+                .keyboard_resize_step(),
+            expected
+        );
+    }
+    for value in [
+        serde_json::json!(0),
+        serde_json::json!("-10%"),
+        serde_json::json!("101%"),
+        Value::Null,
+    ] {
+        let document = shell_document(serde_json::json!({
+            "appearance": {"colorSchemePreference": "preferDark"},
+            "layout": {"keyboardResizeStep": value}
+        }));
+        assert!(
+            manager
+                .prepare_shell_update(manager.revision(), &document)
+                .is_err()
+        );
+    }
+    let mut invalid = manager.document.clone();
+    invalid["layout"]["keyboardResizeStep"] = Value::String("0px".into());
+    let bytes = serde_json::to_vec(&invalid).unwrap();
+    assert!(parse_document(&bytes).is_err());
+    fs::write(&path, &bytes).unwrap();
+    assert_eq!(
+        SettingsManager::load_path(path.clone())
+            .unwrap()
+            .keyboard_resize_step(),
+        ResizeStep::default()
+    );
+    assert_eq!(fs::read(&path).unwrap(), bytes);
 }

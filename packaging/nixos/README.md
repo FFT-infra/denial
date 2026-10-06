@@ -1,9 +1,10 @@
 # NixOS
 
 Denial ships its Nix package, overlay, and NixOS module in this repository.
-The package builds the Rust compositor, the locked Denial Flutter engine, the
-embedded shell, and Settings from source. It does not download Denial release
-binaries.
+The Nix derivations build the Rust compositor, locked Denial Flutter engine,
+embedded shell, and Settings from source. Normal installations reuse a separately
+cached engine and adapt it to the host's dependencies; a cache miss builds that
+same engine derivation from source. Denial release archives are not build inputs.
 
 Add Denial to the flake that owns the NixOS system:
 
@@ -30,6 +31,7 @@ Add Denial to the flake that owns the NixOS system:
           denial.nixosModules.default
           {
             programs.denial.enable = true;
+            programs.denial.plugins.enable = true; # Optional Plugin Manager.
           }
         ];
       };
@@ -42,8 +44,52 @@ manager. The module deliberately does not enable a display manager, select a
 default session, or configure autologin.
 
 `programs.denial.package` can replace the package without replacing the
-module. Denial deliberately builds against its locked Nixpkgs revision; the
-module does not couple the private Flutter expressions to the host's Nixpkgs.
+module. When enabled, the module adds Denial's overlay and defaults to
+`pkgs.denial`, built with the host's Nixpkgs dependencies. This keeps the
+compositor's libc and graphics libraries aligned with the system's drivers,
+including on NixOS unstable. The overlay also respects the host's package
+overrides.
+
+Plugin tooling is a separate `denial-plugin-manager` flake package and
+`pkgs.denialPluginManager` overlay attribute. Set
+`programs.denial.plugins.enable = true` to install it. Its wrapper puts the
+exact locked Dart derivation in `PATH`; the main `pkgs.denial` closure does not
+contain the Plugin Manager or compiler kit.
+
+Flutter and Skia source revisions remain pinned by `SOURCE_LOCK.json`.
+Denial takes its private Flutter build helper definitions from its locked
+Nixpkgs source. The expensive engine/compiler build uses that pinned package set
+so its cache identity survives host updates. A small host-specific derivation
+verifies the complete artifact manifest and adapts the engine and its matching
+Dart SDK to the host's loader and libraries. Compiler snapshots require the exact
+SDK hash, so the SDK stays paired with the engine even when another SDK reports
+the same Dart version. The compositor, shell and native Flutter apps use the
+host's package set. There is no need to make Denial's
+Nixpkgs input follow the host's input; doing so also changes the engine cache key.
+
+Hosts below the producer's glibc or GNU compiler-runtime baseline, or using a
+different compiler family, build the engine with their own package set. To
+deliberately use this path on any host:
+
+```nix
+programs.denial.engine.buildFromSource = true;
+```
+
+Both paths consume the same exact source locks. The source option rebuilds the
+engine and does not affect the compositor's host dependency alignment.
+
+The standalone `denial.packages.x86_64-linux.denial` output still builds with
+Denial's own Nixpkgs lock for reproducible CI and direct flake builds. Use the
+module or overlay for NixOS integration so native dependencies follow the
+host:
+
+```nix
+{
+  nixpkgs.overlays = [ denial.overlays.default ];
+  # pkgs.denial and pkgs.denialFlutter now use this system's package set.
+}
+```
+
 The module also registers the Wayland session, Denial's Settings portal and
 systemd user unit, the wlroots screenshot/screencast portal, Xwayland, polkit,
 realtime scheduling, and Denial's CJK fallback font.
@@ -99,8 +145,40 @@ and signing key because Nix does not apply the `nixConfig` of a flake used only
 as an input. Direct commands against the Denial flake can accept its identical
 checked-in configuration with `--accept-flake-config`.
 
-An exact cache hit downloads the package instead of compiling the pinned
-Flutter engine. A cache miss still performs the complete source build and has
+The separately published `denial-flutter-engine-raw` output contains the locked
+release engine, matching Dart SDK and compiler assets, with a complete checksum/mode
+inventory, architecture, source-lock and fetch-lock hashes, and the actual GN configuration
+hash. Its producer derivation is independent of the consumer's Nixpkgs and
+overlays. Nix verifies the signed cache output against that exact derivation;
+host adaptation verifies the manifest and every file before modifying copies.
+It removes producer library/loader paths and selects the host's dependencies.
+
+A newer compatible host normally downloads that raw output and builds only the
+small adaptation step, compositor and Dart applications. Cache misses build the
+pinned producer from its locked sources automatically. Older or explicitly
+source-selected hosts build the engine with their host package set instead.
+
+A complete package cache hit still does not guarantee compatibility with a
+different host graphics stack.
+Overriding `programs.denial.package` with
+`denial.packages.${system}.denial` retains Denial's pinned native dependencies;
+after a host update, drivers loaded from `/run/opengl-driver` can require glibc
+symbols that the cached package's libc does not provide. Keep the module's
+default package for host dependency alignment.
+
+CI checks stable and the separately locked unstable package set, requiring one
+identical raw engine producer, host libc alignment, complete artifact verification
+and engine/AOT/Mesa loading. Its negative test models an older process loading a
+newer Mesa driver when the libc baselines differ. Actual graphics/session tests
+are recorded in [the validation results](VALIDATION.md).
+
+If startup reports GBM backend initialization failure for an already-open DRM
+device, the device was opened successfully. A GBM `No such file or directory`
+error can refer to loading a driver or its dependencies. Check the preceding
+Mesa loader output on stderr or in the display manager's session logs for the
+underlying error, including missing `GLIBC_*` symbols.
+
+A cache miss still performs the complete source build and has
 required more than 48 GiB of temporary Nix store space on the validation host;
 plan a builder with at least 64 GiB of free working space. Subsequent builds
 reuse Nix store objects, and source filtering keeps the engine and unrelated

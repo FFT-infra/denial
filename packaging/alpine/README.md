@@ -1,7 +1,8 @@
 # Alpine Linux package adapter
 
 Alpine 3.24 is runtime-tested on x86-64. Denial's release pipeline publishes
-the `denial` and `denial-flutter-engine` APKs as direct GitHub Release
+the `denial` and `denial-flutter-engine` APKs, plus the optional
+`denial-plugin-manager` APK, as direct GitHub Release
 downloads with adjacent OpenPGP signatures. A native RSA-signed APK repository
 is not published yet. This adapter consumes the same staged glibc payload as
 the Debian and Fedora adapters and makes the Alpine-specific musl compatibility

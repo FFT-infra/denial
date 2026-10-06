@@ -517,6 +517,8 @@ struct EngineHostState {
     _icu_data: CString,
     _argv: Vec<CString>,
     _argv_pointers: Vec<*const std::ffi::c_char>,
+    _dart_argv: Vec<CString>,
+    _dart_argv_pointers: Vec<*const std::ffi::c_char>,
 }
 
 pub struct EngineHost {
@@ -528,6 +530,16 @@ pub struct EngineHost {
 }
 
 impl EngineHost {
+    /// Starts a standalone application with arguments passed to Dart's main().
+    pub fn start_with_dart_arguments(
+        project: &EngineProject,
+        handler: Arc<dyn OpenGlHandler>,
+        arguments: &[CString],
+    ) -> Result<Self, HostError> {
+        let library = Arc::new(EngineLibrary::load(&project.engine_library)?);
+        Self::start_with_options(project, handler, library, None, arguments)
+    }
+
     pub fn start(
         project: &EngineProject,
         handler: Arc<dyn OpenGlHandler>,
@@ -556,6 +568,16 @@ impl EngineHost {
         library: Arc<EngineLibrary>,
         thread_priority_setter: Option<unsafe extern "C" fn(sys::FlutterThreadPriority)>,
     ) -> Result<Self, HostError> {
+        Self::start_with_options(project, handler, library, thread_priority_setter, &[])
+    }
+
+    fn start_with_options(
+        project: &EngineProject,
+        handler: Arc<dyn OpenGlHandler>,
+        library: Arc<EngineLibrary>,
+        thread_priority_setter: Option<unsafe extern "C" fn(sys::FlutterThreadPriority)>,
+        dart_arguments: &[CString],
+    ) -> Result<Self, HostError> {
         let engine_runs_aot = library.runs_aot_compiled_dart_code();
         if engine_runs_aot != project.runtime.runs_aot() {
             return Err(HostError::RuntimeModeMismatch {
@@ -581,6 +603,8 @@ impl EngineHost {
             .iter()
             .map(|argument| argument.as_ptr())
             .collect::<Vec<_>>();
+        let dart_argv = dart_arguments.to_vec();
+        let dart_argv_pointers = dart_argv.iter().map(|arg| arg.as_ptr()).collect::<Vec<_>>();
 
         let mut callback_state = Box::new(CallbackState {
             handler,
@@ -654,6 +678,9 @@ impl EngineHost {
             command_line_argc: i32::try_from(argv_pointers.len())
                 .expect("Flutter argv count fits i32"),
             command_line_argv: argv_pointers.as_ptr(),
+            dart_entrypoint_argc: i32::try_from(dart_argv_pointers.len())
+                .expect("Dart argument count fits i32"),
+            dart_entrypoint_argv: dart_argv_pointers.as_ptr(),
             platform_message_callback: Some(platform_message),
             vsync_callback: Some(request_vsync),
             custom_task_runners: &*custom_runners,
@@ -689,6 +716,8 @@ impl EngineHost {
                 _icu_data: icu_data,
                 _argv: argv,
                 _argv_pointers: argv_pointers,
+                _dart_argv: dart_argv,
+                _dart_argv_pointers: dart_argv_pointers,
             })),
         })
     }

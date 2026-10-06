@@ -190,9 +190,10 @@ pub(super) fn synchronize_power_button(scanouts: &[Scanout], events: &mut Runtim
         if let Some(authentication) = events.authentication.as_ref() {
             // Close the security gate before queuing DPMS off. Waking only
             // restores display power; authentication remains locked.
-            authentication.lock();
-            synchronize_authentication_boundary(events);
-            info!("locked the session before power-button display off");
+            if authentication.lock_automatically() {
+                synchronize_authentication_boundary(events);
+                info!("locked the session before power-button display off");
+            }
         } else {
             warn!("could not lock on power button: authentication is unavailable");
         }
@@ -225,8 +226,9 @@ pub(super) fn synchronize_idle_dpms(scanouts: &[Scanout], events: &mut RuntimeSt
     events.queue_idle_power_requests(power_requests);
     if lock {
         if let Some(authentication) = events.authentication.as_ref() {
-            authentication.lock();
-            info!("locked the session after inactivity");
+            if authentication.lock_automatically() {
+                info!("locked the session after inactivity");
+            }
         } else {
             warn!("could not lock the session after inactivity: authentication is unavailable");
         }

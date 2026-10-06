@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+fixture="$(mktemp -d "${TMPDIR:-/tmp}/denial-apk-payload.XXXXXX")"
+trap 'rm -rf -- "$fixture"' EXIT
+mkdir -p "$fixture/input/usr/lib/denial/kit/.dart_tool" "$fixture/output" "$fixture/expected"
+printf 'package map\n' > "$fixture/input/usr/lib/denial/kit/.dart_tool/package_config.json"
+printf 'source identity\n' > "$fixture/input/usr/lib/denial/.denial-ui-source.json"
+cp -a "$fixture/input/." "$fixture/expected/"
+for metadata in .PKGINFO .SIGN.RSA.fixture .post-install; do
+  printf 'control\n' > "$fixture/input/$metadata"
+done
+bsdtar -czf "$fixture/plugin.apk" -C "$fixture/input" .
+"$ROOT/tools/extract-denial-apk-payload" "$fixture/plugin.apk" "$fixture/output"
+diff -r "$fixture/expected" "$fixture/output"
+"$ROOT/tools/verify-denial-package-payload" apk "$fixture/plugin.apk" "$fixture/expected"
+printf 'unexpected\n' > "$fixture/input/.unexpected"
+bsdtar -czf "$fixture/unexpected.apk" -C "$fixture/input" .
+mkdir "$fixture/rejected"
+if "$ROOT/tools/extract-denial-apk-payload" "$fixture/unexpected.apk" "$fixture/rejected" 2>/dev/null; then
+  printf 'Unexpected root metadata was accepted\n' >&2
+  exit 1
+fi
+printf 'Verified hidden APK inputs survive extraction and payload verification.\n'

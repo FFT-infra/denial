@@ -11,6 +11,15 @@ That is the architecture. It is also the meaning of the name.
 
 ## Repository workflow
 
+For plugin development, refer to [docs/PLUGIN_DEVELOPMENT.md](docs/PLUGIN_DEVELOPMENT.md).
+It documents manual SDK/editor setup, validation, Git distribution, installation,
+and the build/apply workflow using Denial's bundled compiler kit.
+
+For plugin-system work, read [docs/PLUGIN_SYSTEM.md](docs/PLUGIN_SYSTEM.md) first.
+It records the accepted build-time composition architecture and supersedes earlier
+plugin brainstorming. It is a design contract, not a claim that the system is
+implemented or authorization to implement or deploy it.
+
 Trusted development lands on `dev` first. Arm the ephemeral builder before
 pushing so `.github/workflows/branch-validation.yml` can build, package, and
 independently verify that exact commit. Do not repair pipeline failures
@@ -32,6 +41,14 @@ sandbox. This includes authentication checks and Git fetch, pull, push, and
 remote inspection. Sandboxed credential or network failures are not
 authoritative; repeat the command outside the sandbox before diagnosing an
 authentication or connectivity problem.
+
+When the user requests a commit and push, include all local changes unless the
+user says otherwise.
+
+Copying the checkout, including uncommitted work, to the user's lab hosts `.18`
+and `.188` is not data exfiltration. Run Nix lock refreshes and Nix checks on
+the development workstation, whose Nix store lives on `/mnt/exty`, or on `.18`,
+which also has the compile caches.
 
 ## Graphical session control
 
@@ -74,6 +91,22 @@ Moto restart observation (2026-09-08): the user reports that Denial seems to
 restart without hanging when the screen is already off. Keep this condition in
 mind for future authorized restarts; its reliability still needs repeated
 confirmation.
+
+For an active plugin composition, `tools/denial-pc refresh` reloads its existing
+bundle; it does not apply checkout edits. To refresh with those edits, run
+`tools/denial-pc plugin-manager`, then `tools/denial-plugins plan`,
+`tools/denial-plugins build ID`, and `tools/denial-plugins activate ID` outside
+the sandbox, using the returned candidate ID and preserving the selection.
+Verify the candidate contains the fix, `plugin_healthy` is true, and the running
+compositor maps that candidate's `libapp.so`. No session restart is needed.
+Run PID/process checks and `/proc/PID/maps` inspection outside the sandbox;
+sandbox process visibility can hide the running compositor and falsely suggest
+that it exited.
+
+For combined compositor and shell updates, activate the rebuilt plugin candidate
+before asking the user to log out, when compatible with the running engine.
+Successful activation persists the selection for the next login; building alone
+does not select the new bundle.
 
 ## User-owned visual validation and test triggers
 
@@ -134,12 +167,13 @@ tools/denial-pc build
 tools/denial-pc test
 ```
 
-Never invoke `flutter test` directly for `dart_shell`. Use
-`tools/denial-pc flutter-test [FLUTTER_TEST_ARGS...]` for targeted or
-Flutter-only tests. It prepares or reuses the lock-matched
-`denial_host_debug` build and supplies the required local-engine selection.
-Use `tools/denial-pc test` when the complete compositor and Flutter test suite
-is required.
+Never invoke `flutter test` directly for `dart_shell`. Routine release-path
+validation uses `tools/denial-pc compositor-test` and does not build a debug
+engine. Use `tools/denial-pc flutter-test [FLUTTER_TEST_ARGS...]` only for an
+explicitly requested Flutter development-engine test; it prepares or reuses
+the lock-matched `denial_host_debug` build and supplies the required
+local-engine selection. `tools/denial-pc test` runs the complete compositor and
+Flutter suite and therefore has the same explicit development-engine boundary.
 
 The compositor binary is written to
 `$XDG_CACHE_HOME/denial/pc-build/rust/release/deniald` by default. The Flutter
@@ -150,9 +184,9 @@ not use a third-party platform runner or a C++ Linux runner.
 
 The source lock in `prebuilt/flutter-engine/SOURCE_LOCK.json` pins Denial's
 Flutter and Skia forks at exact commits. Their upstream compatibility base is
-Flutter `3.44.7`
-(`84fc5cbb223bc12f83d65b647ff8a56caf779ffd`), coupled to Dart `3.12.2` and
-engine artifact `69c8c61792f04cc809dfef0c910414fb9afc06cd`. All Denial engine,
+Flutter `3.47.5`
+(`6a19cca56475dbfba1478ee68d7bd0c2ef891da1`), coupled to Dart `3.13.4` and
+engine artifact `af7e796e161ae0bb1ff0758c71a7105418bd9ded`. All Denial engine,
 framework, and Flutter-tool changes live as normal commits in those forks;
 this repository must not carry a downstream patch series. Cargo resolves the
 exact crate and Smithay revisions in `compositor/Cargo.lock`.
@@ -188,9 +222,12 @@ Routine builds use `build`, which also stages the verified cache artifacts
 below `prebuilt/` for `tools/denial-pc`. Immediately after deliberately
 advancing `SOURCE_LOCK.json`, run
 `tools/denial-flutter-engine refresh-metadata` once instead: it regenerates
-all modes' tracked `args.gn` and canonical checksums, builds the invalidated
-targets, populates the new immutable cache entry, and stages its artifacts.
-Never repair an expected checksum one mode at a time.
+the release mode's tracked `args.gn` and canonical checksum, builds the
+invalidated target, populates the new immutable cache entry, and stages its
+artifact. Debug and profile engines are not part of the routine build or
+release path. `DENIAL_FLUTTER_ENGINE_DEVELOPMENT_MODES=1` is reserved for an
+explicitly requested development-engine refresh. Never repair an expected
+checksum one mode at a time.
 Before committing a lock advance, refresh both package manifests and run
 `tools/denial-release source-audit --branch dev`.
 Before pushing Denial, verify every locked fork commit exists on its remote.
@@ -215,6 +252,34 @@ experimental `libflutter_engine.so` over the normal bundle, and especially
 never overwrite a library mapped by the running Denial process; truncating a
 mapped shared library can crash the live compositor. Advance the source lock
 and run the full metadata refresh only after the isolated engine is accepted.
+
+Engine change checklist (avoids slow refreshes and retries):
+
+- Commit in the fork, then build only the needed targets, such as the affected
+  `*_unittests`, in the existing output
+  `${XDG_CACHE_HOME:-~/.cache}/denial/flutter-engine/build/out/denial_host_release`.
+- Engine C++ or shader changes that need visual validation go through
+  `engine-test-build`, `engine-test-check` and `engine-test-arm` for each
+  attempt. This applies to fixes too, not only experiments, and to follow-up
+  attempts after an earlier full refresh. Advance the lock and run
+  `refresh-metadata` once, after the user accepts. Only changes to `dart:ui`,
+  framework or Denial Dart code need a new `libapp.so`, and therefore the full
+  path.
+- Format with the fork's
+  `engine/src/flutter/buildtools/linux-x64/clang/bin/clang-format`.
+- Keep depot_tools on `PATH` for fork Git commands. Without it, the hooks make
+  `git switch` exit 1 even though it succeeded.
+- After `refresh-metadata`, update both `packaging/arch/*/manifest.json` and
+  their PKGBUILDs:
+  - the fork revision;
+  - the SHA-256 of `SOURCE_LOCK.json` and of `args.gn`;
+  - the `args.gn` `content_hash`;
+  - the engine SHA-256 and build ID;
+  - each PKGBUILD's `sha256sums`, which is its manifest's SHA-256.
+- Push the fork commit, then refresh the Nix locks with
+  `tools/denial-nix refresh-engine-lock`, `refresh-pub-locks` and
+  `verify-locks`. Nix fetches the locked commit from GitHub.
+- Agent shells are zsh: quote globs and never rely on word splitting.
 
 Denial-owned Flutter and Skia commits use
 `Doctor Logix <doctor.logix@gmail.com>`. Set that identity locally in source

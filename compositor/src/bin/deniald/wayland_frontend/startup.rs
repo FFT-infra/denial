@@ -327,10 +327,6 @@ impl WaylandFrontend {
             #[cfg(feature = "flutter")]
             scene_surface_windows_scratch: HashMap::new(),
             #[cfg(feature = "flutter")]
-            scene_complex_windows: HashSet::new(),
-            #[cfg(feature = "flutter")]
-            scene_complex_windows_scratch: HashSet::new(),
-            #[cfg(feature = "flutter")]
             scene_layer_surface_roots: HashSet::new(),
             #[cfg(feature = "flutter")]
             scene_layer_surface_roots_scratch: HashSet::new(),
@@ -357,6 +353,8 @@ impl WaylandFrontend {
             window_registry: WindowRegistry::default(),
             window_layout: create_window_layout(window_layout_kind),
             #[cfg(feature = "flutter")]
+            workspace_drop_preview: None,
+            #[cfg(feature = "flutter")]
             input_layout: None,
             #[cfg(feature = "flutter")]
             shell_keyboard_focus: None,
@@ -364,6 +362,8 @@ impl WaylandFrontend {
             input_root_ids: HashMap::new(),
             #[cfg(feature = "flutter")]
             input_visibility_known: false,
+            #[cfg(feature = "flutter")]
+            sampled_surface_ids: HashSet::new(),
             #[cfg(feature = "flutter")]
             client_input_route_cache: None,
             #[cfg(feature = "flutter")]
@@ -377,9 +377,21 @@ impl WaylandFrontend {
             #[cfg(feature = "flutter")]
             client_pointer_presses: Vec::new(),
             #[cfg(feature = "flutter")]
+            client_popup_grab: None,
+            #[cfg(feature = "flutter")]
             flutter_pointer_press: None,
             #[cfg(feature = "flutter")]
             clipboard_drag_active: false,
+            #[cfg(feature = "flutter")]
+            client_drag_active: false,
+            #[cfg(feature = "flutter")]
+            drag_icon: None,
+            #[cfg(feature = "flutter")]
+            drag_icon_offset: Point::from((0, 0)),
+            #[cfg(feature = "flutter")]
+            pending_drag_icon: false,
+            #[cfg(feature = "flutter")]
+            pending_drag_frame_callback_roots: HashSet::new(),
             #[cfg(feature = "flutter")]
             compositor_pointer_grab_active: false,
             wayland_pointer_buttons: HashSet::new(),

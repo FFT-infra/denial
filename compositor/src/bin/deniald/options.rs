@@ -125,6 +125,8 @@ pub(super) struct Options {
     pub(super) simulate_hotplug_at_frame: Option<u64>,
     pub(super) wayland: bool,
     pub(super) xwayland: bool,
+    /// Whether the session starts Denial's PolicyKit authentication agent.
+    pub(super) polkit_agent: bool,
     pub(super) flutter_bundle: Option<PathBuf>,
     #[cfg(feature = "flutter")]
     pub(super) flutter_renderer: RendererBackend,
@@ -168,6 +170,7 @@ impl Options {
             simulate_hotplug_at_frame: None,
             wayland: false,
             xwayland: false,
+            polkit_agent: true,
             flutter_bundle: None,
             #[cfg(feature = "flutter")]
             flutter_renderer: RendererBackend::default(),
@@ -206,6 +209,7 @@ impl Options {
         let mut simulate_hotplug_at_frame = None;
         let mut wayland = false;
         let mut xwayland = cfg!(feature = "xwayland");
+        let mut polkit_agent = true;
         let mut flutter_bundle = None;
         #[cfg(feature = "flutter")]
         let mut flutter_renderer = None;
@@ -291,6 +295,7 @@ impl Options {
                 }
                 "--wayland" => wayland = true,
                 "--no-xwayland" => xwayland = false,
+                "--no-polkit-agent" => polkit_agent = false,
                 "--start-locked" => start_locked = true,
                 "--flutter-bundle" => {
                     flutter_bundle = Some(PathBuf::from(
@@ -348,6 +353,7 @@ impl Options {
                          [--simulate-hotplug-at-frame N] \
                          [--wayland] \
                          [--no-xwayland] \
+                         [--no-polkit-agent] \
                          [--flutter-bundle PATH] \
                          [--flutter-renderer skia|impeller] \
                          [--software-rendering] \
@@ -495,6 +501,7 @@ impl Options {
             simulate_hotplug_at_frame,
             wayland,
             xwayland,
+            polkit_agent,
             flutter_bundle,
             #[cfg(feature = "flutter")]
             flutter_renderer: flutter_renderer.unwrap_or_default(),
@@ -1271,9 +1278,9 @@ fn render_persisted_output_config(
             ));
         }
     }
-    if !outputs.iter().any(|output| output.enabled) {
-        return Err("at least one persistent output must remain enabled".to_owned());
-    }
+    // Every connected output may be saved as disabled. That happens when a
+    // display lit only as a fallback keeps its saved preference while the
+    // preferred displays are away, and the display policy lights one anyway.
     if let Some(primary_output) = primary_output {
         validate_output_config_name(primary_output)?;
     }
@@ -1427,6 +1434,15 @@ mod tests {
 
         assert_eq!(default.xwayland, cfg!(feature = "xwayland"));
         assert!(!disabled.xwayland);
+    }
+
+    #[test]
+    fn polkit_agent_is_on_by_default_and_can_be_disabled() {
+        let default = Options::parse_from(Vec::<String>::new()).unwrap();
+        let disabled = Options::parse_from(["--no-polkit-agent".to_owned()]).unwrap();
+
+        assert!(default.polkit_agent);
+        assert!(!disabled.polkit_agent);
     }
 
     #[test]

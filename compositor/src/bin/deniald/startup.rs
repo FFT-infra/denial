@@ -1,7 +1,73 @@
 //! Device discovery, renderer construction, initial modeset, and runtime launch.
 
+use super::kms_session::log_shutdown;
 use super::*;
 use std::collections::HashMap;
+
+/// How often to rescan while no connected display can be lit. A hotplug
+/// uevent ends the wait sooner. The rescan also catches a connector whose
+/// driver sends no uevent, and a lid opened over the only candidate panel.
+const DISPLAY_WAIT_RESCAN: Duration = Duration::from_secs(1);
+
+/// Holds the session until a connected display can be lit, as the running
+/// compositor does after its last display disappears. A machine started
+/// without a monitor then brings up the desktop when one is plugged in.
+///
+/// Returns `None` when the session is asked to end first.
+fn await_presentable_outputs(
+    event_loop: &mut EventLoop<'_, RuntimeState>,
+    drm: &mut DrmDevice,
+    drm_scanner: &mut DrmScanner<SimpleCrtcMapper>,
+    max_outputs: usize,
+    configuration: &mut RuntimeOutputConfiguration,
+    policy_journal: &mut output_policy::OutputPolicyJournal,
+    mut covered: bool,
+) -> Result<Option<ConfiguredOutputs>, Box<dyn Error>> {
+    warn!("no connected display can be lit; waiting for one before starting the desktop");
+    // The callbacks on this loop only record what happened. The desktop
+    // starts with fresh runtime state once a display can be lit.
+    let mut state = RuntimeState::default();
+    loop {
+        let timeout = state.lifecycle.seat_active().then_some(DISPLAY_WAIT_RESCAN);
+        event_loop.dispatch(timeout, &mut state)?;
+        if let Some(reason) = state.lifecycle.shutdown_reason() {
+            log_shutdown(reason);
+            return Ok(None);
+        }
+        if state.device_removed {
+            return Err("the DRM device was removed while waiting for a display".into());
+        }
+        if state.lifecycle.take_pause_pending() && drm.is_active() {
+            drm.pause();
+            info!("libseat paused the session while it waits for a display");
+        }
+        if !state.lifecycle.seat_active() {
+            continue;
+        }
+        if !drm.is_active() {
+            if let Err(error) = drm.activate(false) {
+                warn!(%error, "could not reacquire DRM master while waiting for a display");
+                continue;
+            }
+            info!("libseat reactivated the session while it waits for a display");
+        }
+        // Without libinput yet, only logind can report the lid opening over
+        // the one panel the preferences left available.
+        if covered && let Ok(closed) = lid_switch::read_closed() {
+            configuration.lid_closed = closed;
+        }
+        let configured = connected_outputs(drm_scanner, drm, max_outputs, configuration)?;
+        policy_journal.record(&configured.selection);
+        if !configured.outputs.is_empty() {
+            info!(
+                outputs = configured.outputs.len(),
+                "a display can be lit; starting the desktop"
+            );
+            return Ok(Some(configured));
+        }
+        covered = configured.selection.policy == output_policy::OutputPolicy::Covered;
+    }
+}
 
 pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
     #[cfg(not(feature = "flutter"))]
@@ -10,11 +76,29 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
     }
 
     let runtime_limit = options.runtime_limit();
+    // calloop's signal source masks only the thread that creates it. Create it
+    // before settings, libseat, RTKit, graphics drivers, or any Denial worker
+    // can spawn threads so every descendant inherits the mask. A single thread
+    // without it receives process-directed control signals with their default
+    // action, and `denial-pc refresh` would then terminate the session.
+    let signal_source = if runtime_limit != RuntimeLimit::TestOnly {
+        Some(Signals::new(&[
+            Signal::SIGINT,
+            Signal::SIGTERM,
+            #[cfg(feature = "flutter")]
+            Signal::SIGUSR1,
+            #[cfg(feature = "flutter")]
+            Signal::SIGUSR2,
+        ])?)
+    } else {
+        None
+    };
+
     let preserve_predecessor = preserves_predecessor_kms_state(
         runtime_limit,
         denial_core::environment::flag("DENIAL_NO_PREDECESSOR"),
     );
-    let output_configuration = RuntimeOutputConfiguration::from_options(&options);
+    let mut output_configuration = RuntimeOutputConfiguration::from_options(&options);
     let mut settings = options
         .wayland
         .then(settings::SettingsManager::load)
@@ -30,23 +114,6 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
         );
         settings.replace_invalid_keyboard_with_default();
     }
-
-    // calloop's signal source masks only the thread that creates it. Create it
-    // before libseat, RTKit, graphics drivers, or any Denial worker can spawn
-    // threads so every descendant inherits the mask and process-directed
-    // control signals cannot retain their default terminating behavior.
-    let signal_source = if runtime_limit != RuntimeLimit::TestOnly {
-        Some(Signals::new(&[
-            Signal::SIGINT,
-            Signal::SIGTERM,
-            #[cfg(feature = "flutter")]
-            Signal::SIGUSR1,
-            #[cfg(feature = "flutter")]
-            Signal::SIGUSR2,
-        ])?)
-    } else {
-        None
-    };
 
     #[cfg(feature = "flutter")]
     let portal_ipc_server = if options.flutter_bundle.is_some() && options.wayland {
@@ -189,6 +256,10 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
                             }
                         }
                     }
+                    // libinput sees no lid toggles while the session is away
+                    // from its VT.
+                    #[cfg(feature = "flutter")]
+                    state.lid.request_reading();
                     state.lifecycle.activate_session();
                 }
             })?;
@@ -235,15 +306,48 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
     };
 
     let mut drm_scanner: DrmScanner<SimpleCrtcMapper> = DrmScanner::new();
-    let outputs = connected_outputs(
+    // Read only after the signal mask is in place: the D-Bus client starts a
+    // worker thread.
+    output_configuration.lid_closed = lid_switch::startup_closed();
+    let mut policy_journal = output_policy::OutputPolicyJournal::default();
+    let mut configured = connected_outputs(
         &mut drm_scanner,
         &kms.drm,
         options.max_outputs,
         &output_configuration,
     )?;
-    if outputs.is_empty() {
-        return Err(format!("no connected outputs found on {}", options.device.display()).into());
+    policy_journal.record(&configured.selection);
+    if configured.outputs.is_empty() {
+        let event_loop = frame_event_loop
+            .as_mut()
+            .filter(|_| runtime_limit == RuntimeLimit::UntilLogout)
+            .ok_or_else(|| {
+                format!(
+                    "no connected display can be lit on {}",
+                    options.device.display()
+                )
+            })?;
+        let covered = configured.selection.policy == output_policy::OutputPolicy::Covered;
+        let Some(presentable) = await_presentable_outputs(
+            event_loop,
+            &mut kms.drm,
+            &mut drm_scanner,
+            options.max_outputs,
+            &mut output_configuration,
+            &mut policy_journal,
+            covered,
+        )?
+        else {
+            return Ok(());
+        };
+        configured = presentable;
+        if !preserve_predecessor {
+            // Another session may have latched planes while this one waited
+            // away from its VT.
+            kms_state::release_inherited_planes(&kms.drm);
+        }
     }
+    let outputs = configured.outputs;
 
     let mut topology = topology_for_outputs(&outputs, &output_configuration)?;
     let snapshot = topology.snapshot();
@@ -334,8 +438,16 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
 
     let cross_device_rendering = render_device != options.device;
     let gbm = GbmDevice::new(render_fd.clone()).map_err(|error| {
+        // This fd is already open. GBM can return ENOENT when loading its
+        // backend fails, so its errno must not imply a missing DRM node.
         format!(
-            "could not create GBM device for {}: {error}",
+            "GBM backend initialization failed for already-open DRM device {}: {error}. \
+             The DRM device was opened successfully; the GBM error can instead refer to \
+             loading a graphics driver or its dependencies. Check preceding Mesa loader \
+             messages on stderr or in the display manager's session logs. On NixOS, \
+             a package built with another Nixpkgs revision can use a glibc incompatible \
+             with drivers in /run/opengl-driver; use the programs.denial module's \
+             default package (pkgs.denial) to build against the host's dependencies.",
             render_device.display()
         )
     })?;
@@ -648,11 +760,67 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
                     .map(|server| server.socket_path().as_os_str()),
                 #[cfg(not(feature = "flutter"))]
                 None,
+                options.polkit_agent,
             ) {
                 Ok(activation) => graphical_session_started = activation.starts_systemd_target(),
                 Err(error) => {
                     warn!(%error, "could not activate the compositor session environment")
                 }
+            }
+        }
+        // Non-systemd sessions also get the dedicated authentication agent.
+        // This starts its backend only; the agent opens UI on a Polkit challenge.
+        #[cfg(feature = "flutter")]
+        if runtime_limit == RuntimeLimit::UntilLogout
+            && !graphical_session_started
+            && wayland.is_some()
+            && options.polkit_agent
+            && std::env::var("DENIAL_POLKIT_AGENT").as_deref() != Ok("0")
+            && let Some(runtime) = flutter.as_mut()
+        {
+            let binary = std::env::var("DENIAL_POLKIT_BINARY")
+                .unwrap_or_else(|_| "denial-polkit-agent".into());
+            if let Err(error) =
+                runtime.start_startup_application(vec![binary], "dev.denial.Polkit.desktop")
+            {
+                warn!(%error, "could not start authentication agent");
+            }
+        }
+        // Onboarding belongs to compositor startup, not a systemd/XDG
+        // autostart generator (which may be absent or already active).
+        // The native application checks its completion marker before opening a window.
+        // Bounded diagnostics and tests must never launch user applications.
+        #[cfg(feature = "flutter")]
+        if runtime_limit == RuntimeLimit::UntilLogout
+            && wayland.is_some()
+            && let Some(runtime) = flutter.as_mut()
+            && let Some(arguments) = welcome::launch_arguments()
+            && let Err(error) =
+                runtime.start_startup_application(arguments, "dev.denial.Welcome.desktop")
+        {
+            warn!(%error, "could not start Welcome");
+        }
+        // Denial was updated under a confirmed plugin composition. The plugin
+        // manager rebuilds it in the background, keeps the user informed and
+        // applies it at a quiet moment; the packaged shell runs meanwhile.
+        #[cfg(feature = "flutter")]
+        if runtime_limit == RuntimeLimit::UntilLogout
+            && wayland.is_some()
+            && flutter_launcher
+                .as_ref()
+                .is_some_and(FlutterLauncher::plugin_rebuild_needed)
+            && let Some(runtime) = flutter.as_mut()
+        {
+            if let Some(arguments) = plugin_bundle::resume_arguments() {
+                if let Err(error) =
+                    runtime.start_startup_application(arguments, "dev.denial.PluginManager.desktop")
+                {
+                    warn!(%error, "could not start the plugin rebuild after a Denial update");
+                }
+            } else {
+                info!(
+                    "plugins need a rebuild for this Denial version; the plugin manager is not installed"
+                );
             }
         }
         if options.flutter_bundle.is_some() {
@@ -680,6 +848,7 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
                     topology: &mut topology,
                     max_outputs: options.max_outputs,
                     output_configuration,
+                    output_policy_journal: policy_journal,
                     output_config: options.output_config.clone(),
                     output_control: output_control
                         .as_ref()

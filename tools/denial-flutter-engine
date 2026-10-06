@@ -7,7 +7,7 @@ ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/lib/denial-architecture.sh"
 denial_arch_configure
 SOURCE_LOCK="$ROOT/prebuilt/flutter-engine/SOURCE_LOCK.json"
-CACHE_SCHEMA='2'
+CACHE_SCHEMA='3'
 CACHE_ROOT="${DENIAL_FLUTTER_ENGINE_CACHE_ROOT:-${XDG_CACHE_HOME:-${HOME:?HOME is required}/.cache}/denial/flutter-engine}"
 CANONICAL_FLUTTER_SOURCE='/mnt/exty/denial-flutter-fork-3.44.7'
 CANONICAL_SKIA_SOURCE='/mnt/exty/denial-skia-fork-3.44.7'
@@ -33,7 +33,11 @@ if [[ "$DENIAL_ARCH" == aarch64 ]] && ((DEFAULT_BUILD_JOBS > 10)); then
   DEFAULT_BUILD_JOBS=10
 fi
 BUILD_JOBS="${DENIAL_FLUTTER_ENGINE_JOBS:-$DEFAULT_BUILD_JOBS}"
-MODES=(release debug profile)
+if [[ "${DENIAL_FLUTTER_ENGINE_DEVELOPMENT_MODES:-0}" == 1 ]]; then
+  MODES=(release debug profile)
+else
+  MODES=(release)
+fi
 ARTIFACT_STAGING=''
 if [[ "$DENIAL_FLUTTER_ARCH" == x64 ]]; then
   NATIVE_TOOLCHAIN_JOBS=16
@@ -42,6 +46,13 @@ else
   NATIVE_TOOLCHAIN_JOBS=4
   GN_ARCH_ARGS=(--linux "--linux-cpu=$DENIAL_FLUTTER_ARCH")
 fi
+GN_ENGINE_ARGS=(
+  --slimpeller
+  --enable-fontconfig
+  --gn-args=shell_enable_vulkan=false
+  --gn-args=test_enable_vulkan=false
+  --gn-args=skia_use_vulkan=false
+)
 NATIVE_RELEASE_ENGINE_DIR="$ROOT/prebuilt/flutter-engine/$DENIAL_FLUTTER_PLATFORM-release"
 
 fail() {
@@ -87,7 +98,7 @@ Usage:
 
 Commands:
   cache-key  Print the immutable cache key for the locked source and GN args.
-  build      Reuse/build all modes and stage them into prebuilt/ for local use.
+  build      Reuse/build the release engine and stage it for local use.
   flutter-test
              Build the lock-matched debug flutter_tester and run the shell tests.
              Arguments after -- are forwarded to flutter test.
@@ -98,7 +109,7 @@ Commands:
              artifacts shipped for editable UI development.
   refresh-metadata
              After deliberately advancing SOURCE_LOCK.json, regenerate GN
-             arguments and canonical checksums, then build and stage all modes.
+             arguments and canonical checksums, then build and stage release.
   verify     Require and verify an existing exact artifact hit.
 
 Environment:
@@ -109,6 +120,9 @@ Environment:
   DENIAL_FLUTTER_ENGINE_JOBS        Explicit Ninja parallelism.
   DENIAL_FLUTTER_ENGINE_DEDICATED_BUILDER
                                       Set to 1 to use every CPU by default.
+  DENIAL_FLUTTER_ENGINE_DEVELOPMENT_MODES
+                                      Set to 1 to additionally build and
+                                      refresh debug and profile engines.
   DENIAL_FLUTTER_TEST_COMMAND          Prepared lock-matched Flutter launcher
                                       used to run shell tests.
 
@@ -125,6 +139,9 @@ managed checkout fallback for isolated CI builders.
 
 Interactive machines leave two logical CPUs free by default. GitHub Actions
 and explicitly dedicated builders may use every available CPU.
+
+All generated engine modes are Slimpeller builds: Impeller is required and the
+Ganesh and Graphite rendering backends are not compiled.
 
 Routine builds must use `build`. `refresh-metadata` is the one-time maintainer
 operation for a controlled Flutter/Skia lock advance; it intentionally updates
@@ -230,6 +247,26 @@ verify_engine_exports() {
   done
 }
 
+verify_slimpeller_args() {
+  local mode="$1"
+  local generated="$2"
+  local argument
+  local -a arguments=(
+    "slimpeller = true"
+    "skia_enable_ganesh = false"
+    "skia_enable_graphite = false"
+    "shell_enable_vulkan = false"
+    "test_enable_vulkan = false"
+    "skia_use_vulkan = false"
+  )
+
+  for argument in "${arguments[@]}"; do
+    if ! grep -Fqx "$argument" "$generated"; then
+      fail "$mode generated args are not a Slimpeller configuration: missing $argument"
+    fi
+  done
+}
+
 normalize_generated_args() {
   local mode="$1"
   local generated="$2"
@@ -237,6 +274,8 @@ normalize_generated_args() {
   local expected_jobs
   local generated_job_count
   local normalized="${generated}.denial-normalized.$$"
+
+  verify_slimpeller_args "$mode" "$generated"
 
   if [[ ! -f "$expected" ]]; then
     grep -Fqx 'host_os = "linux"' "$generated" \
@@ -303,6 +342,8 @@ refresh_generated_args() {
   local expected_jobs
   local normalized="${generated}.denial-refresh.$$"
 
+  verify_slimpeller_args "$mode" "$generated"
+
   expected_jobs="$(
     awk '$1 == "concurrent_toolchain_jobs" && $2 == "=" { print $3 }' \
       "$reference"
@@ -322,11 +363,11 @@ validate_source_lock() {
   jq -e '
     .schema_version == 1
     and .flutter.repository == "https://github.com/denialwm/flutter.git"
-    and .flutter.branch == "denial/3.44.7-r1"
+    and .flutter.branch == "denial/3.47.5-r1"
     and (.flutter.revision | test("^[0-9a-f]{40}$"))
     and (.flutter.upstream_revision | test("^[0-9a-f]{40}$"))
     and .skia.repository == "https://github.com/denialwm/skia.git"
-    and .skia.branch == "denial/3.44.7-r1"
+    and .skia.branch == "denial/3.47.5-r1"
     and (.skia.revision | test("^[0-9a-f]{40}$"))
     and (.skia.upstream_revision | test("^[0-9a-f]{40}$"))
     and .depot_tools.repository ==
@@ -423,10 +464,12 @@ write_github_env() {
     printf 'DENIAL_ENGINE_CACHE_KEY=%s\n' "$key"
     printf 'DENIAL_PC_ENGINE_SOURCE=%s\n' \
       "$artifact_dir/release/libflutter_engine.so"
-    printf 'DENIAL_PACKAGE_DEBUG_ENGINE_SOURCE=%s\n' \
-      "$artifact_dir/debug/libflutter_engine.so"
-    printf 'DENIAL_PACKAGE_PROFILE_ENGINE_SOURCE=%s\n' \
-      "$artifact_dir/profile/libflutter_engine.so"
+    if [[ "${DENIAL_FLUTTER_ENGINE_DEVELOPMENT_MODES:-0}" == 1 ]]; then
+      printf 'DENIAL_PACKAGE_DEBUG_ENGINE_SOURCE=%s\n' \
+        "$artifact_dir/debug/libflutter_engine.so"
+      printf 'DENIAL_PACKAGE_PROFILE_ENGINE_SOURCE=%s\n' \
+        "$artifact_dir/profile/libflutter_engine.so"
+    fi
   } >>"$destination"
 }
 
@@ -765,7 +808,7 @@ build_artifacts() {
         VPYTHON_VIRTUALENV_ROOT="$VPYTHON_CACHE_ROOT" \
         ./flutter/tools/gn \
           --runtime-mode="$mode" \
-          --enable-fontconfig \
+          "${GN_ENGINE_ARGS[@]}" \
           --out-dir="$BUILD_ROOT" \
           --target-dir="$target"
     )
@@ -869,7 +912,7 @@ refresh_metadata() {
         VPYTHON_VIRTUALENV_ROOT="$VPYTHON_CACHE_ROOT" \
         ./flutter/tools/gn \
           --runtime-mode="$mode" \
-          --enable-fontconfig \
+          "${GN_ENGINE_ARGS[@]}" \
           --out-dir="$BUILD_ROOT" \
           --target-dir="$target"
     )
@@ -994,7 +1037,7 @@ run_flutter_tests() {
       VPYTHON_VIRTUALENV_ROOT="$VPYTHON_CACHE_ROOT" \
       ./flutter/tools/gn \
         --runtime-mode=debug \
-        --enable-fontconfig \
+        "${GN_ENGINE_ARGS[@]}" \
         --out-dir="$BUILD_ROOT" \
         --target-dir="$target"
   )
@@ -1022,13 +1065,19 @@ run_flutter_tests() {
   [[ -x "$output/flutter_tester" ]] \
     || fail "lock-matched flutter_tester is missing: $output/flutter_tester"
 
+  if [[ "$#" -eq 0 ]]; then
+    set -- test ../packages/denial_flutter_sdk/test
+  fi
   printf 'Running Dart shell tests with lock-matched flutter_tester\n'
   (
     cd "$ROOT/dart_shell"
+    # The Denial engine enables Impeller by default. Select it explicitly so
+    # Flutter's test tool does not also request incompatible software rendering.
     "$flutter_test_command" test \
       --local-engine-src-path="$local_engine_src_path" \
       --local-engine="$target" \
       --local-engine-host="$target" \
+      --enable-impeller \
       "$@"
   )
 }
@@ -1066,7 +1115,7 @@ prepare_app_build() {
       ./flutter/tools/gn \
         "${GN_ARCH_ARGS[@]}" \
         --runtime-mode=release \
-        --enable-fontconfig \
+        "${GN_ENGINE_ARGS[@]}" \
         --out-dir="$BUILD_ROOT" \
         --target-dir="$target"
   )
@@ -1085,6 +1134,7 @@ prepare_app_build() {
       -C "$output" \
       -j "$BUILD_JOBS" \
       dart_sdk \
+      flutter/sky/packages/sky_engine:sky_engine \
       flutter_patched_sdk/platform_strong.dill \
       gen_snapshot \
       libflutter_linux_gtk.so \
@@ -1155,7 +1205,7 @@ prepare_development_sdk() {
         VPYTHON_VIRTUALENV_ROOT="$VPYTHON_CACHE_ROOT" \
         ./flutter/tools/gn \
           --runtime-mode="$mode" \
-          --enable-fontconfig \
+          "${GN_ENGINE_ARGS[@]}" \
           --out-dir="$BUILD_ROOT" \
           --target-dir="$target"
     )

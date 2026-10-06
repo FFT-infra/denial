@@ -1,12 +1,23 @@
 {
   runCommand,
   package,
+  pluginManager,
 }:
 
 runCommand "denial-path-contract" { } ''
   test -x ${package}/bin/denial-session
   test -x ${package}/bin/deniald
   test -x ${package}/bin/denial-settings
+  test ! -e ${package}/bin/denial-plugin-manager
+  test -x ${pluginManager}/bin/denial-plugins
+  test -x ${pluginManager}/bin/denial-plugin-manager
+  test -f ${pluginManager}/lib/denial/plugin-build-kit/kit.json
+  test ! -e ${pluginManager}/lib/denial/plugin-build-kit/flutter/bin/cache/dart-sdk
+  cmp ${pluginManager}/lib/denial/plugin-build-kit/runtime/.denial-ui-source.json \
+    ${package}/lib/denial/flutter/.denial-ui-source.json
+  ${pluginManager}/bin/denial-plugins --brief status > plugin-status.json
+  grep --fixed-strings '"buildKitAvailable": true' plugin-status.json
+  grep --fixed-strings '"available": true' plugin-status.json
   grep --fixed-strings 'package_prefix=' ${package}/bin/.denial-session-wrapped
   grep --fixed-strings 'DEFAULT_BUNDLE="$package_prefix/lib/denial/flutter"' \
     ${package}/bin/.denial-session-wrapped

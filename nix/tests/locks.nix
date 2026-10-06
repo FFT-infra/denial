@@ -4,6 +4,7 @@
   jq,
   source,
   flutterSource,
+  pluginCollection,
 }:
 
 runCommand "denial-nix-lock-consistency"
@@ -27,6 +28,11 @@ runCommand "denial-nix-lock-consistency"
 
     source_lock_hash="$(sha256sum \
       ${source}/prebuilt/flutter-engine/SOURCE_LOCK.json | cut -d ' ' -f 1)"
+    # Pub and Nix must select the same package and commit from the collection.
+    test "$(jq -er '.packages.denial_taskbar.description."resolved-ref"' \
+      ${source}/nix/dart_shell-pubspec-lock.json)" = '${pluginCollection.rev}'
+    test "$(jq -er '.packages.denial_taskbar.description.path' \
+      ${source}/nix/dart_shell-pubspec-lock.json)" = 'plugins/denial_taskbar'
     engine_revision="$(tr -d '\n' < \
       ${source}/prebuilt/flutter-engine/linux-x64-release/ENGINE_REVISION)"
     jq -e \
@@ -70,6 +76,12 @@ runCommand "denial-nix-lock-consistency"
     check_pub_lock \
       ${source}/settings_app/pubspec.lock \
       ${source}/nix/settings_app-pubspec-lock.json
+    check_pub_lock \
+      ${source}/plugin_manager_app/pubspec.lock \
+      ${source}/nix/plugin_manager_app-pubspec-lock.json
+    check_pub_lock \
+      ${source}/packages/denial_plugin_manager/pubspec.lock \
+      ${source}/nix/plugin_manager_backend-pubspec-lock.json
     flutter_pubspec_hash="$(sha256sum \
       ${flutterSource}/packages/flutter_tools/pubspec.yaml | cut -d ' ' -f 1)"
     test "$flutter_pubspec_hash" = "$(jq -er .source_pubspec_sha256 \

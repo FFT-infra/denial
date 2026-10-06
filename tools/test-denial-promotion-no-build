@@ -49,6 +49,11 @@ expect_blocked \
   "$ROOT/tools/run-denial-promotion-no-build" \
     "$ROOT/tools/denial-flutter-engine" build
 expect_blocked \
+  'Arch implicit staging' \
+  'requires DENIAL_PACKAGE_SKIP_STAGE=1' \
+  "$ROOT/tools/run-denial-promotion-no-build" \
+    "$ROOT/tools/package-denial-arch"
+expect_blocked \
   'Debian implicit staging' \
   'requires DENIAL_PACKAGE_SKIP_STAGE=1' \
   "$ROOT/tools/run-denial-promotion-no-build" \

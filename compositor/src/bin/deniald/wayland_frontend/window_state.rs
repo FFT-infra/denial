@@ -640,6 +640,15 @@ impl WaylandFrontend {
             )
         });
         let identity = identity?;
+        if super::super::welcome::centers_on_open(
+            identity.app_id(),
+            self.window_layout_manages_geometry(),
+            has_parent,
+        ) {
+            // Welcome always starts centered in stacking mode, even if its
+            // previous window was moved or maximized. Wait for client size.
+            return None;
+        }
         let fallback_output = self.fallback_output_geometry()?;
         let mut restored = self.restored_placement_for_identity(&identity, fallback_output)?;
         let client_state = WindowPlacementState {
@@ -815,11 +824,21 @@ impl WaylandFrontend {
         let has_same_app_sibling = self
             .window_identity(window)
             .is_some_and(|identity| self.window_has_same_identity_sibling(window, &identity));
-        let should_place = should_place_auxiliary_toplevel_at_pointer(
-            self.window_has_transient_parent(window),
-            has_same_app_sibling,
-            self.window_is_layout_managed(window),
-        );
+        let center_welcome = self.window_identity(window).is_some_and(|identity| {
+            super::super::welcome::centers_on_open(
+                identity.app_id(),
+                self.window_layout_manages_geometry(),
+                self.window_has_transient_parent(window),
+            )
+        });
+        #[cfg(feature = "flutter")]
+        let center_welcome = center_welcome && !self.mobile_shell;
+        let should_place = center_welcome
+            || should_place_auxiliary_toplevel_at_pointer(
+                self.window_has_transient_parent(window),
+                has_same_app_sibling,
+                self.window_is_layout_managed(window),
+            );
         self.window_record_for_surface_mut(&object_id)?
             .pending_auxiliary_toplevel_placement = None;
         if !should_place {
@@ -832,10 +851,14 @@ impl WaylandFrontend {
             .find(|output| output.id == pending.output_id)
             .map(|output| output.logical_geometry)
             .or_else(|| self.fallback_output_geometry())?;
-        let target = clamp_window_geometry(
-            Rectangle::new(pending.pointer_location, committed.size),
-            output_geometry,
-        );
+        let target = if center_welcome {
+            centered_transient_geometry(committed.size, output_geometry, output_geometry)
+        } else {
+            clamp_window_geometry(
+                Rectangle::new(pending.pointer_location, committed.size),
+                output_geometry,
+            )
+        };
         self.space.relocate_element(window, target.loc);
         self.update_window_output_membership(window);
         info!(
@@ -843,7 +866,8 @@ impl WaylandFrontend {
             y = target.loc.y,
             width = target.size.w,
             height = target.size.h,
-            "placed unparented auxiliary Wayland toplevel at pointer"
+            center_welcome,
+            "placed initial floating Wayland toplevel"
         );
         Some(target)
     }
@@ -1061,6 +1085,13 @@ impl WaylandFrontend {
         let Some(record) = self.ensure_window_record_for_surface(&root_surface.id()) else {
             return;
         };
+        if authority.persistent() {
+            // A fullscreen, maximize, layout or shell target supersedes the
+            // initial client-sized placement. Its first buffer can still have
+            // the old size; do not publish that size as a later live placement.
+            record.pending_client_sized_placement = None;
+            record.pending_auxiliary_toplevel_placement = None;
+        }
         if window.geometry().size == target.size && !authority.persistent() {
             // A move needs no client acknowledgement.  Reading the geometry
             // back from Space is already authoritative and avoids retaining a
@@ -1242,7 +1273,10 @@ impl WaylandFrontend {
         let preview_size = self
             .window_record_for_surface(&surface_id)
             .and_then(|record| record.layout_preview_size);
-        if committed_size_requires_reassertion(target.size, preview_size, committed.size) {
+        if committed_size_requires_reassertion(target.size, preview_size, committed.size)
+            && !ManagedWindow::new(window)
+                .is_some_and(|managed| managed.geometry_configure_in_flight())
+        {
             let action = self
                 .window_record_for_surface_mut(&surface_id)
                 .and_then(|record| record.geometry_intent.as_mut())

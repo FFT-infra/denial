@@ -11,16 +11,16 @@ The authoritative source input is
 revision files record the derived build and ABI identities without duplicating
 mutable lock values in this document.
 
-All Denial changes are normal fork commits. The relevant performance and
-hardware results are retained in the
-[engine validation report](../../../docs/flutter-engine/3.44.7/VALIDATION.md).
+All Denial changes are normal fork commits. The coupled generation's build
+checks and their hardware-validation boundary are retained in the
+[engine validation report](../../../docs/flutter-engine/3.47.5/VALIDATION.md).
 
 ## Build
 
 Use the revision-keyed incremental builder:
 
 ```sh
-tools/denial-flutter-engine build
+DENIAL_FLUTTER_ENGINE_DEVELOPMENT_MODES=1 tools/denial-flutter-engine build
 ```
 
 The equivalent direct engine commands are:
@@ -28,7 +28,11 @@ The equivalent direct engine commands are:
 ```sh
 ./flutter/tools/gn \
   --runtime-mode=profile \
+  --slimpeller \
   --enable-fontconfig \
+  --gn-args=shell_enable_vulkan=false \
+  --gn-args=test_enable_vulkan=false \
+  --gn-args=skia_use_vulkan=false \
   --target-dir=denial_host_profile
 /usr/bin/ninja -C out/denial_host_profile libflutter_engine.so
 ```

@@ -18,9 +18,8 @@ As of 2026-08-21:
 - the permanent release identity
   `AE4108FA5E91E26BE0EE331E0F5B3AD16E023091` is backed up and its signing
   subkey is installed in the GitHub `release-signing` environment;
-- the v0.2.0 candidate path adds the separately versioned and optional
-  `denial-ui-development` package to the same build, signing, verification,
-  repository, and release-evidence boundary;
+- the current candidate path is release-engine-only and does not build or
+  publish the optional `denial-ui-development` package;
 - the release candidate also emits byte-identical Debian-family and Fedora
   runtime/engine pairs from one GLIBC-gated staging tree; the signed-tag path
   republishes those exact payloads through signed APT and DNF repositories and
@@ -105,11 +104,11 @@ Every public-beta release publishes:
 - explicit non-claims for offline closure, reproducibility, independent
   rebuilding, SBOMs, and AArch64 binary packages.
 
-Beginning with v0.2.0, the signed package set contains three Arch archives:
-one `denial-flutter-engine`, one `denial`, and one optional
-`denial-ui-development`; it also contains a `denial-flutter-engine`/`denial`
-pair for Debian-family systems and another pair for Fedora. The development
-archive remains available only through Pacman and is not installed by default.
+The signed package set contains two Arch archives: one
+`denial-flutter-engine` and one `denial`. It also contains a matching pair for
+Debian-family systems and another pair for Fedora. The optional
+`denial-ui-development` archive is not built for the release-only Flutter
+3.47.5 generation.
 The set also contains a `denial-flutter-engine`/`denial` APK pair for Alpine
 3.24. Those APKs have adjacent OpenPGP signatures; APK-native RSA signatures
 and an APKINDEX are not claimed yet.

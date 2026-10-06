@@ -1,0 +1,23 @@
+name: denial_launcher
+description: Denial's desktop application launcher with search and recent apps.
+publish_to: none
+version: 0.0.0
+environment:
+  sdk: ^3.13.0
+  flutter: 3.47.5
+dependencies:
+  denial_sdk:
+    path: ../../packages/denial_sdk
+  denial_flutter_sdk:
+    path: ../../packages/denial_flutter_sdk
+  flutter:
+    sdk: flutter
+dev_dependencies:
+  flutter_lints: ^6.0.0
+
+denial_plugin:
+  schema: 1
+  name: App Launcher
+  provides:
+    - contract: package:denial_flutter_sdk/launcher.dart#ShellLauncher
+    - contract: package:denial_flutter_sdk/actions.dart#ShellAction

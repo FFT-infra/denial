@@ -20,8 +20,15 @@ Project-level release documents live at the repository root:
 - [Architecture](architecture.md)
 - [Session startup and locking](SESSION_STARTUP.md)
 - [denialctl](DENIALCTL.md)
+- [Keyboard window resizing](keyboard-shortcuts.md)
 - [Live Flutter UI development](UI_DEVELOPMENT.md)
 - [Custom Flutter shells](CUSTOM_SHELLS.md)
+- [Plugin system: accepted agent implementation contract](PLUGIN_SYSTEM.md)
+- [Plugin Manager: Git distribution and backend contract](PLUGIN_MANAGER.md)
+- [Plugin SDK package and validation](../packages/denial_sdk/README.md)
+- [Flutter plugin contracts](../packages/denial_flutter_sdk/README.md)
+- [Original top-bar plugin](../plugins/denial_top_bar/README.md)
+- [Windows-style taskbar](https://github.com/denialwm/denial-plugins/tree/main/plugins/denial_taskbar)
 - [Screenshots and screen sharing](SCREEN_CAPTURE.md)
 - [Window rendering diagnostics](RENDER_AUDIT.md)
 
@@ -54,6 +61,6 @@ The following documentation stays with its implementation or artifact:
 
 - [`compositor/README.md`](../compositor/README.md)
 - [`protocol/golden/README.md`](../protocol/golden/README.md)
-- [Flutter Engine validation](flutter-engine/3.44.7/VALIDATION.md)
+- [Flutter Engine validation](flutter-engine/3.47.5/VALIDATION.md)
 - [`prebuilt/flutter-engine/.../BUILD_INFO.md`](../prebuilt/flutter-engine/linux-x64-release/BUILD_INFO.md)
 - [`tools/flutter-embedder-bindings/README.md`](../tools/flutter-embedder-bindings/README.md)

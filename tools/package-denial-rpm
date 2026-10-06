@@ -101,32 +101,41 @@ env "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH" rpmbuild -bb \
   --define "flutter_engine_abi $FLUTTER_ENGINE_ABI" \
   --define "denial_payload $STAGE_ROOT/denial" \
   --define "engine_payload $STAGE_ROOT/denial-flutter-engine" \
+  --define "plugin_manager_payload $STAGE_ROOT/denial-plugin-manager" \
   "${runtime_version_definition[@]}" \
   "$RPM_ROOT/SPECS/denial.spec"
 
 denial_package="$(find "$RPM_ROOT/RPMS" -type f -name "denial-${PACKAGE_VERSION}-${PACKAGE_RELEASE}.x86_64.rpm" -print -quit)"
 engine_package="$(find "$RPM_ROOT/RPMS" -type f -name "denial-flutter-engine-${PACKAGE_VERSION}-${PACKAGE_RELEASE}.x86_64.rpm" -print -quit)"
-[[ -n "$denial_package" && -n "$engine_package" ]] \
+plugin_manager_package="$(find "$RPM_ROOT/RPMS" -type f -name "denial-plugin-manager-${PACKAGE_VERSION}-${PACKAGE_RELEASE}.x86_64.rpm" -print -quit)"
+[[ -n "$denial_package" && -n "$engine_package" && -n "$plugin_manager_package" ]] \
   || { printf 'package-denial-rpm: expected RPM outputs are missing\n' >&2; exit 1; }
 
 denial_output="$RPM_OUTPUT_ROOT/${denial_package##*/}"
 engine_output="$RPM_OUTPUT_ROOT/${engine_package##*/}"
+plugin_manager_output="$RPM_OUTPUT_ROOT/${plugin_manager_package##*/}"
 cp -- "$denial_package" "$denial_output"
 cp -- "$engine_package" "$engine_output"
+cp -- "$plugin_manager_package" "$plugin_manager_output"
 
 rpm --dbpath "$RPM_ROOT/database" -qp \
   --qf '%{NAME} %{VERSION}-%{RELEASE} %{ARCH}\n' \
-  "$engine_output" "$denial_output"
+  "$engine_output" "$denial_output" "$plugin_manager_output"
 "$ROOT/tools/verify-denial-package-payload" rpm "$engine_output" \
   "$STAGE_ROOT/denial-flutter-engine"
 "$ROOT/tools/verify-denial-package-payload" rpm "$denial_output" \
   "$STAGE_ROOT/denial"
+"$ROOT/tools/verify-denial-package-payload" rpm "$plugin_manager_output" \
+  "$STAGE_ROOT/denial-plugin-manager"
 "$ROOT/tools/verify-denial-native-package-metadata" \
   rpm "$engine_output" "$PACKAGE_VERSION" "$PACKAGE_RELEASE" \
   "$FLUTTER_ENGINE_ABI" "$GLIBC_BASELINE"
 "$ROOT/tools/verify-denial-native-package-metadata" \
   rpm "$denial_output" "$PACKAGE_VERSION" "$PACKAGE_RELEASE" \
   "$FLUTTER_ENGINE_ABI" "$GLIBC_BASELINE"
+"$ROOT/tools/verify-denial-native-package-metadata" \
+  rpm "$plugin_manager_output" "$PACKAGE_VERSION" "$PACKAGE_RELEASE" \
+  "$FLUTTER_ENGINE_ABI" "$GLIBC_BASELINE"
 
-printf '\n%s packages ready:\n%s\n%s\n' \
-  "$RPM_LABEL" "$engine_output" "$denial_output"
+printf '\n%s packages ready:\n%s\n%s\n%s\n' \
+  "$RPM_LABEL" "$engine_output" "$denial_output" "$plugin_manager_output"

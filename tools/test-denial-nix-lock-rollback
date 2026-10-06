@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Exercise the real maintenance transaction with a failed source fetch; no Nix
+# installation, network access or change to the checkout's locks is required.
+set -euo pipefail
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+fixture="$(mktemp -d "${TMPDIR:-/tmp}/denial-nix-rollback.XXXXXX")"
+trap 'rm -rf -- "$fixture"' EXIT
+mkdir -p "$fixture/repo/tools" "$fixture/repo/nix" \
+  "$fixture/repo/prebuilt/flutter-engine/linux-x64-release" "$fixture/bin"
+cp "$ROOT/tools/denial-nix" "$fixture/repo/tools/"
+cp "$ROOT/nix/flutter-engine-lock.json" "$fixture/repo/nix/"
+cp "$ROOT/prebuilt/flutter-engine/SOURCE_LOCK.json" \
+  "$fixture/repo/prebuilt/flutter-engine/"
+cp "$ROOT/prebuilt/flutter-engine/linux-x64-release/ENGINE_REVISION" \
+  "$fixture/repo/prebuilt/flutter-engine/linux-x64-release/"
+cp "$fixture/repo/nix/flutter-engine-lock.json" "$fixture/original.json"
+ln -s "$(command -v jq)" "$fixture/bin/jq"
+ln -s "$(type -P false)" "$fixture/bin/yq"
+cat > "$fixture/bin/nix" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "$*" == *denial-nix-maintenance-tools* ]]; then
+  printf '%s\n' "$DENIAL_NIX_TEST_TOOLS"
+  exit 0
+fi
+printf 'simulated source fetch failure\n' >&2
+exit 1
+MOCK
+chmod +x "$fixture/bin/nix"
+if PATH="$fixture/bin:$PATH" DENIAL_NIX_TEST_TOOLS="$fixture" \
+    bash "$fixture/repo/tools/denial-nix" refresh-engine-lock \
+    > "$fixture/result.log" 2>&1; then
+  printf 'Unexpected success after a failed source fetch\n' >&2
+  exit 1
+fi
+grep -Fq 'could not extract the verified hash' "$fixture/result.log"
+if grep -Fq 'unbound variable' "$fixture/result.log"; then
+  cat "$fixture/result.log" >&2
+  exit 1
+fi
+cmp "$fixture/original.json" "$fixture/repo/nix/flutter-engine-lock.json"
+printf 'Verified failed Nix source fetch restores the original lock.\n'

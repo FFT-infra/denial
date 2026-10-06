@@ -19,7 +19,7 @@ and Rust artifacts. A separate hosted job verifies the resulting unsigned
 production candidate. Finally, GitHub-hosted jobs rehearse the release-only
 Alpine path: Ubuntu 24.04 promotes the exact candidate under the no-build
 guard using disposable version metadata, then a root Arch container signs the
-two APKs with an ephemeral key and runs the same metadata, OpenPGP, and Alpine
+three APKs with an ephemeral key and runs the same metadata, OpenPGP, and Alpine
 dependency verifier used by publication. No rehearsal artifact is published.
 
 The version is deliberately still undecided at this point. Only after the
@@ -42,15 +42,15 @@ For either trusted branch, the owner-operated x86-64 runner:
    the exact locked Denial Flutter and Skia fork commits;
 6. builds the Flutter integration bundle;
 7. runs the Rust and Flutter test suites;
-8. builds and internally validates the two required runtime packages as Arch,
-   Debian, RPM, and Alpine archives, plus the optional Arch UI-development
-   package;
+8. builds and internally validates the two required runtime packages and the
+   optional Plugin Manager package as Arch, Debian, RPM, and Alpine archives,
+   plus the optional Arch UI-development package;
 9. records package metadata, host inputs, checksums, toolchain versions, and
    build logs; and
 10. uploads the unsigned candidate artifact and the explicit Nix closures.
 
 A separate GitHub-hosted Arch job downloads that artifact and independently
-checks its source identity, checksums, all nine archives, package ownership
+checks its source identity, checksums, all twelve native archives, package ownership
 metadata, engine ABI dependencies, version bounds, and required runtime and
 development payloads. The candidate also contains separately hashed neutral
 and Alpine-adapted staging trees, so the verifier compares every APK file and

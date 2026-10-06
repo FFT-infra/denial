@@ -10,6 +10,114 @@ use std::sync::Mutex;
 #[derive(Default)]
 struct PublishedSurfaceAlpha(Option<u32>);
 
+/// Buffer identities/revisions deliberately do not participate: only changes
+/// to the ordered sampling description require rebuilding Flutter's layers.
+#[cfg(feature = "flutter")]
+#[derive(Clone, Debug, PartialEq)]
+struct SurfaceTreeEntry {
+    surface: ObjectId,
+    parent: Option<ObjectId>,
+    view: Option<smithay::backend::renderer::utils::SurfaceView>,
+    buffer_size: Option<Size<i32, smithay::utils::Buffer>>,
+    scale: i32,
+    transform: Transform,
+    alpha: Option<u32>,
+    opaque: Vec<Rectangle<i32, Logical>>,
+}
+
+#[cfg(feature = "flutter")]
+#[derive(Default)]
+struct PublishedSurfaceTree {
+    entries: Vec<SurfaceTreeEntry>,
+    scratch: Vec<SurfaceTreeEntry>,
+}
+
+#[cfg(feature = "flutter")]
+impl PublishedSurfaceTree {
+    fn update(&mut self, mut entries: Vec<SurfaceTreeEntry>) -> bool {
+        let changed = self.entries != entries;
+        if changed {
+            std::mem::swap(&mut self.entries, &mut entries);
+        }
+        entries.clear();
+        self.scratch = entries;
+        changed
+    }
+}
+
+#[cfg(feature = "flutter")]
+pub(super) fn surface_tree_metadata_changed(surface: &WlSurface) -> bool {
+    // A desynchronized child can commit independently. Inspect its entire
+    // root so sibling reorders (which have no Smithay callback) are observed.
+    let mut root = surface.clone();
+    while let Some(parent) = get_parent(&root) {
+        root = parent;
+    }
+    let mut entries = with_states(&root, |states| {
+        states
+            .data_map
+            .insert_if_missing_threadsafe(|| Mutex::new(PublishedSurfaceTree::default()));
+        let mut previous = states
+            .data_map
+            .get::<Mutex<PublishedSurfaceTree>>()
+            .expect("inserted above")
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        std::mem::take(&mut previous.scratch)
+    });
+    with_surface_tree_upward(
+        &root,
+        None::<ObjectId>,
+        |surface, _, _| TraversalAction::DoChildren(Some(surface.id())),
+        |surface, states, parent| {
+            // Smithay holds the surface-tree lock during this callback.
+            // Read the provided state and traversal parent directly; calling
+            // with_states/get_parent here would recursively acquire that lock.
+            let sampling = states
+                .data_map
+                .get::<RendererSurfaceStateUserData>()
+                .map(|state| {
+                    let state = state.lock().unwrap_or_else(|p| p.into_inner());
+                    (
+                        state.view(),
+                        state.buffer().and_then(|buffer| {
+                            smithay::backend::renderer::buffer_dimensions(buffer)
+                        }),
+                        state.buffer_scale(),
+                        state.buffer_transform(),
+                        state.opaque_regions().unwrap_or_default().to_vec(),
+                    )
+                });
+            let (view, buffer_size, scale, transform, opaque) =
+                sampling.unwrap_or((None, None, 1, Transform::Normal, Vec::new()));
+            entries.push(SurfaceTreeEntry {
+                surface: surface.id(),
+                parent: parent.clone(),
+                view,
+                buffer_size,
+                scale,
+                transform,
+                opaque,
+                alpha: states
+                    .cached_state
+                    .get::<AlphaModifierSurfaceCachedState>()
+                    .current()
+                    .multiplier(),
+            });
+        },
+        |_, _, _| true,
+    );
+    with_states(&root, |states| {
+        let mut previous = states
+            .data_map
+            .get::<Mutex<PublishedSurfaceTree>>()
+            .expect("inserted above")
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        previous.update(entries)
+    })
+}
+
 #[cfg(feature = "flutter")]
 const fn layer_shell_content_kind(layer: WlrLayer) -> WindowContentKind {
     match layer {
@@ -57,6 +165,231 @@ fn surface_crop_to_buffer(
     // rectangle conversion rotates in the opposite direction to that mapping;
     // invert it when recovering raw texture coordinates from the viewport.
     source.to_buffer(scale, transform.invert(), &logical_size)
+}
+
+/// Dart lays a texture out from its published buffer size and source crop,
+/// while the engine samples whichever buffer is current when it rasterizes.
+/// Clients that crop an over-allocated buffer through wp_viewport (Chromium
+/// does during and after interactive resizes) reallocate without changing the
+/// visible size, so one buffer could be stretched into another's layout.
+/// Publish such a texture as a virtual canvas of its crop instead: the engine
+/// reads the crop together with the buffer it samples, and the published
+/// layout no longer depends on the allocation size.
+#[cfg(feature = "flutter")]
+fn cropped_buffer_canvas(
+    source: Rectangle<f64, smithay::utils::Buffer>,
+    transform: Transform,
+    buffer_width: u32,
+    buffer_height: u32,
+) -> Option<denial_flutter_engine::ExternalTexturePresentation> {
+    let [x, y, width, height] = [source.loc.x, source.loc.y, source.size.w, source.size.h];
+    // Fractional and transformed crops keep the established sampling path.
+    let integral = [x, y, width, height]
+        .iter()
+        .all(|value| value.is_finite() && (value - value.round()).abs() < 1e-6);
+    let buffer_width = f64::from(buffer_width);
+    let buffer_height = f64::from(buffer_height);
+    let cropped = integral
+        && transform == Transform::Normal
+        && width > 0.0
+        && height > 0.0
+        && x >= 0.0
+        && y >= 0.0
+        && x + width <= buffer_width
+        && y + height <= buffer_height
+        && (x, y, width, height) != (0.0, 0.0, buffer_width, buffer_height);
+    cropped.then(|| denial_flutter_engine::ExternalTexturePresentation {
+        struct_size: std::mem::size_of::<denial_flutter_engine::ExternalTexturePresentation>(),
+        width,
+        height,
+        source: [x, y, width, height],
+        destination: [0.0, 0.0, width, height],
+        // An empty background adds no draw to the engine's canvas.
+        ..Default::default()
+    })
+}
+
+/// The visible part of a popup root surface, from its xdg window geometry.
+/// Clients such as Chromium draw menu shadows inside the popup surface and
+/// declare the menu itself as window geometry; Flutter confines translucent
+/// materials to it. xdg-shell clamps the geometry to the surface, and a
+/// geometry covering the complete surface carries no information.
+#[cfg(feature = "flutter")]
+fn popup_visible_geometry(
+    declared: Option<Rectangle<i32, Logical>>,
+    surface_size: Size<i32, Logical>,
+) -> Option<WindowGeometry> {
+    let surface = Rectangle::from_size(surface_size);
+    let visible = declared?.intersection(surface)?;
+    (!visible.is_empty() && visible != surface).then(|| WindowGeometry {
+        x: f64::from(visible.loc.x),
+        y: f64::from(visible.loc.y),
+        width: f64::from(visible.size.w),
+        height: f64::from(visible.size.h),
+    })
+}
+
+#[cfg(all(test, feature = "flutter"))]
+mod popup_visible_geometry_tests {
+    use super::*;
+
+    fn rect(x: i32, y: i32, w: i32, h: i32) -> Rectangle<i32, Logical> {
+        Rectangle::new((x, y).into(), (w, h).into())
+    }
+
+    #[test]
+    fn shadow_margins_publish_the_declared_menu() {
+        assert_eq!(
+            popup_visible_geometry(Some(rect(12, 8, 200, 300)), (224, 324).into()),
+            Some(WindowGeometry {
+                x: 12.0,
+                y: 8.0,
+                width: 200.0,
+                height: 300.0,
+            })
+        );
+    }
+
+    #[test]
+    fn undeclared_or_complete_geometry_publishes_nothing() {
+        assert_eq!(popup_visible_geometry(None, (224, 324).into()), None);
+        assert_eq!(
+            popup_visible_geometry(Some(rect(0, 0, 224, 324)), (224, 324).into()),
+            None
+        );
+        assert_eq!(
+            popup_visible_geometry(Some(rect(0, 0, 0, 0)), (224, 324).into()),
+            None
+        );
+    }
+
+    #[test]
+    fn geometry_is_clamped_to_the_surface() {
+        assert_eq!(
+            popup_visible_geometry(Some(rect(-4, 10, 100, 400)), (224, 324).into()),
+            Some(WindowGeometry {
+                x: 0.0,
+                y: 10.0,
+                width: 96.0,
+                height: 314.0,
+            })
+        );
+        assert_eq!(
+            popup_visible_geometry(Some(rect(300, 10, 100, 100)), (224, 324).into()),
+            None
+        );
+    }
+}
+
+/// Maps a rectangle in a [`cropped_buffer_canvas`] back to buffer pixels.
+#[cfg(feature = "flutter")]
+pub(super) fn canvas_rect_to_buffer(
+    canvas: Option<&denial_flutter_engine::ExternalTexturePresentation>,
+    rect: [f64; 4],
+) -> [f64; 4] {
+    let Some(canvas) = canvas.filter(|canvas| canvas.width > 0.0 && canvas.height > 0.0) else {
+        return rect;
+    };
+    let sx = canvas.source[2] / canvas.width;
+    let sy = canvas.source[3] / canvas.height;
+    [
+        canvas.source[0] + rect[0] * sx,
+        canvas.source[1] + rect[1] * sy,
+        rect[2] * sx,
+        rect[3] * sy,
+    ]
+}
+
+#[cfg(all(test, feature = "flutter"))]
+mod cropped_canvas_tests {
+    use super::*;
+
+    fn crop(x: f64, y: f64, w: f64, h: f64) -> Rectangle<f64, smithay::utils::Buffer> {
+        Rectangle::new((x, y).into(), (w, h).into())
+    }
+
+    #[test]
+    fn uncropped_buffers_keep_the_direct_image_path() {
+        assert!(
+            cropped_buffer_canvas(
+                crop(0.0, 0.0, 1454.0, 1282.0),
+                Transform::Normal,
+                1454,
+                1282
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn over_allocated_buffer_publishes_its_crop_as_the_canvas() {
+        // Chromium during an interactive resize: a 1792-row allocation shows 1283 rows.
+        let canvas = cropped_buffer_canvas(
+            crop(0.0, 0.0, 1454.0, 1283.0),
+            Transform::Normal,
+            1454,
+            1792,
+        )
+        .expect("cropped buffer");
+        assert_eq!((canvas.width, canvas.height), (1454.0, 1283.0));
+        assert_eq!(canvas.source, [0.0, 0.0, 1454.0, 1283.0]);
+        assert_eq!(canvas.destination, [0.0, 0.0, 1454.0, 1283.0]);
+        assert_eq!(canvas.background, [0.0; 4]);
+    }
+
+    #[test]
+    fn reallocation_without_a_visible_change_keeps_the_published_extent() {
+        // Before: cropped 1792-row allocation. After: an exact 1318-row buffer.
+        let before = cropped_buffer_canvas(
+            crop(0.0, 0.0, 1454.0, 1318.0),
+            Transform::Normal,
+            1454,
+            1792,
+        )
+        .expect("cropped buffer");
+        assert!(
+            cropped_buffer_canvas(
+                crop(0.0, 0.0, 1454.0, 1318.0),
+                Transform::Normal,
+                1454,
+                1318
+            )
+            .is_none()
+        );
+        // The exact buffer is published at its own size, which is the old canvas.
+        assert_eq!((before.width, before.height), (1454.0, 1318.0));
+    }
+
+    #[test]
+    fn offset_crops_map_back_to_buffer_pixels() {
+        let canvas =
+            cropped_buffer_canvas(crop(12.0, 30.0, 400.0, 26.0), Transform::Normal, 512, 64)
+                .expect("cropped buffer");
+        assert_eq!(
+            canvas_rect_to_buffer(Some(&canvas), [0.0, 0.0, 400.0, 26.0]),
+            [12.0, 30.0, 400.0, 26.0]
+        );
+        assert_eq!(
+            canvas_rect_to_buffer(Some(&canvas), [10.0, 2.0, 100.0, 20.0]),
+            [22.0, 32.0, 100.0, 20.0]
+        );
+        assert_eq!(
+            canvas_rect_to_buffer(None, [10.0, 2.0, 100.0, 20.0]),
+            [10.0, 2.0, 100.0, 20.0]
+        );
+    }
+
+    #[test]
+    fn fractional_transformed_and_out_of_bounds_crops_are_left_alone() {
+        for (source, transform) in [
+            (crop(0.0, 0.0, 100.5, 50.0), Transform::Normal),
+            (crop(0.0, 0.0, 100.0, 50.0), Transform::_90),
+            (crop(0.0, 0.0, 300.0, 50.0), Transform::Normal),
+            (crop(-1.0, 0.0, 100.0, 50.0), Transform::Normal),
+        ] {
+            assert!(cropped_buffer_canvas(source, transform, 200, 100).is_none());
+        }
+    }
 }
 
 #[cfg(all(test, feature = "flutter"))]
@@ -254,7 +587,7 @@ impl WaylandFrontend {
             |_, _, _| true,
         );
 
-        let mut metadata_changed = false;
+        let mut metadata_changed = !cursor_fast_path && surface_tree_metadata_changed(root);
         for surface in committed_surfaces.drain(..) {
             // Alpha is synchronized surface state. Inspect it when the root
             // transaction publishes, including children without a new buffer.
@@ -330,10 +663,7 @@ impl WaylandFrontend {
                     // has appeared in an accepted full scene. This also
                     // excludes pre-map and zero-geometry commits.
                     let owner = self.scene_surface_windows.get(&surface_id).copied();
-                    if cursor_fast_path
-                        || (owner == Some(surface_id)
-                            && !self.scene_complex_windows.contains(&surface_id))
-                    {
+                    if cursor_fast_path || (owner.is_some() && !metadata_changed) {
                         buffer_surface_ids.push(surface_id);
                     } else {
                         metadata_changed = true;
@@ -527,7 +857,8 @@ impl WaylandFrontend {
                     .unwrap_or(1.0);
                 // A zero-alpha layer is omitted by Flutter. Its mailbox must
                 // still advance so producers are not waiting for an impossible sample.
-                let expects_sample = expects_sample && opacity > 0.0;
+                let expects_sample =
+                    expects_sample && opacity > 0.0 && self.surface_expects_sample(surface_id);
                 let opaque = opacity == 1.0
                     && renderer_state.opaque_regions().is_some_and(|regions| {
                         Rectangle::from_size(view.dst)
@@ -574,17 +905,38 @@ impl WaylandFrontend {
                 } else {
                     (0, 0, 0)
                 };
+                let canvas = (texture_id > 0)
+                    .then(|| cropped_buffer_canvas(source, transform, width, height))
+                    .flatten();
                 if let Some(frame) = textures
                     .last_mut()
                     .filter(|frame| frame.texture_id == surface_id as i64)
                 {
                     frame.set_feedback(super::presentation::surface_feedback(states));
-                    frame.presentation = Some(Default::default());
+                    frame.presentation = Some(canvas.unwrap_or_default());
                 }
+                let (width, height, source) = match canvas {
+                    Some(canvas) => (
+                        canvas.width as u32,
+                        canvas.height as u32,
+                        Rectangle::from_size((canvas.width, canvas.height).into()),
+                    ),
+                    None => (width, height, source),
+                };
                 let role = if surface == root {
                     root_role
                 } else {
                     SurfaceRoleDescription::Subsurface
+                };
+                let window_geometry = if role == SurfaceRoleDescription::Popup {
+                    let declared = states
+                        .cached_state
+                        .get::<SurfaceCachedState>()
+                        .current()
+                        .geometry;
+                    popup_visible_geometry(declared, view.dst)
+                } else {
+                    None
                 };
                 layers.push(SurfaceLayerDescription {
                     surface_id,
@@ -607,6 +959,7 @@ impl WaylandFrontend {
                     composition_order: *composition_order,
                     opacity,
                     opaque,
+                    window_geometry,
                 });
                 *composition_order = composition_order.saturating_add(1);
             },
@@ -622,6 +975,7 @@ impl WaylandFrontend {
     ) -> Option<ExternalTextureFrame> {
         let surface = self.surfaces_by_id.get(&surface_id)?;
         let expects_sample = expects_sample
+            && self.surface_expects_sample(surface_id)
             && with_states(surface, |states| {
                 states
                     .cached_state
@@ -806,7 +1160,15 @@ impl WaylandFrontend {
     #[cfg(feature = "flutter")]
     pub fn flutter_scene(
         &mut self,
+        dirty_windows: Option<&HashSet<u64>>,
+        previous_windows: &[WindowDescription],
     ) -> Result<(Vec<WindowDescription>, Vec<ExternalTextureFrame>), Box<dyn Error>> {
+        let previous_by_id = dirty_windows.map(|_| {
+            previous_windows
+                .iter()
+                .map(|window| (window.window_id, window))
+                .collect::<HashMap<_, _>>()
+        });
         let mut windows = std::mem::take(&mut self.scene_windows_scratch);
         let mut textures = std::mem::take(&mut self.scene_textures_scratch);
         textures.clear();
@@ -814,8 +1176,6 @@ impl WaylandFrontend {
         popups.clear();
         let mut surface_windows = std::mem::take(&mut self.scene_surface_windows_scratch);
         surface_windows.clear();
-        let mut complex_windows = std::mem::take(&mut self.scene_complex_windows_scratch);
-        complex_windows.clear();
         let mut layer_surface_roots = std::mem::take(&mut self.scene_layer_surface_roots_scratch);
         layer_surface_roots.clear();
         let input_method_editor_rectangle = self.input_method_editor_rectangle_global();
@@ -846,6 +1206,34 @@ impl WaylandFrontend {
                 // Xwayland override-redirect remaps.
                 continue;
             };
+            if !self.mobile_shell
+                && dirty_windows.is_some_and(|dirty| !dirty.contains(&stable_id))
+                && let Some(previous) = previous_by_id
+                    .as_ref()
+                    .and_then(|windows| windows.get(&stable_id))
+            {
+                // Geometry, metadata and popup trees of unrelated windows
+                // retain their accepted descriptions. Refresh only buffer
+                // sources; their generations are independently deduplicated.
+                for layer in &previous.surfaces {
+                    if layer.texture_id > 0 {
+                        surface_windows.insert(layer.surface_id, stable_id);
+                        if let Some(frame) = self.external_texture_frame(
+                            layer.surface_id,
+                            self.window_expects_sample(stable_id),
+                        ) {
+                            textures.push(frame);
+                        }
+                    }
+                }
+                if let Some(description) = windows.get_mut(window_count) {
+                    description.clone_from(previous);
+                } else {
+                    windows.push((*previous).clone());
+                }
+                window_count += 1;
+                continue;
+            }
             let geometry = self.window_geometry_target(window);
             if geometry.size.w <= 0 || geometry.size.h <= 0 {
                 continue;
@@ -925,13 +1313,6 @@ impl WaylandFrontend {
                 if layer.texture_id > 0 {
                     surface_windows.insert(layer.surface_id, stable_id);
                 }
-            }
-            if layers.len() != 1 || layers[0].surface_id != stable_id {
-                // Smithay exposes no compositor callback for immediate
-                // wl_subsurface stacking requests. Keep multi-layer windows
-                // on the metadata path so a later buffer commit cannot hide
-                // an intervening order change from Flutter.
-                complex_windows.insert(stable_id);
             }
 
             let root_layer = layers.iter().find(|layer| layer.surface_id == stable_id);
@@ -1289,9 +1670,6 @@ impl WaylandFrontend {
                         surface_windows.insert(surface_layer.surface_id, stable_id);
                     }
                 }
-                if layers.len() != 1 || layers[0].surface_id != stable_id {
-                    complex_windows.insert(stable_id);
-                }
                 layer_surface_roots.insert(stable_id);
 
                 let root_layer = layers.iter().find(|layer| layer.surface_id == stable_id);
@@ -1457,9 +1835,6 @@ impl WaylandFrontend {
                         surface_windows.insert(layer.surface_id, stable_id);
                     }
                 }
-                if layers.len() != 1 || layers[0].surface_id != stable_id {
-                    complex_windows.insert(stable_id);
-                }
                 let root_layer = layers.iter().find(|layer| layer.surface_id == stable_id);
                 let (
                     texture_id,
@@ -1541,8 +1916,6 @@ impl WaylandFrontend {
         self.scene_popups_scratch = popups;
         std::mem::swap(&mut self.scene_surface_windows, &mut surface_windows);
         self.scene_surface_windows_scratch = surface_windows;
-        std::mem::swap(&mut self.scene_complex_windows, &mut complex_windows);
-        self.scene_complex_windows_scratch = complex_windows;
         std::mem::swap(
             &mut self.scene_layer_surface_roots,
             &mut layer_surface_roots,
@@ -1575,6 +1948,9 @@ impl WaylandFrontend {
         let routing_changed = input_routing_changed(self.input_layout.as_ref(), &layout);
         let visibility_changed = input_visibility_changed(self.input_layout.as_ref(), &layout);
         if visibility_changed {
+            self.sampled_surface_ids.clear();
+            self.sampled_surface_ids
+                .extend(layout.visible_surface_ids.iter().copied());
             self.clear_visible_windows();
             for surface_id in &layout.visible_surface_ids {
                 let Some(surface) = self.surfaces_by_id.get(surface_id) else {
@@ -1604,5 +1980,60 @@ impl WaylandFrontend {
             visibility_changed || input_method_changed,
             routing_changed,
         )
+    }
+}
+
+#[cfg(all(test, feature = "flutter"))]
+mod surface_tree_metadata_tests {
+    use super::*;
+    use smithay::backend::renderer::utils::SurfaceView;
+
+    fn layer(x: i32) -> SurfaceTreeEntry {
+        SurfaceTreeEntry {
+            surface: ObjectId::null(),
+            parent: None,
+            view: Some(SurfaceView {
+                src: Rectangle::from_size((100.0, 80.0).into()),
+                dst: (100, 80).into(),
+                offset: (x, 0).into(),
+            }),
+            buffer_size: Some((100, 80).into()),
+            scale: 1,
+            transform: Transform::Normal,
+            alpha: None,
+            opaque: vec![],
+        }
+    }
+
+    #[test]
+    fn unchanged_child_buffers_keep_metadata_while_reorders_do_not() {
+        let mut tree = PublishedSurfaceTree::default();
+        assert!(tree.update(vec![layer(0), layer(10)]));
+        for _ in 0..120 {
+            assert!(!tree.update(vec![layer(0), layer(10)]));
+        }
+        assert!(tree.update(vec![layer(10), layer(0)]));
+        assert!(!tree.update(vec![layer(10), layer(0)]));
+        assert!(tree.update(vec![layer(10)]));
+        assert!(tree.update(vec![]));
+    }
+
+    #[test]
+    fn sampling_and_parent_changes_invalidate_without_new_buffers() {
+        let original = layer(0);
+        let mut edits = vec![original.clone(); 7];
+        edits[0].view.as_mut().unwrap().offset.x = 5;
+        edits[1].view.as_mut().unwrap().src.size.w = 50.0;
+        edits[2].scale = 2;
+        edits[3].transform = Transform::_90;
+        edits[4].alpha = Some(123);
+        edits[5].opaque.push(Rectangle::from_size((100, 80).into()));
+        edits[6].parent = Some(ObjectId::null());
+        for edit in edits {
+            let mut tree = PublishedSurfaceTree::default();
+            tree.update(vec![original.clone()]);
+            assert!(tree.update(vec![edit.clone()]));
+            assert!(!tree.update(vec![edit]));
+        }
     }
 }

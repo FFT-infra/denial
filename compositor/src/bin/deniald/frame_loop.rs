@@ -283,7 +283,7 @@ pub(super) fn run_frame_loop(
             == Some(frame_number);
         if simulated_disconnect || simulated_reconnect {
             let mut outputs =
-                connected_outputs(drm_scanner, drm, max_outputs, &active_configuration)?;
+                connected_outputs(drm_scanner, drm, max_outputs, &active_configuration)?.outputs;
             if simulated_disconnect {
                 if outputs.len() < 2 {
                     return Err("simulated hotplug needs at least two connected outputs".into());
@@ -328,7 +328,8 @@ pub(super) fn run_frame_loop(
         }
         if events.topology_dirty {
             events.topology_dirty = false;
-            let outputs = connected_outputs(drm_scanner, drm, max_outputs, &active_configuration)?;
+            let outputs =
+                connected_outputs(drm_scanner, drm, max_outputs, &active_configuration)?.outputs;
             let changed = outputs.len() != scanouts.len()
                 || outputs.iter().any(|output| {
                     scanouts

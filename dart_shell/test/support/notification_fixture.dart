@@ -1,4 +1,4 @@
-import 'package:denial_dart_shell/src/models/desktop_notification.dart';
+import 'package:denial_flutter_sdk/models.dart';
 
 DesktopNotification notificationFixture({
   int id = 1,

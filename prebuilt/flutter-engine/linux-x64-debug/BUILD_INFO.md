@@ -20,7 +20,7 @@ applied during bootstrap or engine builds.
 The canonical incremental builder is:
 
 ```sh
-tools/denial-flutter-engine build
+DENIAL_FLUTTER_ENGINE_DEVELOPMENT_MODES=1 tools/denial-flutter-engine build
 ```
 
 It checks out the exact locked commits, verifies that Flutter DEPS resolves the
@@ -37,7 +37,11 @@ The equivalent direct engine commands are:
 ```sh
 ./flutter/tools/gn \
   --runtime-mode=debug \
+  --slimpeller \
   --enable-fontconfig \
+  --gn-args=shell_enable_vulkan=false \
+  --gn-args=test_enable_vulkan=false \
+  --gn-args=skia_use_vulkan=false \
   --target-dir=denial_host_debug
 /usr/bin/ninja -C out/denial_host_debug libflutter_engine.so
 ```

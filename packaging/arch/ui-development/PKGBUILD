@@ -11,27 +11,27 @@ _denial_version_before="${DENIAL_PACKAGE_DENIAL_VERSION_BEFORE:-0.3.0}"
 depends=(
   "denial>=$pkgver"
   "denial<$_denial_version_before"
-  'denial-flutter-engine-abi=3.44.7.denial1'
+  'denial-flutter-engine-abi=3.47.5.denial1'
   'fontconfig'
   'git'
   'glibc'
   'libgcc'
 )
-provides=('denial-ui-development-engine=3.44.7.denial1')
+provides=('denial-ui-development-engine=3.47.5.denial1')
 conflicts=('denial-ui-development-git')
 options=('!strip' '!debug')
 source=('manifest.json')
-sha256sums=('4b82c3e00b50ed27de11a23972133d3141ae5623a091dfedca1e0ee3c36083d9')
+sha256sums=('be4e905625417dac398d7f8d2a8117a17048d4c97b72ea9989bb66d39a26c270')
 
-_flutter_revision='d0817320163b3fb5a284e63cc21f2d6b9138442b'
-_dart_revision='d684a576a6aa954ae107a03b2b4e1d61c3bebe93'
-_engine_sha256='20fe35321d2063505cb4ea6bca85117892ab534bc3126d428e3c8a9605967b78'
-_profile_engine_sha256='ce42739ec4a792a8657fee65584bc9b06ebd51e49a8bf3f8c78d72bb2c4088f4'
-_flutter_binding_sha256='387b0b92fab3db5ed2d072b9bcd9797d960a983236d4ce07cda628bb20bfda89'
-_flutter_tool_sha256='e9bafdf002e980c7f239e68b2f2448e54f3641ce245803152c0cbdd3222db38f'
-_dart_sha256='c03ad868b5c53e31461b0fef22dc6eb6aeb56b7567efff6ca488ce9c4a6f8a6a'
-_dartaotruntime_sha256='297f6b68adf22140d0bfc92cf974dc0e22bd54be6e15d730b911ad5b661d6a89'
-_icu_sha256='998367809a821d595928089c197b3f7959f0420f81f79d4d0daee53378492ed5'
+_flutter_revision='8ccaca769f497d5cb5e376e12d7e053d6adb6b2d'
+_dart_revision='b530c21f7de367b94fb04787bfed9d8e989d75e8'
+_engine_sha256='0103c4b53ddb75538a20008914ae442d66aa688fd0db10435c1aa918bf17024b'
+_profile_engine_sha256='82569727237b13b6f2db06fc98db1cdb8f17fd6c30681c87d18652b23b7573fd'
+_flutter_binding_sha256='b25c78146cb98e8311ba42e0506bd08e76def25ac24d0ff13a468e27550ae1c9'
+_flutter_tool_sha256='fa78ec1909a5f17ea24fdf02bea3768397871dcd49415092d1997df0e2f56840'
+_dart_sha256='327991241585ee23f10d8b239a3f8484cb55e5060c665700d19d7e01e62ec94a'
+_dartaotruntime_sha256='b5d1e787ec2243de46e1ceea0a35fdd48dbb6950dcf9cc54d940c66790af8fb6'
+_icu_sha256='325a86063d26334c2eabe1743cea073b612540fbf3d8fc2ef0b5708e3763a8c7'
 
 package() {
   local repository_root="${DENIAL_PACKAGE_SOURCE_ROOT:-$(realpath "$startdir/../../..")}"
@@ -42,7 +42,7 @@ package() {
   local flutter_tool_runtime="${DENIAL_PACKAGE_FLUTTER_TOOL_RUNTIME:-$cache_root/denial/pc-build/ui-development/flutter-tools/runtime}"
   local flutter_sdk_runtime="${DENIAL_PACKAGE_FLUTTER_SDK_RUNTIME:-$cache_root/denial/pc-build/ui-development/flutter-sdk-runtime}"
   local workspace_template="${DENIAL_PACKAGE_UI_WORKSPACE_TEMPLATE:-$cache_root/denial/pc-build/ui-development/workspace-template}"
-  local flutter_tool_root="$repository_root/prebuilt/flutter-tools/3.44.7"
+  local flutter_tool_root="$repository_root/prebuilt/flutter-tools/3.47.5"
   local source_lock="$repository_root/prebuilt/flutter-engine/SOURCE_LOCK.json"
   local engine_root="$repository_root/prebuilt/flutter-engine/linux-x64-debug"
   local engine="${DENIAL_PACKAGE_DEBUG_ENGINE_SOURCE:-$engine_root/libflutter_engine.so}"
@@ -97,6 +97,14 @@ package() {
     "$workspace_template/dart_shell/.vscode/settings.json" \
     "$workspace_template/dart_shell/pubspec.yaml" \
     "$workspace_template/dart_shell/lib/main.dart" \
+    "$workspace_template/packages/denial_sdk/pubspec.yaml" \
+    "$workspace_template/packages/denial_sdk/lib/denial_sdk.dart" \
+    "$workspace_template/packages/denial_flutter_sdk/pubspec.yaml" \
+    "$workspace_template/packages/denial_flutter_sdk/lib/panels.dart" \
+    "$workspace_template/plugins/denial_top_bar/pubspec.yaml" \
+    "$workspace_template/plugins/denial_taskbar/pubspec.yaml" \
+    "$workspace_template/plugins/denial_top_bar/lib/denial_top_bar.dart" \
+    "$workspace_template/plugins/denial_taskbar/lib/denial_taskbar.dart" \
     "$workspace_template/protocol/generated/dart/pubspec.yaml" \
     "$flutter_tool_root/BUILD_INFO.md" \
     "$flutter_tool_root/flutter_tools.snapshot.sha256" \

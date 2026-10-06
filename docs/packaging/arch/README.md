@@ -1,6 +1,7 @@
 # Arch Linux packaging
 
-Build Denial and create the two required Pacman packages from the current
+Build Denial and create its two required desktop packages plus the optional
+Plugin Manager package from the current
 working tree:
 
 ```sh
@@ -13,7 +14,9 @@ The packages are written below
 - `denial-flutter-engine` owns the pinned engine, ICU data, generation
   manifest, build metadata, and Flutter licenses;
 - `denial` owns the compositor, AOT application, Flutter assets, session
-  launcher, portals, and machine configuration.
+  launcher, portals, and machine configuration;
+- `denial-plugin-manager` owns the plugin app, backend, and release compiler
+  kit. It depends on the matching `denial` package and the system `dart` package.
 
 Install both in one transaction, with the engine package first:
 
@@ -23,14 +26,22 @@ sudo pacman -U \
   /path/to/denial-*.pkg.tar.zst
 ```
 
+Install the optional Plugin Manager in the same transaction or later:
+
+```sh
+sudo pacman -U /path/to/denial-plugin-manager-*.pkg.tar.zst
+```
+
 All public archives take their version directly from the verified signed
 Denial tag. The engine uses a one-time epoch so tag-derived versions upgrade
 from the former Flutter-numbered package. Its independent virtual capability,
-`denial-flutter-engine-abi=3.44.7.denial1`, still enforces runtime
+`denial-flutter-engine-abi=3.47.5.denial1`, still enforces runtime
 compatibility.
 
-Live Flutter UI editing is provided separately so normal installations do not
-carry a development toolchain. Build the optional package with:
+Live Flutter UI editing tooling remains separate so normal installations do
+not carry a development toolchain. It is paused for the release-only Flutter
+3.47.5 generation. A future explicitly requested development-engine refresh
+can build it with:
 
 ```sh
 cargo xtask ui-development-package
@@ -44,8 +55,7 @@ sudo pacman -U \
   /path/to/denial-ui-development-*.pkg.tar.zst
 ```
 
-The optional package requires the exact
-`denial-flutter-engine-abi=3.44.7.denial1` generation and contains the pinned
+The legacy package requires its exact Flutter generation and contains the pinned
 JIT and optimized AOT profile engines, Dart and Flutter tools, Denial's locked
 UI dependency sources, a version-matched editable source snapshot and revision
 metadata, native `denial-ui` client, browser DevTools for Inspector and
@@ -96,8 +106,8 @@ https://denialwm.github.io/denial/x86_64
 ```
 
 The repository is active. Each release contains the two required runtime
-packages and, beginning with Denial 0.2.0, the optional
-`denial-ui-development` package. The exact user setup is in
+packages and the optional `denial-plugin-manager` package. A compatible future
+generation may also restore the optional `denial-ui-development` package. The exact user setup is in
 [INSTALL.md](INSTALL.md). The operator key boundary, backup, tag-signing,
 rotation, and revocation procedure is in [SIGNING.md](SIGNING.md).
 

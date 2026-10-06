@@ -79,6 +79,22 @@ impl WireBridge {
                     .push_back(decode_xembed_tray_command(command)?);
                 Ok(None)
             }
+            fb::Payload::PluginActionCatalog => {
+                if envelope.request_id() != 0 {
+                    return Err(WireError::RequestId);
+                }
+                let catalog = envelope
+                    .payload_as_plugin_action_catalog()
+                    .ok_or(WireError::Payload)?;
+                self.pending_plugin_actions = Some(
+                    crate::plugin_actions::ActionCatalog::decode(
+                        catalog.generation(),
+                        catalog.actions_json().ok_or(WireError::Payload)?,
+                    )
+                    .map_err(|_| WireError::Payload)?,
+                );
+                Ok(None)
+            }
             fb::Payload::ThemeState => {
                 if envelope.request_id() != 0 {
                     return Err(WireError::RequestId);
@@ -137,6 +153,7 @@ impl WireBridge {
                     &self.windows,
                     &self.restored_window_ids,
                 )?;
+                self.window_deltas = request.window_deltas();
                 Ok(Some(self.outbound_builder.finished_data()))
             }
             fb::WindowRequestKind::GetDisplayLayout => {
@@ -253,21 +270,55 @@ impl WireBridge {
                 if self.pending_window_commands.len() >= MAX_PENDING_WINDOW_COMMANDS {
                     return Err(WireError::Count);
                 }
+                const FOLLOW: u32 = 1 << 0;
+                const LAYOUT_DROP: u32 = 1 << 1;
+                const PREVIEW: u32 = 1 << 2;
                 let window_id = request.window_id();
                 let workspace_id = u8::try_from(request.workspace_id())
                     .ok()
                     .filter(|workspace| (1..=9).contains(workspace))
                     .ok_or(WireError::Identity)?;
-                if window_id == 0 || request.flags() & !1 != 0 {
+                let flags = request.flags();
+                if window_id == 0 {
                     return Err(WireError::Identity);
                 }
-                self.pending_window_commands
-                    .push_back(WindowCommand::MoveToWorkspace {
+                if flags & !(FOLLOW | LAYOUT_DROP | PREVIEW) != 0
+                    || (flags & (FOLLOW | LAYOUT_DROP | PREVIEW)).count_ones() > 1
+                {
+                    return Err(WireError::Flags);
+                }
+                let monitor_id = (request.monitor_id() >= 0).then(|| request.monitor_id());
+                let geometry = request
+                    .geometry()
+                    .map(decode_workspace_drop_geometry)
+                    .transpose()?;
+                let command = if flags & (LAYOUT_DROP | PREVIEW) == 0 {
+                    WindowCommand::MoveToWorkspace {
                         window_id,
-                        monitor_id: (request.monitor_id() >= 0).then(|| request.monitor_id()),
+                        monitor_id,
                         workspace_id,
-                        follow: request.flags() & 1 != 0,
-                    });
+                        follow: flags & FOLLOW != 0,
+                    }
+                } else {
+                    // A drop resolves against one output's layout space.
+                    let monitor_id = monitor_id.ok_or(WireError::Identity)?;
+                    if flags & PREVIEW != 0 {
+                        WindowCommand::PreviewWorkspaceDrop {
+                            window_id,
+                            monitor_id,
+                            workspace_id,
+                            geometry,
+                        }
+                    } else {
+                        WindowCommand::DropOnWorkspace {
+                            window_id,
+                            monitor_id,
+                            workspace_id,
+                            geometry: geometry.ok_or(WireError::Geometry)?,
+                        }
+                    }
+                };
+                self.pending_window_commands.push_back(command);
                 Ok(None)
             }
             kind @ (fb::WindowRequestKind::CloseWindow
@@ -336,6 +387,28 @@ impl WireBridge {
             kind => Err(WireError::Request(kind)),
         }
     }
+}
+
+/// Overview drops locate one point in a workspace's own coordinates. A
+/// scrolling strip extends beyond its output, so the point may be negative;
+/// only its centre is used.
+fn decode_workspace_drop_geometry(rect: &fb::WireRect) -> Result<WindowGeometry, WireError> {
+    let geometry = WindowGeometry {
+        x: rect.x(),
+        y: rect.y(),
+        width: rect.width(),
+        height: rect.height(),
+    };
+    let coordinate = |value: f64| value.is_finite() && value.abs() <= 32_768.0;
+    let extent = |value: f64| value.is_finite() && value > 0.0 && value <= 16_384.0;
+    if !coordinate(geometry.x)
+        || !coordinate(geometry.y)
+        || !extent(geometry.width)
+        || !extent(geometry.height)
+    {
+        return Err(WireError::Geometry);
+    }
+    Ok(geometry)
 }
 
 fn decode_window_geometry(rect: &fb::WireRect) -> Result<WindowGeometry, WireError> {
@@ -705,6 +778,16 @@ fn decode_shortcut_binding(binding: fb::ShortcutBinding<'_>) -> Result<ShortcutB
                 desktop_file_id,
             }
         }
+        fb::ShortcutTarget::ShortcutPluginActionTarget => {
+            let target = binding
+                .target_as_shortcut_plugin_action_target()
+                .ok_or(WireError::Payload)?;
+            let id = target
+                .id()
+                .filter(|id| crate::plugin_actions::valid_id(id))
+                .ok_or(WireError::String)?;
+            ShortcutTarget::PluginAction { id: id.to_owned() }
+        }
         fb::ShortcutTarget::ShortcutSpawnShTarget => {
             let target = binding
                 .target_as_shortcut_spawn_sh_target()
@@ -735,6 +818,11 @@ fn shortcut_action_from_wire(action: fb::ShortcutActionKind) -> Result<ShortcutA
         fb::ShortcutActionKind::OpenApplications => Ok(ShortcutAction::OpenApplications),
         fb::ShortcutActionKind::OpenDashboard => Ok(ShortcutAction::OpenDashboard),
         fb::ShortcutActionKind::OpenOverview => Ok(ShortcutAction::OpenOverview),
+        fb::ShortcutActionKind::ResizeGrowWidth => Ok(ShortcutAction::ResizeGrowWidth),
+        fb::ShortcutActionKind::ResizeShrinkWidth => Ok(ShortcutAction::ResizeShrinkWidth),
+        fb::ShortcutActionKind::ResizeGrowHeight => Ok(ShortcutAction::ResizeGrowHeight),
+        fb::ShortcutActionKind::ResizeShrinkHeight => Ok(ShortcutAction::ResizeShrinkHeight),
+        fb::ShortcutActionKind::ResetWindowHeight => Ok(ShortcutAction::ResetWindowHeight),
         fb::ShortcutActionKind::ToggleVerticalMaximize => {
             Ok(ShortcutAction::ToggleVerticalMaximize)
         }

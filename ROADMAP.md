@@ -152,6 +152,10 @@ Longer-term work may include:
 - first-party ARM64 binary builds and repositories;
 - touch-first and tablet hardware support;
 - broader GPU and driver qualification;
+- evaluate an Impeller Vulkan backend for lower-overhead shell rendering once
+  external DMA-BUF texture import, modifiers, and explicit synchronization are
+  reliable across supported hardware; keep GLES as the default until Vulkan can
+  preserve Denial's zero-copy client-texture path;
 - a general per-output rendering fallback for layouts that cannot use the
   shared atlas path;
 - deeper accessibility integration;

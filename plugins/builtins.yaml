@@ -1,0 +1,10 @@
+schema: 1
+plugins:
+  - path: denial_desktop
+    default: true
+  - path: denial_top_bar
+    default: true
+  - path: denial_launcher
+    default: true
+  - path: denial_clock
+    default: true

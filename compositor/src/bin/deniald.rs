@@ -1,6 +1,8 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![deny(clippy::undocumented_unsafe_blocks)]
 
+#[path = "deniald/application_theming.rs"]
+mod application_theming;
 #[cfg(feature = "flutter")]
 #[path = "deniald/authentication.rs"]
 mod authentication;
@@ -49,6 +51,8 @@ mod hotplug_transaction;
 #[cfg(feature = "flutter")]
 #[path = "deniald/idle_policy.rs"]
 mod idle_policy;
+#[path = "deniald/keyboard_resize.rs"]
+mod keyboard_resize;
 #[path = "deniald/kms_pipeline.rs"]
 mod kms_pipeline;
 #[path = "deniald/kms_render.rs"]
@@ -57,6 +61,8 @@ mod kms_render;
 mod kms_session;
 #[path = "deniald/kms_state.rs"]
 mod kms_state;
+#[path = "deniald/lid_switch.rs"]
+mod lid_switch;
 #[path = "deniald/lifecycle.rs"]
 mod lifecycle;
 #[cfg(feature = "flutter")]
@@ -75,11 +81,18 @@ mod orientation_sensor;
 #[cfg(feature = "flutter")]
 #[path = "deniald/output_control.rs"]
 mod output_control;
+#[path = "deniald/output_policy.rs"]
+mod output_policy;
 #[cfg(feature = "flutter")]
 #[path = "deniald/output_scheduler.rs"]
 mod output_scheduler;
 #[path = "deniald/output_topology.rs"]
 mod output_topology;
+#[path = "deniald/plugin_actions.rs"]
+mod plugin_actions;
+#[cfg(feature = "flutter")]
+#[path = "deniald/plugin_bundle.rs"]
+mod plugin_bundle;
 #[path = "deniald/portal_ipc.rs"]
 mod portal_ipc;
 #[path = "deniald/presentation_clock.rs"]
@@ -116,6 +129,8 @@ mod touchpad_gestures;
 mod ui_development;
 #[path = "deniald/wayland_frontend.rs"]
 mod wayland_frontend;
+#[path = "deniald/welcome.rs"]
+mod welcome;
 #[cfg(feature = "flutter")]
 #[path = "deniald/window_events.rs"]
 mod window_events;
@@ -265,8 +280,9 @@ use output_control::{
     ShellControlCommand, SystemControlCommand, SystemControlWaitKind,
 };
 use output_topology::{
-    ConnectedConnector, RuntimeOutputConfiguration, configured_outputs, connected_outputs,
-    scan_connected_connectors, stage_output_vrr, topology_for_outputs, update_topology_for_outputs,
+    ConfiguredOutputs, ConnectedConnector, RuntimeOutputConfiguration, configured_outputs,
+    connected_outputs, scan_connected_connectors, stage_output_vrr, topology_for_outputs,
+    update_topology_for_outputs,
 };
 #[cfg(feature = "flutter")]
 use output_topology::{

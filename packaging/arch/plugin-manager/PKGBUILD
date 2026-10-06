@@ -1,0 +1,37 @@
+# Maintainer: Doctor Logix <doctor.logix@gmail.com>
+
+pkgname=denial-plugin-manager
+pkgver="${DENIAL_PACKAGE_VERSION:-0}"
+pkgrel="${DENIAL_PACKAGE_RELEASE:-1}"
+pkgdesc='Plugin development, installation, and composition tools for Denial'
+arch=('x86_64')
+url='https://github.com/denialwm/denial'
+license=('GPL-3.0-or-later')
+depends=(
+  "denial=$pkgver-$pkgrel"
+  'dart'
+  'git'
+)
+options=('!strip' '!debug')
+source=()
+sha256sums=()
+
+package() {
+  local repository_root="${DENIAL_PACKAGE_SOURCE_ROOT:-$(realpath "$startdir/../../..")}"
+  local cache_root="${XDG_CACHE_HOME:-$HOME/.cache}"
+  local payload_root="${DENIAL_PACKAGE_PAYLOAD_ROOT:-}"
+
+  if [[ -n "$payload_root" ]]; then
+    if [[ ! -d "$payload_root" ]]; then
+      error "Denial Plugin Manager promotion payload is missing: $payload_root"
+      return 1
+    fi
+    cp -a --no-preserve=ownership -- "$payload_root/." "$pkgdir/"
+    return
+  fi
+
+  "$repository_root/tools/stage-denial-plugin-manager" "$pkgdir" \
+    "${DENIAL_PACKAGE_PLUGIN_MANAGER_BUNDLE:-$repository_root/plugin_manager_app/build/linux/x64/release/bundle}" \
+    "${DENIAL_PACKAGE_PLUGIN_MANAGER_BACKEND:-$cache_root/denial/pc-build/plugin-manager/denial-plugins}" \
+    "${DENIAL_PACKAGE_PLUGIN_BUILD_KIT:-$cache_root/denial/pc-build/plugin-manager/build-kit}"
+}

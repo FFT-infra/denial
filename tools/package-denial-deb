@@ -77,6 +77,7 @@ build_deb() {
 
 engine_package="$PACKAGE_ROOT/denial-flutter-engine_${PACKAGE_VERSION}-${PACKAGE_RELEASE}_amd64.deb"
 denial_package="$PACKAGE_ROOT/denial_${PACKAGE_VERSION}-${PACKAGE_RELEASE}_amd64.deb"
+plugin_manager_package="$PACKAGE_ROOT/denial-plugin-manager_${PACKAGE_VERSION}-${PACKAGE_RELEASE}_amd64.deb"
 
 engine_control="$(cat <<EOF
 Section: libs
@@ -93,9 +94,9 @@ EOF
 denial_control="$(cat <<EOF
 Section: x11
 Priority: optional
-Depends: bash, coreutils, dbus, denial-flutter-engine (= $PACKAGE_VERSION-$PACKAGE_RELEASE), init-system-helpers (>= 1.66~), libc6 (>= $GLIBC_BASELINE), libegl1, libgbm1, libgcc-s1, libgl1, libgtk-3-0, libinput10, libpam0g, libpulse0, libseat1, libudev1, libxkbcommon0, rtkit, x11-xkb-utils, xkb-data, xserver-xorg-core, xwayland
+Depends: bash, coreutils, git, dbus, denial-flutter-engine (= $PACKAGE_VERSION-$PACKAGE_RELEASE), init-system-helpers (>= 1.66~), libc6 (>= $GLIBC_BASELINE), libegl1, libgbm1, libgles2, libwayland-client0, libgcc-s1, libgl1, libinput10, libpam0g, libpolkit-agent-1-0, polkitd | policykit-1, libpulse0, libseat1, libudev1, libxkbcommon0, rtkit, x11-xkb-utils, xkb-data, xserver-xorg-core, xwayland
 Recommends: fonts-noto-cjk, network-manager, pipewire-pulse, power-profiles-daemon, upower, xdg-desktop-portal, xdg-desktop-portal-gtk, xdg-desktop-portal-wlr, zenity
-Suggests: ddcutil, gdm3
+Suggests: ddcutil, denial-plugin-manager (= $PACKAGE_VERSION-$PACKAGE_RELEASE), gdm3
 Conflicts: denial-git
 Homepage: https://github.com/denialwm/denial
 Description: Flutter-native Wayland compositor and desktop shell
@@ -104,8 +105,22 @@ Description: Flutter-native Wayland compositor and desktop shell
 EOF
 )"
 
+plugin_manager_control="$(cat <<EOF
+Section: devel
+Priority: optional
+Depends: denial (= $PACKAGE_VERSION-$PACKAGE_RELEASE), git, libc6 (>= $GLIBC_BASELINE)
+Homepage: https://github.com/denialwm/denial
+Description: plugin development and composition tools for Denial
+ Installs the Plugin Manager app, its backend, and Denial's compiler kit.
+ A compatible Dart SDK must be available in PATH before compiling plugins.
+EOF
+)"
+
 build_deb denial-flutter-engine \
   "$STAGE_ROOT/denial-flutter-engine" "$engine_control" "$engine_package"
+build_deb denial-plugin-manager \
+  "$STAGE_ROOT/denial-plugin-manager" "$plugin_manager_control" \
+  "$plugin_manager_package"
 
 install -d -m 0755 "$temporary_root/conffiles"
 printf '%s\n' \
@@ -143,11 +158,17 @@ env "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH" \
   "$STAGE_ROOT/denial-flutter-engine"
 "$ROOT/tools/verify-denial-package-payload" deb "$denial_package" \
   "$STAGE_ROOT/denial"
+"$ROOT/tools/verify-denial-package-payload" deb "$plugin_manager_package" \
+  "$STAGE_ROOT/denial-plugin-manager"
 "$ROOT/tools/verify-denial-native-package-metadata" \
   deb "$engine_package" "$PACKAGE_VERSION" "$PACKAGE_RELEASE" \
   "$FLUTTER_ENGINE_ABI" "$GLIBC_BASELINE"
 "$ROOT/tools/verify-denial-native-package-metadata" \
   deb "$denial_package" "$PACKAGE_VERSION" "$PACKAGE_RELEASE" \
   "$FLUTTER_ENGINE_ABI" "$GLIBC_BASELINE"
+"$ROOT/tools/verify-denial-native-package-metadata" \
+  deb "$plugin_manager_package" "$PACKAGE_VERSION" "$PACKAGE_RELEASE" \
+  "$FLUTTER_ENGINE_ABI" "$GLIBC_BASELINE"
 
-printf '\nDebian packages ready:\n%s\n%s\n' "$engine_package" "$denial_package"
+printf '\nDebian packages ready:\n%s\n%s\n%s\n' \
+  "$engine_package" "$denial_package" "$plugin_manager_package"

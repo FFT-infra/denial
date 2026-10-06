@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Plugins
+Comment=Manage Denial desktop plugins
+Exec=/usr/bin/denial-plugin-manager
+TryExec=/usr/bin/denial-plugin-manager
+Icon=preferences-desktop
+Terminal=false
+Categories=Settings;
+StartupWMClass=dev.denial.PluginManager

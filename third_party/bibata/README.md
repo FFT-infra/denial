@@ -13,4 +13,4 @@ bundled Bibata Modern Ice cursor frames.
 The source snapshot is retained so binary packages remain accompanied by the
 preferred form for modifying the cursor artwork, independently of upstream
 availability. Import details and release-artifact checksums are recorded in
-`dart_shell/assets/cursors/BIBATA_MODERN_ICE.md`.
+`packages/denial_flutter_sdk/assets/cursors/BIBATA_MODERN_ICE.md`.

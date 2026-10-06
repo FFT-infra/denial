@@ -75,8 +75,8 @@ mapfile -d '' repository_rpms < <(
   find "$REPOSITORY_ROOT/Packages" \
     -maxdepth 1 -type f -name '*.rpm' -print0 | sort -z
 )
-((${#repository_rpms[@]} == 2)) \
-  || fail "expected two DNF packages, found ${#repository_rpms[@]}"
+((${#repository_rpms[@]} == 3)) \
+  || fail "expected three DNF packages, found ${#repository_rpms[@]}"
 for package in "${repository_rpms[@]}"; do
   direct="$DIRECT_ROOT/$(basename -- "$package")"
   [[ -f "$direct" ]] || fail "direct RPM package is missing: $direct"
@@ -115,12 +115,12 @@ dnf_names="$(
     repoquery \
     --available \
     --qf '%{name} ' \
-    denial denial-flutter-engine \
+    denial denial-flutter-engine denial-plugin-manager \
     | awk '{ for (field = 1; field <= NF; field++) print $field }' \
     | sort -u \
     | paste -sd' ' -
 )"
-[[ "$dnf_names" == 'denial denial-flutter-engine' ]] \
+[[ "$dnf_names" == 'denial denial-flutter-engine denial-plugin-manager' ]] \
   || fail "DNF client resolved the wrong package set: $dnf_names"
 
 printf 'Verified embedded RPM signatures and DNF client behavior: %s\n' \

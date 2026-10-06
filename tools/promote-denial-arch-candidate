@@ -113,8 +113,6 @@ IFS=. read -r release_major release_minor release_patch <<<"$release_version"
   && "$release_minor" =~ ^[0-9]+$ \
   && "$release_patch" =~ ^[0-9]+$ ]] \
   || fail "release tag has an invalid semantic version: $RELEASE_TAG"
-ui_denial_before="${release_major}.$((release_minor + 1)).0"
-readonly ui_denial_before
 source_date_epoch="$(git -C "$ROOT" show -s --format=%ct "$SOURCE_SHA")"
 readonly source_date_epoch
 packager="${DENIAL_PACKAGE_PACKAGER:-Doctor Logix <doctor.logix@gmail.com>}"
@@ -151,7 +149,7 @@ for package in "${candidate_packages[@]}"; do
   [[ "$package_version" == *-0 ]] \
     || fail "$(basename -- "$package") is not a package-release 0 candidate"
   case "$package_name" in
-    denial | denial-flutter-engine | denial-ui-development) ;;
+    denial | denial-flutter-engine | denial-plugin-manager) ;;
     *) fail "unexpected candidate package: ${package_name:-unset}" ;;
   esac
   [[ -z "${candidate_package_by_name[$package_name]:-}" ]] \
@@ -161,7 +159,7 @@ done
 for package_name in \
   denial \
   denial-flutter-engine \
-  denial-ui-development; do
+  denial-plugin-manager; do
   [[ -n "${candidate_package_by_name[$package_name]:-}" ]] \
     || fail "candidate package is missing: $package_name"
 done
@@ -218,8 +216,8 @@ package_directory() {
     denial-flutter-engine)
       printf '%s\n' "$ROOT/packaging/arch/flutter-engine"
       ;;
-    denial-ui-development)
-      printf '%s\n' "$ROOT/packaging/arch/ui-development"
+    denial-plugin-manager)
+      printf '%s\n' "$ROOT/packaging/arch/plugin-manager"
       ;;
     *) return 1 ;;
   esac
@@ -235,9 +233,9 @@ expected_release_package() {
       printf '%s\n' \
         "$OUTPUT_ROOT/denial-flutter-engine-1:${release_version}-1-x86_64.pkg.tar.zst"
       ;;
-    denial-ui-development)
+    denial-plugin-manager)
       printf '%s\n' \
-        "$OUTPUT_ROOT/denial-ui-development-${release_version}-1-x86_64.pkg.tar.zst"
+        "$OUTPUT_ROOT/denial-plugin-manager-${release_version}-1-x86_64.pkg.tar.zst"
       ;;
     *) return 1 ;;
   esac
@@ -256,8 +254,8 @@ expected_release_package() {
 
 for package_name in \
   denial-flutter-engine \
-  denial \
-  denial-ui-development; do
+  denial-plugin-manager \
+  denial; do
   candidate_package="${candidate_package_by_name[$package_name]}"
   candidate_payload="$work_root/candidate-payload/$package_name"
   candidate_manifest="$work_root/candidate-$package_name.manifest"
@@ -277,7 +275,6 @@ for package_name in \
     "DENIAL_PACKAGE_SOURCE_ROOT=$ROOT"
     "DENIAL_PACKAGE_PAYLOAD_ROOT=$candidate_payload"
     "DENIAL_PACKAGE_VERSION=$release_version"
-    "DENIAL_PACKAGE_DENIAL_VERSION_BEFORE=$ui_denial_before"
     'DENIAL_PACKAGE_RELEASE=1'
     "PKGDEST=$OUTPUT_ROOT"
     "BUILDDIR=$build_root"
@@ -340,21 +337,12 @@ mapfile -d '' release_packages < <(
 
 denial_package="$(expected_release_package denial)"
 engine_package="$(expected_release_package denial-flutter-engine)"
-ui_package="$(expected_release_package denial-ui-development)"
 grep -Fqx "pkgver = ${release_version}-1" \
   < <(bsdtar -xOf "$denial_package" .PKGINFO) \
   || fail 'promoted Denial package has the wrong version'
 grep -Fqx "pkgver = 1:${release_version}-1" \
   < <(bsdtar -xOf "$engine_package" .PKGINFO) \
   || fail 'promoted engine package has the wrong version'
-ui_package_info="$(bsdtar -xOf "$ui_package" .PKGINFO)"
-grep -Fqx "pkgver = ${release_version}-1" <<<"$ui_package_info" \
-  || fail 'promoted UI-development package has the wrong version'
-grep -Fqx "depend = denial>=${release_version}" <<<"$ui_package_info" \
-  || fail 'promoted UI-development package has the wrong Denial minimum'
-grep -Fqx "depend = denial<${ui_denial_before}" <<<"$ui_package_info" \
-  || fail 'promoted UI-development package has the wrong Denial compatibility ceiling'
-
 verification_root="$work_root/runtime-version-verification"
 extract_payload "$denial_package" "$verification_root"
 [[ "$("$verification_root/usr/bin/denialctl" --version)" == \

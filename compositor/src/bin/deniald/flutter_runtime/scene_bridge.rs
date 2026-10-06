@@ -7,6 +7,9 @@ fn accept_scene_texture_identifier(texture_id: i64, desired: &mut HashSet<i64>) 
 }
 
 impl FlutterRuntime {
+    pub(crate) fn published_window_descriptions(&self) -> &[wire::WindowDescription] {
+        self.wire.window_descriptions()
+    }
     pub fn sync_wayland_scene(
         &mut self,
         metadata_revision: u64,

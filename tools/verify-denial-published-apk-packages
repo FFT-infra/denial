@@ -64,12 +64,13 @@ mapfile -d '' packages < <(
   find "$SIGNED_ROOT/downloads/x86_64" \
     -maxdepth 1 -type f -name '*.apk' -print0 | sort -z
 )
-((${#packages[@]} == 2)) \
-  || fail "expected two direct APKs, found ${#packages[@]}"
+((${#packages[@]} == 3)) \
+  || fail "expected three direct APKs, found ${#packages[@]}"
 
 names=()
 denial_package=''
 engine_package=''
+plugin_manager_package=''
 for package in "${packages[@]}"; do
   [[ -f "${package}.sig" ]] \
     || fail "detached signature is missing: $package"
@@ -106,9 +107,15 @@ for package in "${packages[@]}"; do
     denial-flutter-engine)
       engine_package="$package"
       grep -Fqx \
-        'provides = denial-flutter-engine-abi-3.44.7.denial1' \
+        'provides = denial-flutter-engine-abi-3.47.5.denial1' \
         <<<"$package_info" \
         || fail 'engine APK does not provide the expected ABI'
+      ;;
+    denial-plugin-manager)
+      plugin_manager_package="$package"
+      grep -Fqx "depend = denial=$VERSION-r$RELEASE" \
+        <<<"$package_info" \
+        || fail 'Plugin Manager APK does not require matching Denial'
       ;;
     *) fail "unexpected APK package name: ${package_name:-unset}" ;;
   esac
@@ -118,7 +125,7 @@ for package in "${packages[@]}"; do
   names+=("$package_name")
 done
 [[ "$(printf '%s\n' "${names[@]}" | sort | paste -sd' ' -)" == \
-  'denial denial-flutter-engine' ]] \
+  'denial denial-flutter-engine denial-plugin-manager' ]] \
   || fail 'direct APK set is incomplete'
 
 apk_root="$work_root/apk-root"
@@ -151,7 +158,8 @@ apk \
   add \
   --simulate \
   "$engine_package" \
-  "$denial_package"
+  "$denial_package" \
+  "$plugin_manager_package"
 
 printf 'Verified Alpine 3.24 APK metadata, OpenPGP signatures, and dependency closure: %s\n' \
   "$SIGNED_ROOT"

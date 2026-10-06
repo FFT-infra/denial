@@ -1,9 +1,8 @@
 import 'dart:async';
 
-import 'package:denial_dart_shell/src/models/display_layout.dart';
-import 'package:denial_dart_shell/src/platform/denial_bridge.dart';
-import 'package:denial_dart_shell/src/state/display_layout.dart';
-import 'package:denial_dart_shell/src/state/shell_controller.dart';
+import 'package:denial_flutter_sdk/models.dart';
+import 'package:denial_flutter_sdk/platform.dart';
+import 'package:denial_flutter_sdk/state.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';

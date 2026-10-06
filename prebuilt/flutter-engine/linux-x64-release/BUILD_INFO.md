@@ -27,10 +27,10 @@ Use:
 tools/denial-flutter-engine build
 ```
 
-The tool hashes the complete source lock, every mode’s `args.gn`, and expected
-artifact checksum. A valid exact hit performs no source synchronization,
-configuration, compilation, or linking. On a miss, it updates one persistent
-fork checkout and retains `out/denial_host_{release,debug,profile}`, so GN and
+The tool hashes the complete source lock, the release mode's `args.gn`, and its
+expected artifact checksum. A valid exact hit performs no source
+synchronization, configuration, compilation, or linking. On a miss, it updates
+one persistent fork checkout and retains `out/denial_host_release`, so GN and
 Ninja perform an incremental rebuild rather than recreating the engine.
 Flutter derives `concurrent_toolchain_jobs` from host capacity; the builder
 normalizes only that field to the committed value and regenerates the graph
@@ -39,6 +39,10 @@ After Flutter strips each library, the builder canonicalizes its GNU build ID
 to the SHA-1 of the shipped ELF with that note zeroed. This removes build-ID
 drift caused solely by discarded debug metadata while preserving a
 content-derived identifier and the strict full-file SHA-256 gate.
+
+Debug and profile engines are excluded from routine builds. They are available
+only through the explicit `DENIAL_FLUTTER_ENGINE_DEVELOPMENT_MODES=1`
+development path.
 
 The equivalent direct release commands are:
 

@@ -1,10 +1,52 @@
+import 'package:denial_flutter_sdk/service_backends.dart'
+    show AuthenticationPacketKind;
+import 'package:denial_flutter_sdk/wire.dart'
+    show
+        AuthenticationProtocol,
+        authenticationHeaderBytes,
+        authenticationMaxPacketBytes,
+        authenticationMaxPayloadBytes;
+
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:denial_dart_shell/src/platform/authentication_protocol.dart';
-import 'package:flutter_test/flutter_test.dart';
+import 'package:denial_flutter_sdk/platform.dart';
+import 'package:test/test.dart';
 
 void main() {
+  test('decodes an offset view without including surrounding bytes', () {
+    final packet = AuthenticationProtocol.encodeCommand(
+      AuthenticationPacketKind.respond,
+      attemptId: 42,
+      argument: 7,
+      payload: 'A café 日本語',
+    )!;
+    final backing = Uint8List(packet.length + 13);
+    backing.setRange(5, 5 + packet.length, packet);
+    final decoded = AuthenticationProtocol.decode(
+      ByteData.sublistView(backing, 5, 5 + packet.length),
+    )!;
+    backing.fillRange(0, backing.length, 0);
+    expect(decoded.payload, 'A café 日本語');
+    expect(decoded.attemptId, 42);
+    expect(decoded.argument, 7);
+  });
+
+  test('retains malformed UTF-8 replacement and rejects embedded NUL', () {
+    final packet = _eventPacket(
+      AuthenticationPacketKind.prompt,
+      flags: 1 << 4,
+      payload: 'abc',
+    );
+    packet[authenticationHeaderBytes + 1] = 0xff;
+    expect(
+      AuthenticationProtocol.decode(ByteData.sublistView(packet))?.payload,
+      'a\uFFFDc',
+    );
+    packet[authenticationHeaderBytes + 1] = 0;
+    expect(AuthenticationProtocol.decode(ByteData.sublistView(packet)), isNull);
+  });
+
   test('round-trips bounded commands with attempt and prompt identity', () {
     final encoded = AuthenticationProtocol.encodeCommand(
       AuthenticationPacketKind.respond,

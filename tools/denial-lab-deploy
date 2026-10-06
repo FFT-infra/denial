@@ -4,6 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 TARGET="${1:-192.168.1.183}"
+SOURCE_LOCK="$ROOT/prebuilt/flutter-engine/SOURCE_LOCK.json"
+export FLUTTER_GIT_URL="$(jq -er '.flutter.repository' "$SOURCE_LOCK")"
 FLUTTER_ROOT="${DENIAL_FLUTTER_SOURCE_ROOT:-/mnt/exty/denial-flutter-fork-3.44.7}"
 ENGINE_OUT="${DENIAL_PC_ENGINE_TEST_NINJA_OUT:-$FLUTTER_ROOT/engine/src/out/denial_host_release}"
 FLUTTER="$FLUTTER_ROOT/bin/flutter"
@@ -52,7 +54,7 @@ sh -n "$SUSPEND_MODE_HOOK"
 
 dart_schema="$({
     sed -n 's/.*schemaVersion = \([0-9][0-9]*\).*/\1/p' \
-        "$ROOT/dart_shell/lib/src/settings/shell_settings.dart"
+        "$ROOT/packages/denial_flutter_sdk/lib/src/settings/shell_settings.dart"
 } | head -n 1)"
 rust_schema="$({
     sed -n 's/.*SETTINGS_SCHEMA_VERSION: u64 = \([0-9][0-9]*\).*/\1/p' \
@@ -81,15 +83,32 @@ engine_sha="$(sha256sum "$engine" | cut -d' ' -f1)"
 mkdir -p -- "$ARTIFACT_STORE"
 shell_source_inputs=(
     "$ROOT/dart_shell/lib"
-    "$ROOT/dart_shell/assets"
+    "$ROOT/packages/denial_flutter_sdk/assets"
     "$ROOT/dart_shell/pubspec.yaml"
     "$ROOT/dart_shell/pubspec.lock"
+    "$ROOT/packages/denial_sdk/lib"
+    "$ROOT/packages/denial_sdk/pubspec.yaml"
+    "$ROOT/packages/denial_flutter_sdk/lib"
+    "$ROOT/packages/denial_flutter_sdk/pubspec.yaml"
+    "$ROOT/plugins/denial_desktop/lib"
+    "$ROOT/plugins/denial_desktop/pubspec.yaml"
+    "$ROOT/plugins/denial_launcher/lib"
+    "$ROOT/plugins/denial_launcher/pubspec.yaml"
+    "$ROOT/plugins/denial_top_bar/lib"
+    "$ROOT/plugins/denial_top_bar/pubspec.yaml"
     "$ROOT/protocol/generated/dart/lib"
 )
 settings_source_inputs=(
     "${shell_source_inputs[@]}"
     "$ROOT/settings_app/lib"
-    "$ROOT/settings_app/linux"
+    "$ROOT/native_app/src"
+    "$ROOT/native_app/build.rs"
+    "$ROOT/native_app/Cargo.toml"
+    "$ROOT/native_app/Cargo.lock"
+    "$ROOT/compositor/flutter-engine/src"
+    "$ROOT/compositor/flutter-engine/Cargo.toml"
+    "$ROOT/compositor/src/bin/deniald/flutter_runtime/text_input.rs"
+    "$ROOT/compositor/src/bin/deniald/flutter_runtime/mouse_cursor.rs"
     "$ROOT/settings_app/pubspec.yaml"
     "$ROOT/settings_app/pubspec.lock"
 )
@@ -101,8 +120,6 @@ shell_source_manifest="$(
 )"
 settings_source_manifest="$(
     find "${settings_source_inputs[@]}" -type f \
-        ! -path "$ROOT/settings_app/linux/flutter/ephemeral/*" \
-        ! -path "$ROOT/settings_app/linux/flutter/generated_*" \
         -print0 \
         | sort -z \
         | xargs -0 sha256sum
@@ -117,7 +134,7 @@ source_fingerprint_for_revision() {
 }
 source_fingerprint="$(source_fingerprint_for_revision "$revision")"
 # Settings imports the shared dart_shell package. Keep a separate, engine-
-# independent fingerprint so its self-contained GTK bundle can be reused only
+# independent fingerprint so its self-contained native bundle can be reused only
 # when that complete Dart dependency surface is unchanged.
 settings_source_fingerprint="$({
     printf '%s\n' "$settings_source_manifest"
@@ -141,7 +158,7 @@ for candidate in "$ARTIFACT_STORE/"*; do
         && "$(<"$candidate/SETTINGS_SOURCE_FINGERPRINT")" == "$settings_source_fingerprint" \
         && -f "$candidate/settings/denial-settings" \
         && -f "$candidate/settings/lib/libapp.so" \
-        && -f "$candidate/settings/lib/libflutter_linux_gtk.so" ]]; then
+        && -f "$candidate/settings/lib/libflutter_engine.so" ]]; then
         reusable_settings_artifact="$candidate"
     fi
 
@@ -207,7 +224,7 @@ else
         if [[ -n "$settings_dep_target" ]] \
             && make -q -rR -f "$settings_depfile" "$settings_dep_target" \
             && [[ -z "$(
-                find "$ROOT/settings_app/lib" "$ROOT/settings_app/linux" \
+                find "$ROOT/settings_app/lib" "$ROOT/native_app/src" \
                     "$ROOT/settings_app/pubspec.yaml" \
                     "$ROOT/settings_app/pubspec.lock" \
                     -type f \
@@ -221,12 +238,7 @@ else
     fi
 
     engine_targets=(libflutter_engine.so flutter_patched_sdk)
-    if [[ -z "$settings_bundle" ]]; then
-        engine_targets+=(
-            libflutter_linux_gtk.so
-            zip_archives/linux-x64-release/linux-x64-flutter-gtk.zip
-        )
-    fi
+    engine_targets+=(gen_snapshot)
     PATH="$depot_tools:$PATH" /usr/bin/ninja -C "$ENGINE_OUT" -j "$jobs" \
         "${engine_targets[@]}"
 
@@ -239,14 +251,14 @@ else
 
         version_file="$FLUTTER_ROOT/bin/cache/flutter.version.json"
         if ! jq -e --arg revision "$revision" \
-            '.frameworkVersion == "3.44.7"
-                and .flutterVersion == "3.44.7"
+            '.frameworkVersion == "3.47.5"
+                and .flutterVersion == "3.47.5"
                 and .frameworkRevision == $revision' \
             "$version_file" >/dev/null; then
             rendered_version="$(mktemp -- "$version_file.XXXXXX")"
             jq --arg revision "$revision" \
-                '.frameworkVersion = "3.44.7"
-                    | .flutterVersion = "3.44.7"
+                '.frameworkVersion = "3.47.5"
+                    | .flutterVersion = "3.47.5"
                     | .frameworkRevision = $revision' \
                 "$version_file" >"$rendered_version"
             mv -- "$rendered_version" "$version_file"
@@ -283,24 +295,36 @@ else
         shell_app="$assembly/lib/libapp.so"
     fi
     if [[ -z "$settings_bundle" ]]; then
+        local_runner_target="${XDG_CACHE_HOME:-$HOME/.cache}/denial/pc-build/native-app"
+        CARGO_TARGET_DIR="$local_runner_target" cargo build \
+            --manifest-path "$ROOT/native_app/Cargo.toml" --locked --release --jobs "$jobs"
+        settings_assembly="$work/settings-assembly"
         (
             cd -- "$ROOT/settings_app"
-            "$FLUTTER" build linux \
+            "$FLUTTER" pub get --enforce-lockfile
+            "$FLUTTER" assemble \
                 --local-engine=denial_host_release \
                 --local-engine-host=denial_host_release \
                 --suppress-analytics \
-                --release \
-                --target=lib/main.dart \
-                --no-tree-shake-icons
+                --output="$settings_assembly" \
+                -dTargetFile=lib/main.dart -dBuildMode=release -dTargetPlatform=linux-x64 \
+                -dDartObfuscation=false -dTrackWidgetCreation=true -dTreeShakeIcons=false \
+                release_bundle_linux-x64_assets
         )
-        settings_bundle="$ROOT/settings_app/build/linux/x64/release/bundle"
+        settings_bundle="$work/settings-native"
+        mkdir -p -- "$settings_bundle/data/flutter_assets" "$settings_bundle/lib"
+        cp -a -- "$settings_assembly/flutter_assets/." "$settings_bundle/data/flutter_assets/"
+        install -m644 -- "$ICU_DATA" "$settings_bundle/data/icudtl.dat"
+        install -m755 -- "$settings_assembly/lib/libapp.so" "$settings_bundle/lib/libapp.so"
+        install -m755 -- "$engine" "$settings_bundle/lib/libflutter_engine.so"
+        install -m755 -- "$local_runner_target/release/denial-app" "$settings_bundle/denial-settings"
     fi
     for required in \
         "$shell_app" \
         "$assembly/flutter_assets/AssetManifest.bin" \
         "$settings_bundle/denial-settings" \
         "$settings_bundle/lib/libapp.so" \
-        "$settings_bundle/lib/libflutter_linux_gtk.so" \
+        "$settings_bundle/lib/libflutter_engine.so" \
         "$engine" \
         "$ICU_DATA"; do
         [[ -f "$required" ]] || {
@@ -355,6 +379,9 @@ else
         chmod -R a-w -- "$artifact"
     else
         chmod u+w -- "$artifact"
+        # The fingerprints are read-only like the rest of the artifact.
+        rm -f -- "$artifact/SOURCE_FINGERPRINT" \
+            "$artifact/SETTINGS_SOURCE_FINGERPRINT"
         printf '%s\n' "$source_fingerprint" >"$artifact/SOURCE_FINGERPRINT"
         printf '%s\n' "$settings_source_fingerprint" >"$artifact/SETTINGS_SOURCE_FINGERPRINT"
         chmod a-w -- "$artifact/SOURCE_FINGERPRINT" \

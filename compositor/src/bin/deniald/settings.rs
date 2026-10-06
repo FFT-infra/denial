@@ -601,6 +601,7 @@ impl From<serde_json::Error> for SettingsError {
 }
 
 pub(super) struct SettingsManager {
+    application_theming: Option<super::application_theming::ApplicationTheming>,
     path: PathBuf,
     document: Map<String, Value>,
     revision: u64,
@@ -617,7 +618,10 @@ pub(super) struct SettingsManager {
 
 impl SettingsManager {
     pub(super) fn load() -> Result<Self, SettingsError> {
-        Self::load_path(settings_path()?)
+        let mut manager = Self::load_path(settings_path()?)?;
+        manager.application_theming =
+            super::application_theming::ApplicationTheming::start(&manager.document);
+        Ok(manager)
     }
 
     fn load_path(path: PathBuf) -> Result<Self, SettingsError> {
@@ -626,6 +630,7 @@ impl SettingsManager {
             match parse_document(bytes) {
                 Ok(parsed) => {
                     let mut manager = Self {
+                        application_theming: None,
                         path,
                         document: parsed.document,
                         revision: parsed.revision,
@@ -659,6 +664,7 @@ impl SettingsManager {
             allow_client_cursor_surfaces,
         ) = default_document();
         let mut manager = Self {
+            application_theming: None,
             path,
             document,
             revision,
@@ -709,11 +715,19 @@ impl SettingsManager {
         parse_cursor_size(&self.document).unwrap_or(DEFAULT_CURSOR_SIZE)
     }
 
+    pub(super) fn keyboard_resize_step(&self) -> super::keyboard_resize::ResizeStep {
+        parse_keyboard_resize_step(&self.document).unwrap_or_default()
+    }
+
     pub(super) fn window_layout_kind(&self) -> WindowLayoutKind {
         // Authoritative documents are validated before load/commit. Keep the
         // fallback defensive for the safe in-memory defaults used after an
         // invalid file is deliberately left untouched.
         parse_window_layout_kind(&self.document).unwrap_or_default()
+    }
+
+    pub(super) fn scrolling_layout_preserve_swap_sizes(&self) -> bool {
+        parse_scrolling_layout_preserve_swap_sizes(&self.document).unwrap_or(true)
     }
 
     pub(super) fn scrolling_layout_wheel_settings(&self) -> ScrollingLayoutWheelSettings {
@@ -788,7 +802,9 @@ impl SettingsManager {
         let allow_client_cursor_surfaces = parse_allow_client_cursor_surfaces(&incoming)?;
         parse_cursor_size(&incoming)?;
         parse_window_layout_kind(&incoming)?;
+        parse_keyboard_resize_step(&incoming)?;
         parse_scrolling_layout_wheel_settings(&incoming)?;
+        parse_scrolling_layout_preserve_swap_sizes(&incoming)?;
         parse_workspace_settings(&incoming)?;
         self.prepare(
             incoming,
@@ -968,6 +984,9 @@ impl SettingsManager {
         // cause the caller to roll back a configuration that is on disk.
         if let Err(error) = sync_parent(&self.path) {
             warn!(%error, path = %self.path.display(), "settings were committed but directory fsync failed");
+        }
+        if let Some(theming) = &self.application_theming {
+            theming.apply(&self.document);
         }
         Ok(())
     }
@@ -1180,7 +1199,7 @@ impl WorkspaceSwitchingOrientation {
 impl Default for WorkspaceSettings {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             count: DEFAULT_WORKSPACE_COUNT,
             switching_orientation: WorkspaceSwitchingOrientation::Horizontal,
         }
@@ -1269,6 +1288,17 @@ fn parse_document(bytes: &[u8]) -> Result<ParsedSettingsDocument, SettingsError>
         WindowLayoutKind::Stacking
     };
     set_window_layout_kind(&mut document, window_layout)?;
+    parse_keyboard_resize_step(&document)?;
+    let had_scrolling_layout_preserve_swap_sizes = document
+        .get("layout")
+        .and_then(Value::as_object)
+        .is_some_and(|layout| layout.contains_key("scrollingLayoutPreserveSwapSizes"));
+    let preserve_swap_sizes = if had_scrolling_layout_preserve_swap_sizes {
+        parse_scrolling_layout_preserve_swap_sizes(&document)?
+    } else {
+        true
+    };
+    set_scrolling_layout_preserve_swap_sizes(&mut document, preserve_swap_sizes)?;
     let had_scrolling_layout_wheel_settings = document
         .get("layout")
         .and_then(Value::as_object)
@@ -1306,6 +1336,7 @@ fn parse_document(bytes: &[u8]) -> Result<ParsedSettingsDocument, SettingsError>
         || !had_allow_client_cursor_surfaces
         || !had_cursor_size
         || !had_window_layout
+        || !had_scrolling_layout_preserve_swap_sizes
         || !had_scrolling_layout_wheel_settings
         || !had_workspace_settings;
     document.insert("version".to_owned(), Value::from(SETTINGS_SCHEMA_VERSION));
@@ -1373,6 +1404,8 @@ fn default_document() -> (
     set_cursor_size(&mut document, DEFAULT_CURSOR_SIZE).expect("default cursor size serializes");
     set_window_layout_kind(&mut document, WindowLayoutKind::Stacking)
         .expect("default window layout setting serializes");
+    set_scrolling_layout_preserve_swap_sizes(&mut document, true)
+        .expect("default scrolling swap setting serializes");
     set_scrolling_layout_wheel_settings(&mut document, ScrollingLayoutWheelSettings::default())
         .expect("default scrolling-layout wheel settings serialize");
     set_workspace_settings(&mut document, WorkspaceSettings::default())
@@ -1503,6 +1536,23 @@ fn set_cursor_size(
     Ok(())
 }
 
+fn parse_keyboard_resize_step(
+    document: &Map<String, Value>,
+) -> Result<super::keyboard_resize::ResizeStep, SettingsError> {
+    let Some(value) = document
+        .get("layout")
+        .and_then(Value::as_object)
+        .and_then(|layout| layout.get("keyboardResizeStep"))
+    else {
+        return Ok(super::keyboard_resize::ResizeStep::default());
+    };
+    value.as_str().and_then(super::keyboard_resize::ResizeStep::parse).ok_or_else(|| {
+        SettingsError::Document(
+            "layout.keyboardResizeStep must be a positive pixel amount (up to 32768, e.g. \"32px\") or percentage (up to 100%, e.g. \"10%\")".to_owned(),
+        )
+    })
+}
+
 fn parse_window_layout_kind(
     document: &Map<String, Value>,
 ) -> Result<WindowLayoutKind, SettingsError> {
@@ -1533,6 +1583,37 @@ fn set_window_layout_kind(
     layout.insert(
         "windowLayout".to_owned(),
         Value::String(kind.settings_name().to_owned()),
+    );
+    Ok(())
+}
+
+fn parse_scrolling_layout_preserve_swap_sizes(
+    document: &Map<String, Value>,
+) -> Result<bool, SettingsError> {
+    document
+        .get("layout")
+        .and_then(Value::as_object)
+        .and_then(|layout| layout.get("scrollingLayoutPreserveSwapSizes"))
+        .and_then(Value::as_bool)
+        .ok_or_else(|| {
+            SettingsError::Document(
+                "layout.scrollingLayoutPreserveSwapSizes must be a boolean".to_owned(),
+            )
+        })
+}
+
+fn set_scrolling_layout_preserve_swap_sizes(
+    document: &mut Map<String, Value>,
+    preserve_sizes: bool,
+) -> Result<(), SettingsError> {
+    let layout = document
+        .entry("layout")
+        .or_insert_with(|| Value::Object(Map::new()))
+        .as_object_mut()
+        .ok_or_else(|| SettingsError::Document("settings layout must be an object".to_owned()))?;
+    layout.insert(
+        "scrollingLayoutPreserveSwapSizes".to_owned(),
+        Value::Bool(preserve_sizes),
     );
     Ok(())
 }

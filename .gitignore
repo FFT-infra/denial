@@ -6,6 +6,12 @@
 /dart_shell/build/
 /dart_shell/.flutter-plugins
 /dart_shell/.flutter-plugins-dependencies
+/packages/*/.dart_tool/
+/packages/*/build/
+/plugins/*/.dart_tool/
+/plugins/*/build/
+/plugins/*/*/.dart_tool/
+/plugins/*/*/build/
 /.denial-ui-source.json
 
 # Local credentials and environment overrides.
@@ -34,9 +40,21 @@
 
 # Local-only cursor reference; its license prohibits redistribution.
 /dart_shell/assets/cursors/yangyang_xuanling/
+/packages/denial_flutter_sdk/assets/cursors/yangyang_xuanling/
 /profiling
 
 # Local profiling bytecode and retained engine comparison artifacts.
 /tools/__pycache__/
 /prebuilt/flutter-engine/*/libflutter_engine.so.before-*
 MOTO_WIFI_DEPLOY.md
+
+/plugin_manager_app/.dart_tool/
+/plugin_manager_app/build/
+/plugin_manager_app/linux/flutter/ephemeral/
+/plugin_manager_app/.flutter-plugins*
+
+/polkit_app/.dart_tool/
+/polkit_app/build/
+# The dialog runs on native_app; Flutter generates this tree on pub get.
+/polkit_app/linux/
+/polkit_app/.flutter-plugins*

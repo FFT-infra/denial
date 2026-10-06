@@ -60,6 +60,7 @@ readonly CANDIDATE_PROVENANCE="$CANDIDATE_ROOT/evidence/provenance.txt"
   || fail "candidate package directory is missing: $CANDIDATE_PACKAGES"
 [[ -d "$CANDIDATE_STAGE/denial" \
   && -d "$CANDIDATE_STAGE/denial-flutter-engine" \
+  && -d "$CANDIDATE_STAGE/denial-plugin-manager" \
     && -f "$CANDIDATE_STAGE/metadata.json" ]] \
   || fail "candidate native payload is incomplete: $CANDIDATE_STAGE"
 [[ -f "$CANDIDATE_PROVENANCE" ]] \
@@ -121,7 +122,7 @@ readonly GLIBC_BASELINE FLUTTER_ENGINE_ABI FLUTTER_ENGINE_SHA256
   || fail 'native candidate timestamp does not match its main commit'
 [[ "$GLIBC_BASELINE" == 2.39 ]] \
   || fail 'native candidate has an unexpected glibc baseline'
-[[ "$FLUTTER_ENGINE_ABI" == 3.44.7.denial1 ]] \
+[[ "$FLUTTER_ENGINE_ABI" == 3.47.5.denial1 ]] \
   || fail 'native candidate has an unexpected Flutter Engine ABI'
 [[ "$FLUTTER_ENGINE_SHA256" == "$(
   awk 'NR == 1 { print $1 }' \
@@ -138,7 +139,7 @@ readonly flutter_engine_abi
 flutter_engine_sha256="$FLUTTER_ENGINE_SHA256"
 readonly flutter_engine_sha256
 
-for package_root in denial denial-flutter-engine; do
+for package_root in denial denial-flutter-engine denial-plugin-manager; do
   (
     cd "$CANDIDATE_STAGE/$package_root"
     sha256sum --check --strict --quiet \
@@ -160,6 +161,7 @@ mapfile -d '' candidate_arch_packages < <(
   || fail "expected three candidate Arch packages, found ${#candidate_arch_packages[@]}"
 arch_denial_packages=0
 arch_engine_packages=0
+arch_plugin_manager_packages=0
 for package in "${candidate_arch_packages[@]}"; do
   package_name="$(
     bsdtar -xOf "$package" .PKGINFO \
@@ -177,11 +179,16 @@ for package in "${candidate_arch_packages[@]}"; do
         arch "$package" "$CANDIDATE_STAGE/denial-flutter-engine"
       arch_engine_packages=$((arch_engine_packages + 1))
       ;;
-    denial-ui-development) ;;
+    denial-plugin-manager)
+      "$ROOT/tools/verify-denial-package-payload" \
+        arch "$package" "$CANDIDATE_STAGE/denial-plugin-manager"
+      arch_plugin_manager_packages=$((arch_plugin_manager_packages + 1))
+      ;;
     *) fail "unexpected candidate Arch package: ${package_name:-unset}" ;;
   esac
 done
-((arch_denial_packages == 1 && arch_engine_packages == 1)) \
+((arch_denial_packages == 1 && arch_engine_packages == 1 \
+  && arch_plugin_manager_packages == 1)) \
   || fail 'candidate Arch/native payload set is incomplete'
 
 mapfile -d '' candidate_debs < <(
@@ -192,10 +199,10 @@ mapfile -d '' candidate_rpms < <(
   find "$CANDIDATE_PACKAGES" -maxdepth 1 -type f -name '*.rpm' -print0 \
     | sort -z
 )
-((${#candidate_debs[@]} == 2)) \
-  || fail "expected two candidate Debian packages, found ${#candidate_debs[@]}"
-((${#candidate_rpms[@]} == 2)) \
-  || fail "expected two candidate RPM packages, found ${#candidate_rpms[@]}"
+((${#candidate_debs[@]} == 3)) \
+  || fail "expected three candidate Debian packages, found ${#candidate_debs[@]}"
+((${#candidate_rpms[@]} == 3)) \
+  || fail "expected three candidate RPM packages, found ${#candidate_rpms[@]}"
 rpm_query_db="$(mktemp -d "${TMPDIR:-/tmp}/denial-rpm-query.XXXXXX")"
 readonly rpm_query_db
 cleanup_rpm_query() {
@@ -211,12 +218,13 @@ for package in "${candidate_debs[@]}"; do
   [[ "$package_version" == "${candidate_package_version}-0" ]] \
     || fail "candidate Debian package is not package-release 0: $(basename -- "$package")"
   case "$package_name" in
-    denial | denial-flutter-engine) ;;
+    denial | denial-flutter-engine | denial-plugin-manager) ;;
     *) fail "unexpected candidate Debian package: ${package_name:-unset}" ;;
   esac
   candidate_deb_names+=("$package_name")
 done
-[[ "${candidate_deb_names[*]}" == 'denial-flutter-engine denial' ]] \
+[[ "${candidate_deb_names[*]}" == \
+  'denial-flutter-engine denial-plugin-manager denial' ]] \
   || fail 'candidate Debian package set is incomplete'
 candidate_rpm_names=()
 for package in "${candidate_rpms[@]}"; do
@@ -225,12 +233,13 @@ for package in "${candidate_rpms[@]}"; do
   [[ "$package_version" == "${candidate_package_version}-0" ]] \
     || fail "candidate RPM package is not package-release 0: $(basename -- "$package")"
   case "$package_name" in
-    denial | denial-flutter-engine) ;;
+    denial | denial-flutter-engine | denial-plugin-manager) ;;
     *) fail "unexpected candidate RPM package: ${package_name:-unset}" ;;
   esac
   candidate_rpm_names+=("$package_name")
 done
-[[ "${candidate_rpm_names[*]}" == 'denial denial-flutter-engine' ]] \
+[[ "${candidate_rpm_names[*]}" == \
+  'denial denial-flutter-engine denial-plugin-manager' ]] \
   || fail 'candidate RPM package set is incomplete'
 cleanup_rpm_query
 trap - EXIT
@@ -260,7 +269,8 @@ runtime_version_file="$work_root/release-version"
 printf '%s\n' "$release_version" >"$runtime_version_file"
 install -Dm644 "$runtime_version_file" \
   "$release_stage/denial/usr/share/denial/version"
-find "$release_stage/denial" "$release_stage/denial-flutter-engine" -print0 \
+find "$release_stage/denial" "$release_stage/denial-flutter-engine" \
+  "$release_stage/denial-plugin-manager" -print0 \
   | xargs -0 touch --no-dereference --date="@$source_date_epoch"
 
 write_manifest() (
@@ -279,10 +289,16 @@ write_manifest "$release_stage/denial" "$release_stage/denial.sha256"
 write_manifest \
   "$release_stage/denial-flutter-engine" \
   "$release_stage/denial-flutter-engine.sha256"
+write_manifest \
+  "$release_stage/denial-plugin-manager" \
+  "$release_stage/denial-plugin-manager.sha256"
 write_inventory "$release_stage/denial" "$release_stage/denial.inventory"
 write_inventory \
   "$release_stage/denial-flutter-engine" \
   "$release_stage/denial-flutter-engine.inventory"
+write_inventory \
+  "$release_stage/denial-plugin-manager" \
+  "$release_stage/denial-plugin-manager.inventory"
 jq -n \
   --arg package_version "$release_version" \
   --argjson package_release 1 \
@@ -321,8 +337,10 @@ common_environment=(
 expected_packages=(
   "$OUTPUT_ROOT/denial-flutter-engine_${release_version}-1_amd64.deb"
   "$OUTPUT_ROOT/denial_${release_version}-1_amd64.deb"
+  "$OUTPUT_ROOT/denial-plugin-manager_${release_version}-1_amd64.deb"
   "$OUTPUT_ROOT/denial-flutter-engine-${release_version}-1.x86_64.rpm"
   "$OUTPUT_ROOT/denial-${release_version}-1.x86_64.rpm"
+  "$OUTPUT_ROOT/denial-plugin-manager-${release_version}-1.x86_64.rpm"
 )
 for package in "${expected_packages[@]}"; do
   [[ -f "$package" ]] || fail "promoted package is missing: $package"
@@ -348,6 +366,14 @@ write_manifest \
   "$release_stage/denial-flutter-engine" "$release_engine_manifest"
 cmp -- "$candidate_engine_manifest" "$release_engine_manifest" \
   || fail 'Flutter Engine payload changed during native promotion'
+candidate_plugin_manifest="$work_root/candidate-plugin-manager.manifest"
+release_plugin_manifest="$work_root/release-plugin-manager.manifest"
+write_manifest \
+  "$CANDIDATE_STAGE/denial-plugin-manager" "$candidate_plugin_manifest"
+write_manifest \
+  "$release_stage/denial-plugin-manager" "$release_plugin_manifest"
+cmp -- "$candidate_plugin_manifest" "$release_plugin_manifest" \
+  || fail 'Plugin Manager payload changed during native promotion'
 candidate_inventory="$work_root/candidate-denial.inventory"
 release_inventory="$work_root/release-denial.inventory"
 write_inventory "$CANDIDATE_STAGE/denial" "$candidate_inventory"
@@ -362,6 +388,14 @@ write_inventory \
   "$release_stage/denial-flutter-engine" "$release_engine_inventory"
 cmp -- "$candidate_engine_inventory" "$release_engine_inventory" \
   || fail 'Flutter Engine payload modes or entry types changed during native promotion'
+candidate_plugin_inventory="$work_root/candidate-plugin-manager.inventory"
+release_plugin_inventory="$work_root/release-plugin-manager.inventory"
+write_inventory \
+  "$CANDIDATE_STAGE/denial-plugin-manager" "$candidate_plugin_inventory"
+write_inventory \
+  "$release_stage/denial-plugin-manager" "$release_plugin_inventory"
+cmp -- "$candidate_plugin_inventory" "$release_plugin_inventory" \
+  || fail 'Plugin Manager payload modes or entry types changed during native promotion'
 
 {
   printf 'promotion_schema=1\n'

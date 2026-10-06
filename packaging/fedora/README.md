@@ -13,7 +13,9 @@ installed payload byte and mode matches the shared tree.
 Outputs are written below `$XDG_CACHE_HOME/denial/pc-build/packages/` by
 default.
 
-The two required packages are `denial-flutter-engine` and `denial`. Clean
+The two required desktop packages are `denial-flutter-engine` and `denial`.
+`denial-plugin-manager` is an optional third package for plugin development and
+installation; it checks for the compatible Dart SDK in `PATH`. Clean
 Fedora installation, reinstall, configuration preservation, and a real GDM
 session are recorded in [VALIDATION.md](VALIDATION.md).
 

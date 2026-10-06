@@ -16,6 +16,16 @@ fn loads_the_bundled_flutter_engine_abi() {
         EngineLibrary::load(bundle.join("lib/libflutter_engine.so"))
             .expect("candidate must export the Flutter and Denial embedder ABI"),
     );
+    let mode = std::env::var("DENIAL_TEST_FLUTTER_RUNTIME_MODE")
+        .unwrap_or_else(|_| String::from("release"));
+    match mode.as_str() {
+        "debug" => {
+            assert!(!library.runs_aot_compiled_dart_code());
+            return;
+        }
+        "release" | "profile" => {}
+        _ => panic!("unsupported candidate runtime mode: {mode}"),
+    }
     assert!(library.runs_aot_compiled_dart_code());
     let aot = library
         .create_aot_data(bundle.join("lib/libapp.so"))

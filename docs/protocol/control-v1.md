@@ -416,3 +416,38 @@ Hyprland, or Niri configuration file. Position-based GDK monitor matching,
 already used by the Niri backend, avoids relying on connector enumeration
 order. It should set `persistent` when the matching capability is true,
 including when restoring the pre-apply snapshot after a rejected confirmation.
+
+## Wallpaper status
+
+`wallpaper.status` is read-only and returns metadata from the compositor's mapped
+scene, without capturing pixels or changing wallpaper selection:
+
+```json
+{"available":true,"surfaces":[{"monitor_id":7,"app_id":"mpvpaper"}]}
+```
+
+`available: false` means scene metadata has not been published yet. With
+`available: true`, an empty list means no app-managed wallpaper is mapped.
+Background-layer clients and output-sized bottom-layer clients
+are included; ordinary windows and bottom-layer panels are excluded. Namespace
+identifies the supplying app, not a video filename. These clients may draw still
+or animated content, so clients must not infer animation from this endpoint.
+Settings labels them “Live / app-managed wallpaper” and labels the saved image
+as a fallback. An unsupported method or failed query means unknown status, never
+“static wallpaper”. Status is per monitor and Settings follows the same main
+output as its saved wallpaper preview. Appearance polls every three seconds;
+leaving the page disposes the subscription.
+
+### Plugin action shortcut targets
+
+`settings.shortcuts.get` also returns `plugin_actions` (an array of
+`{id,label,description,provider}` descriptors) and `action_generation`. The latter
+changes independently of the saved shortcut revision when a shell publishes a
+new catalog. Plugin targets use `{"type":"pluginAction","id":"package.action"}`
+inside the normal binding `target`. Add/update/validate retain a valid ID even
+when its provider is unavailable; unavailable targets are not dispatched.
+
+Native `supported_actions` no longer advertises legacy `openApplications`.
+Schema 11 migrates saved uses to `denial_launcher.openApplications`; new default
+bindings use that plugin target. `ui status` advertises the generic bridge as
+`pluginActionsV1` in `capabilities`.

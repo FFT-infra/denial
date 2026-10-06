@@ -18,7 +18,8 @@ use super::super::window_grab::constrain_dimension;
 use super::super::window_layout::DEFAULT_SCROLLING_COLUMN_FRACTION;
 use super::super::window_layout::{
     LayoutAxis, LayoutDirection, LayoutInsertion, LayoutPlacement, LayoutResizeEdges,
-    LayoutResizeRequest, LayoutSpace, WindowLayoutKind, create_window_layout, directional_neighbor,
+    LayoutResizeRequest, LayoutSpace, WindowLayout, WindowLayoutKind, create_window_layout,
+    directional_neighbor,
 };
 #[cfg(feature = "flutter")]
 use super::WindowId;
@@ -48,6 +49,13 @@ const LAYOUT_DROP_HYSTERESIS_FRACTION: f64 = 0.04;
 pub(crate) enum LayoutDropMode {
     Swap,
     Split(LayoutDirection),
+    InsertColumn {
+        before: bool,
+    },
+    /// Insert beside the target as a newly opened window would. Overview drops
+    /// that bring a window from another workspace use this instead of `Swap`,
+    /// which would silently send the target to the source workspace.
+    Join,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -386,31 +394,12 @@ impl WaylandFrontend {
         }
     }
 
-    fn layout_window_at(&self, location: Point<f64, Logical>) -> Option<Window> {
-        if !location.x.is_finite() || !location.y.is_finite() {
-            return None;
-        }
-        let point = Point::<i32, Logical>::from((
-            location
-                .x
-                .floor()
-                .clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32,
-            location
-                .y
-                .floor()
-                .clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32,
-        ));
-        let output = self
-            .outputs
-            .iter()
-            .find(|output| output.logical_geometry.contains(point))?
-            .id;
-        let workspace = self.active_workspace(output);
+    fn layout_window_in(&self, space: LayoutSpace, point: Point<i32, Logical>) -> Option<Window> {
         self.space
             .elements()
             .rev()
             .find(|window| {
-                self.managed_layout_space(window) == Some(LayoutSpace::new(output, workspace))
+                self.managed_layout_space(window) == Some(space)
                     && !self.window_has_constrained_state(window)
                     && self.window_geometry_target(window).contains(point)
             })
@@ -431,17 +420,50 @@ impl WaylandFrontend {
             .iter()
             .find(|output| output.logical_geometry.contains(location))?
             .id;
-        let target = if let Some(target) = self.layout_window_at(location.to_f64()) {
+        let space = LayoutSpace::new(output, self.active_workspace(output));
+        self.layout_drop_target_in(window, space, location, previous)
+    }
+
+    /// Resolves a drop against one explicit layout space. Workspaces of an
+    /// output share its coordinates, so the overview can target a workspace
+    /// that is not currently visible.
+    fn layout_drop_target_in(
+        &self,
+        window: &Window,
+        space: LayoutSpace,
+        location: Point<i32, Logical>,
+        previous: Option<&LayoutDropTarget>,
+    ) -> Option<LayoutDropTarget> {
+        let output = self
+            .outputs
+            .iter()
+            .find(|output| output.id == space.output)?;
+        let axis = self.scrolling_layout_axis_for_output(output);
+        let work_area = self.maximize_work_area(Some(&output.output), output.logical_geometry);
+        if let Some(window_id) = self.window_root_surface(window).map(|root| root.id())
+            && let Some((target, before)) = self.window_layout.column_insertion_target(
+                space,
+                &window_id,
+                work_area,
+                self.layout_gap(),
+                location,
+            )
+            && let Some(target) = self.window_for_layout_id(&target)
+            && !self.window_has_constrained_state(&target)
+        {
+            return Some(LayoutDropTarget {
+                window: target,
+                mode: LayoutDropMode::InsertColumn { before },
+            });
+        }
+        let target = if let Some(target) = self.layout_window_in(space, location) {
             target
         } else {
             self.space
                 .elements()
                 .filter(|candidate| {
                     *candidate != window
-                        && self.managed_layout_space(candidate).is_some_and(|space| {
-                            space.output == output
-                                && space.workspace == self.active_workspace(output)
-                        })
+                        && self.managed_layout_space(candidate) == Some(space)
                         && !self.window_has_constrained_state(candidate)
                 })
                 .min_by(|left, right| {
@@ -462,6 +484,7 @@ impl WaylandFrontend {
             .map(|previous| previous.mode);
         let mode = layout_drop_mode_for_kind(
             self.window_layout.kind(),
+            axis,
             self.window_geometry_target(&target),
             location,
             previous_mode,
@@ -482,14 +505,38 @@ impl WaylandFrontend {
         window: &Window,
         target: &LayoutDropTarget,
     ) -> Vec<(Window, Rectangle<i32, Logical>)> {
+        let Some(space) = self.managed_layout_space(target.window()) else {
+            return Vec::new();
+        };
+        self.layout_drop_preview_in(window, space, Some(target), false)
+    }
+
+    /// Plans a drop onto `space` on a disposable snapshot. A target-less drop
+    /// joins an empty space. `include_dragged` also reports the dragged
+    /// window's planned rectangle, which the overview presents as its landing
+    /// slot while the window itself stays under the pointer.
+    #[cfg(feature = "flutter")]
+    pub(crate) fn layout_drop_preview_in(
+        &self,
+        window: &Window,
+        space: LayoutSpace,
+        target: Option<&LayoutDropTarget>,
+        include_dragged: bool,
+    ) -> Vec<(Window, Rectangle<i32, Logical>)> {
         let Some(window_id) = self.window_root_surface(window).map(|root| root.id()) else {
             return Vec::new();
         };
-        let Some(target_id) = self
-            .window_root_surface(target.window())
-            .map(|root| root.id())
-        else {
-            return Vec::new();
+        let target = match target {
+            Some(target) => {
+                let Some(target_id) = self
+                    .window_root_surface(target.window())
+                    .map(|root| root.id())
+                else {
+                    return Vec::new();
+                };
+                Some((target_id, target.mode()))
+            }
+            None => None,
         };
         let gap = self.layout_gap();
         let workspace_count = self.layout_workspace_count();
@@ -504,26 +551,21 @@ impl WaylandFrontend {
                 )
             })
             .collect::<Vec<_>>();
-        let mut preview = self.window_layout.snapshot();
-        let changed = match target.mode() {
-            LayoutDropMode::Swap => preview.swap(&window_id, &target_id),
-            LayoutDropMode::Split(direction) => {
-                let Some(space) = preview.space_for(&target_id) else {
-                    return Vec::new();
-                };
-                let Some((_, work_area, axis)) = contexts
-                    .iter()
-                    .find(|(output, _, _)| *output == space.output)
-                else {
-                    return Vec::new();
-                };
-                preview.set_maximize_area(space, *work_area);
-                preview.prepare_arrange(space, *work_area, gap, *axis);
-                preview.move_beside_for_preview(
-                    &window_id, &target_id, direction, *work_area, gap, *axis,
-                )
-            }
+        let Some(&(_, work_area, axis)) = contexts
+            .iter()
+            .find(|(output, _, _)| *output == space.output)
+        else {
+            return Vec::new();
         };
+        let mut preview = self.window_layout.snapshot();
+        let changed = plan_layout_drop(
+            preview.as_mut(),
+            &window_id,
+            space,
+            target.as_ref().map(|(target_id, mode)| (target_id, *mode)),
+            self.settings.scrolling_layout_preserve_swap_sizes(),
+            Some((work_area, gap, axis)),
+        );
         if !changed {
             return Vec::new();
         }
@@ -556,7 +598,7 @@ impl WaylandFrontend {
                     }
                 })
             })
-            .filter(|placement| placement.window != window_id)
+            .filter(|placement| include_dragged || placement.window != window_id)
             .filter(|placement| current.get(&placement.window).copied() != Some(placement.geometry))
             .filter_map(|placement| {
                 let window = self.window_for_layout_id(&placement.window)?;
@@ -594,12 +636,55 @@ impl WaylandFrontend {
         self.window_for_layout_id(&neighbor)
     }
 
+    #[cfg(feature = "flutter")]
+    pub(crate) fn resize_layout_window_from_keyboard(
+        &mut self,
+        window: &Window,
+        action: super::super::keyboard_resize::KeyboardResize,
+    ) -> Vec<(Window, Rectangle<i32, Logical>)> {
+        let step = self.settings.keyboard_resize_step();
+        self.refresh_layout_minimum_sizes();
+        self.prepare_layout_arrangement();
+        self.resize_layout_window_with(window, |layout, window, work_area, gap| {
+            let (axis, change) = action.layout_change(work_area, step);
+            layout.resize_from_keyboard(super::super::window_layout::LayoutKeyboardResizeRequest {
+                window,
+                work_area,
+                gap,
+                axis,
+                change,
+            })
+        })
+    }
+
     pub(crate) fn resize_layout_window(
         &mut self,
         window: &Window,
         edges: LayoutResizeEdges,
         delta_x: f64,
         delta_y: f64,
+    ) -> Vec<(Window, Rectangle<i32, Logical>)> {
+        self.resize_layout_window_with(window, |layout, window, work_area, gap| {
+            layout.resize(LayoutResizeRequest {
+                window,
+                work_area,
+                gap,
+                delta_x,
+                delta_y,
+                edges,
+            })
+        })
+    }
+
+    fn resize_layout_window_with(
+        &mut self,
+        window: &Window,
+        resize: impl FnOnce(
+            &mut dyn super::super::window_layout::WindowLayout<ObjectId>,
+            ObjectId,
+            Rectangle<i32, Logical>,
+            i32,
+        ) -> bool,
     ) -> Vec<(Window, Rectangle<i32, Logical>)> {
         let Some(window_id) = self.window_root_surface(window).map(|root| root.id()) else {
             return Vec::new();
@@ -623,14 +708,7 @@ impl WaylandFrontend {
             .into_iter()
             .map(|placement| (placement.window, placement.geometry))
             .collect::<HashMap<_, _>>();
-        if !self.window_layout.resize(LayoutResizeRequest {
-            window: window_id,
-            work_area,
-            gap,
-            delta_x,
-            delta_y,
-            edges,
-        }) {
+        if !resize(self.window_layout.as_mut(), window_id, work_area, gap) {
             return Vec::new();
         }
         self.arrange_layout_windows();
@@ -656,7 +734,11 @@ impl WaylandFrontend {
         let Some(second) = self.window_root_surface(second).map(|root| root.id()) else {
             return false;
         };
-        if !self.window_layout.swap(&first, &second) {
+        if !self.window_layout.swap(
+            &first,
+            &second,
+            self.settings.scrolling_layout_preserve_swap_sizes(),
+        ) {
             return false;
         }
         // A swap exchanges leaves, including across layout spaces. The
@@ -689,38 +771,124 @@ impl WaylandFrontend {
         else {
             return true;
         };
-        let Some(window_id) = self.window_root_surface(window).map(|root| root.id()) else {
-            return true;
-        };
         let target = target.or_else(|| self.layout_drop_target_at(window, location, None));
-        if let Some(target) = target {
-            let Some(target_id) = self
-                .window_root_surface(&target.window)
-                .map(|root| root.id())
-            else {
-                return true;
-            };
-            let changed = match target.mode {
-                LayoutDropMode::Swap => self.window_layout.swap(&window_id, &target_id),
-                LayoutDropMode::Split(direction) => self
-                    .window_layout
-                    .move_beside(&window_id, &target_id, direction),
-            };
-            if changed {
-                self.window_layout.activate(&window_id);
-                self.arrange_layout_windows();
-            }
-            return true;
-        }
-
         let space = LayoutSpace::new(physical_output, self.active_workspace(physical_output));
-        self.window_layout.insert(LayoutInsertion {
-            window: window_id,
-            space,
-            anchor: None,
-        });
-        self.arrange_layout_windows();
+        self.commit_layout_drop(window, space, target);
         true
+    }
+
+    /// Resolves an overview drop onto any workspace of an output, including a
+    /// hidden one. A window joining from elsewhere never exchanges places with
+    /// the tile under it: in Dwindle it opens beside that tile as a new window
+    /// would, and in a scrolling strip it takes a column on the nearer side.
+    #[cfg(feature = "flutter")]
+    pub(crate) fn workspace_drop_target(
+        &self,
+        window: &Window,
+        space: LayoutSpace,
+        location: Point<i32, Logical>,
+        previous: Option<&LayoutDropTarget>,
+    ) -> Option<LayoutDropTarget> {
+        if !self.window_layout.manages_geometry() || !self.window_layout_eligible_when(window, true)
+        {
+            return None;
+        }
+        let mut target = self.layout_drop_target_in(window, space, location, previous)?;
+        if target.mode == LayoutDropMode::Swap && self.managed_layout_space(window) != Some(space) {
+            target.mode = match self.window_layout.kind() {
+                WindowLayoutKind::Scrolling => {
+                    let geometry = self.window_geometry_target(&target.window);
+                    let axis = self
+                        .outputs
+                        .iter()
+                        .find(|output| output.id == space.output)
+                        .map_or(LayoutAxis::Horizontal, |output| {
+                            self.scrolling_layout_axis_for_output(output)
+                        });
+                    let before = match axis {
+                        LayoutAxis::Horizontal => location.x < geometry.loc.x + geometry.size.w / 2,
+                        LayoutAxis::Vertical => location.y < geometry.loc.y + geometry.size.h / 2,
+                    };
+                    LayoutDropMode::InsertColumn { before }
+                }
+                _ => LayoutDropMode::Join,
+            };
+        }
+        Some(target)
+    }
+
+    /// Commits an overview drop onto `space`. The caller has already restored
+    /// a minimized window and assigned its workspace; such a window first
+    /// re-enrolls through the ordinary reconciliation path so its floating
+    /// restore rectangle and size hints are retained. Returns false for a
+    /// window that the managed layout cannot hold.
+    #[cfg(feature = "flutter")]
+    pub(crate) fn apply_workspace_drop(
+        &mut self,
+        window: &Window,
+        space: LayoutSpace,
+        target: Option<LayoutDropTarget>,
+    ) -> bool {
+        if !self.window_layout.manages_geometry() || !self.window_layout_eligible(window) {
+            return false;
+        }
+        if !self.window_is_layout_managed(window) {
+            if let Some(anchor) = target
+                .as_ref()
+                .and_then(|target| self.window_root_surface(&target.window))
+                .map(|root| root.id())
+                && let Some(root) = self.window_root_surface(window)
+                && let Some(record) = self.ensure_window_record_for_surface(&root.id())
+            {
+                record.layout_insertion_anchor = Some(anchor);
+            }
+            self.reconcile_window_layout(window);
+        }
+        self.commit_layout_drop(window, space, target);
+        // A refused tile operation must still land the window on the
+        // workspace it was dropped on.
+        if let Some(window_id) = self.window_root_surface(window).map(|root| root.id())
+            && self.window_layout.space_for(&window_id) != Some(space)
+            && self.window_layout.move_to_space(&window_id, space)
+        {
+            self.arrange_layout_windows();
+        }
+        true
+    }
+
+    fn commit_layout_drop(
+        &mut self,
+        window: &Window,
+        space: LayoutSpace,
+        target: Option<LayoutDropTarget>,
+    ) {
+        let Some(window_id) = self.window_root_surface(window).map(|root| root.id()) else {
+            return;
+        };
+        let target = match target {
+            Some(target) => {
+                let Some(target_id) = self
+                    .window_root_surface(&target.window)
+                    .map(|root| root.id())
+                else {
+                    return;
+                };
+                Some((target_id, target.mode))
+            }
+            None => None,
+        };
+        let changed = plan_layout_drop(
+            self.window_layout.as_mut(),
+            &window_id,
+            space,
+            target.as_ref().map(|(target_id, mode)| (target_id, *mode)),
+            self.settings.scrolling_layout_preserve_swap_sizes(),
+            None,
+        );
+        if changed {
+            self.window_layout.activate(&window_id);
+            self.arrange_layout_windows();
+        }
     }
 
     /// Switch algorithms without exposing protocol or lifecycle details to the
@@ -887,6 +1055,29 @@ impl WaylandFrontend {
             }
         }
         removed
+    }
+
+    /// Transfer only the requested window's leaf. A global rebuild discards
+    /// Dwindle trees and resets scrolling view state on unrelated workspaces.
+    #[cfg(feature = "flutter")]
+    pub(super) fn move_window_layout_to_workspace(
+        &mut self,
+        window: &Window,
+        location: super::workspace::WorkspaceLocation,
+    ) -> bool {
+        let Some(root) = self.window_root_surface(window) else {
+            return false;
+        };
+        let window_id = root.id();
+        if !self.window_layout.contains(&window_id) {
+            return self.reconcile_window_layout(window);
+        }
+        let destination = LayoutSpace::new(location.output, location.workspace);
+        if !self.window_layout.move_to_space(&window_id, destination) {
+            return false;
+        }
+        self.arrange_layout_windows();
+        true
     }
 
     /// Rebuild output membership after hotplug/rotation while preserving each
@@ -1149,13 +1340,22 @@ impl WaylandFrontend {
     }
 
     fn window_layout_eligible(&self, window: &Window) -> bool {
+        self.window_layout_eligible_when(window, false)
+    }
+
+    /// `restoring` evaluates a minimized window as the drop that is about to
+    /// restore it will leave it.
+    fn window_layout_eligible_when(&self, window: &Window, restoring: bool) -> bool {
         let Some(root) = self.window_root_surface(window) else {
             return false;
         };
         #[cfg(feature = "flutter")]
-        let minimized = self.surface_is_minimized(&root.id());
+        let minimized = !restoring && self.surface_is_minimized(&root.id());
         #[cfg(not(feature = "flutter"))]
-        let minimized = false;
+        let minimized = {
+            let _ = restoring;
+            false
+        };
         #[cfg(feature = "flutter")]
         let pinned = self.window_is_pinned(window);
         #[cfg(not(feature = "flutter"))]
@@ -1291,7 +1491,7 @@ impl WaylandFrontend {
         Some(root.id())
     }
 
-    fn layout_workspace_count(&self) -> u8 {
+    pub(super) fn layout_workspace_count(&self) -> u8 {
         #[cfg(feature = "flutter")]
         {
             if self.workspaces_enabled() {
@@ -1420,6 +1620,58 @@ fn has_rigid_dimension(minimum: Size<i32, Logical>, maximum: Size<i32, Logical>)
     rigid(minimum.w, maximum.w) || rigid(minimum.h, maximum.h)
 }
 
+/// Applies one drop decision to a layout, authoritative or disposable, so a
+/// preview and its commit cannot diverge. Without a target the window joins
+/// the empty space. A window the layout does not hold yet, such as one being
+/// restored from minimization, first joins beside the target.
+/// `preview_context` keeps a scrolling target under the pointer while an edge
+/// drop is only being planned.
+fn plan_layout_drop(
+    layout: &mut dyn WindowLayout<ObjectId>,
+    window: &ObjectId,
+    space: LayoutSpace,
+    target: Option<(&ObjectId, LayoutDropMode)>,
+    preserve_swap_sizes: bool,
+    preview_context: Option<(Rectangle<i32, Logical>, i32, LayoutAxis)>,
+) -> bool {
+    let Some((target, mode)) = target else {
+        if layout.space_for(window) == Some(space) {
+            return false;
+        }
+        layout.insert(LayoutInsertion {
+            window: window.clone(),
+            space,
+            anchor: None,
+        });
+        return true;
+    };
+    let joined = !layout.contains(window) || mode == LayoutDropMode::Join;
+    if joined {
+        layout.insert(LayoutInsertion {
+            window: window.clone(),
+            space,
+            anchor: Some(target.clone()),
+        });
+    }
+    let changed = match mode {
+        LayoutDropMode::Join => false,
+        LayoutDropMode::Swap => layout.swap(window, target, preserve_swap_sizes),
+        LayoutDropMode::InsertColumn { before } => layout.move_to_column(window, target, before),
+        LayoutDropMode::Split(direction) => match preview_context {
+            Some((work_area, gap, axis)) => {
+                let Some(target_space) = layout.space_for(target) else {
+                    return joined;
+                };
+                layout.set_maximize_area(target_space, work_area);
+                layout.prepare_arrange(target_space, work_area, gap, axis);
+                layout.move_beside_for_preview(window, target, direction, work_area, gap, axis)
+            }
+            None => layout.move_beside(window, target, direction),
+        },
+    };
+    joined || changed
+}
+
 fn layout_drop_distance(geometry: Rectangle<i32, Logical>, location: Point<i32, Logical>) -> f64 {
     let center_x = f64::from(geometry.loc.x) + f64::from(geometry.size.w) / 2.0;
     let center_y = f64::from(geometry.loc.y) + f64::from(geometry.size.h) / 2.0;
@@ -1428,17 +1680,34 @@ fn layout_drop_distance(geometry: Rectangle<i32, Logical>, location: Point<i32, 
 
 fn layout_drop_mode_for_kind(
     kind: WindowLayoutKind,
+    scrolling_axis: LayoutAxis,
     geometry: Rectangle<i32, Logical>,
     location: Point<i32, Logical>,
     previous: Option<LayoutDropMode>,
 ) -> LayoutDropMode {
-    if matches!(
-        kind,
-        WindowLayoutKind::Dwindle | WindowLayoutKind::Scrolling
-    ) {
-        layout_drop_mode(geometry, location, previous)
-    } else {
-        LayoutDropMode::Swap
+    match kind {
+        WindowLayoutKind::Dwindle => layout_drop_mode(geometry, location, previous),
+        WindowLayoutKind::Scrolling => {
+            // A drop can stack leaves across the strip, but never divide a
+            // column along the scrolling axis. Those edges are swap targets.
+            let allowed_mode = |mode| match (scrolling_axis, mode) {
+                (
+                    LayoutAxis::Horizontal,
+                    LayoutDropMode::Split(LayoutDirection::Left | LayoutDirection::Right),
+                )
+                | (
+                    LayoutAxis::Vertical,
+                    LayoutDropMode::Split(LayoutDirection::Up | LayoutDirection::Down),
+                ) => LayoutDropMode::Swap,
+                _ => mode,
+            };
+            allowed_mode(layout_drop_mode(
+                geometry,
+                location,
+                previous.map(allowed_mode),
+            ))
+        }
+        WindowLayoutKind::Stacking => LayoutDropMode::Swap,
     }
 }
 
@@ -1461,7 +1730,7 @@ fn layout_drop_mode(
 
     if let Some(previous) = previous {
         match previous {
-            LayoutDropMode::Swap => {
+            LayoutDropMode::Swap | LayoutDropMode::InsertColumn { .. } | LayoutDropMode::Join => {
                 let edge = LAYOUT_DROP_EDGE_FRACTION - LAYOUT_DROP_HYSTERESIS_FRACTION;
                 if x >= edge && x <= 1.0 - edge && y >= edge && y <= 1.0 - edge {
                     return LayoutDropMode::Swap;
@@ -1602,13 +1871,80 @@ mod tests {
         let geometry = rect(0, 0, 1000, 600);
         let top_edge = Point::from((500, 10));
         assert_eq!(
-            layout_drop_mode_for_kind(WindowLayoutKind::Scrolling, geometry, top_edge, None,),
+            layout_drop_mode_for_kind(
+                WindowLayoutKind::Scrolling,
+                LayoutAxis::Horizontal,
+                geometry,
+                top_edge,
+                None
+            ),
             LayoutDropMode::Split(LayoutDirection::Up),
         );
         assert_eq!(
-            layout_drop_mode_for_kind(WindowLayoutKind::Stacking, geometry, top_edge, None),
+            layout_drop_mode_for_kind(
+                WindowLayoutKind::Stacking,
+                LayoutAxis::Horizontal,
+                geometry,
+                top_edge,
+                None
+            ),
             LayoutDropMode::Swap,
         );
+    }
+
+    #[test]
+    fn scrolling_drop_swaps_on_the_strip_axis_and_splits_across_it() {
+        let geometry = rect(100, 200, 1000, 600);
+        for axis in [LayoutAxis::Horizontal, LayoutAxis::Vertical] {
+            for (point, direction, edge_axis) in [
+                ((110, 500), LayoutDirection::Left, LayoutAxis::Horizontal),
+                ((1090, 500), LayoutDirection::Right, LayoutAxis::Horizontal),
+                ((600, 210), LayoutDirection::Up, LayoutAxis::Vertical),
+                ((600, 790), LayoutDirection::Down, LayoutAxis::Vertical),
+            ] {
+                for previous in [
+                    None,
+                    Some(LayoutDropMode::Swap),
+                    Some(LayoutDropMode::Split(direction)),
+                    Some(LayoutDropMode::InsertColumn { before: true }),
+                ] {
+                    assert_eq!(
+                        layout_drop_mode_for_kind(
+                            WindowLayoutKind::Scrolling,
+                            axis,
+                            geometry,
+                            Point::from(point),
+                            previous
+                        ),
+                        if axis == edge_axis {
+                            LayoutDropMode::Swap
+                        } else {
+                            LayoutDropMode::Split(direction)
+                        },
+                    );
+                    assert_eq!(
+                        layout_drop_mode_for_kind(
+                            WindowLayoutKind::Dwindle,
+                            axis,
+                            geometry,
+                            Point::from(point),
+                            previous
+                        ),
+                        LayoutDropMode::Split(direction),
+                    );
+                }
+            }
+            assert_eq!(
+                layout_drop_mode_for_kind(
+                    WindowLayoutKind::Scrolling,
+                    axis,
+                    geometry,
+                    Point::from((600, 500)),
+                    None
+                ),
+                LayoutDropMode::Swap,
+            );
+        }
     }
 
     #[test]

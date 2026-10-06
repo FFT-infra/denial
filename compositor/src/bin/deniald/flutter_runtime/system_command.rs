@@ -375,6 +375,27 @@ impl SystemCommandHandler {
         Ok(())
     }
 
+    pub(super) fn start_startup_application(
+        &self,
+        arguments: Vec<String>,
+        desktop_file_id: &'static str,
+    ) -> io::Result<()> {
+        // Only copy launch context. The worker must not borrow Flutter or its
+        // event loop while Xwayland is waiting for that loop to dispatch.
+        let launcher = Self::new(
+            self.wayland_display.clone(),
+            self.x11_display.clone(),
+            self.output_control_socket.clone(),
+        );
+        dispatch_startup_launch(move || {
+            if let Err(error) =
+                launcher.start_shortcut_application(arguments, false, Some(desktop_file_id), None)
+            {
+                warn!(%error, desktop_file_id, "could not launch startup application");
+            }
+        })
+    }
+
     pub(super) fn start_shortcut_application(
         &self,
         mut arguments: Vec<String>,
@@ -606,6 +627,19 @@ fn decode(packet: &[u8]) -> Result<Request, DecodeError> {
     }
 }
 
+/// Startup must reach calloop even if application preparation waits for X11.
+/// In particular, XIM discovery cannot finish until Xwayland's Wayland
+/// requests are dispatched. Do not join this worker on the compositor thread.
+fn dispatch_startup_launch(launch: impl FnOnce() + Send + 'static) -> io::Result<()> {
+    thread::Builder::new()
+        .name("denial-startup-launch".into())
+        .spawn(move || {
+            crate::cpu_scheduling::normalize_current_worker("startup application launch");
+            launch();
+        })
+        .map(|_| ())
+}
+
 fn launch_application(
     arguments: &[String],
     desktop_file_id: Option<&str>,
@@ -687,6 +721,40 @@ fn launch_application(
         io::ErrorKind::BrokenPipe,
         "child reaper stopped unexpectedly after restart",
     )))
+}
+
+#[cfg(test)]
+mod startup_launch_tests {
+    use super::*;
+
+    #[test]
+    fn startup_continues_while_launch_waits_for_compositor_dispatch() {
+        let (dispatch_tx, dispatch_rx) = mpsc::channel();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (returned_tx, returned_rx) = mpsc::channel();
+        let (finished_tx, finished_rx) = mpsc::channel();
+        let startup = thread::spawn(move || {
+            let result = dispatch_startup_launch(move || {
+                started_tx.send(()).unwrap();
+                // Model an X11 handshake waiting for compositor dispatch.
+                let _ = dispatch_rx.recv();
+                finished_tx.send(()).unwrap();
+            });
+            returned_tx.send(result).unwrap();
+        });
+        let timeout = Duration::from_secs(5);
+        started_rx.recv_timeout(timeout).unwrap();
+        let returned = returned_rx.recv_timeout(timeout);
+        let waiting_for_dispatch = matches!(finished_rx.try_recv(), Err(mpsc::TryRecvError::Empty));
+        // Release the worker even if a regression blocked the startup caller.
+        dispatch_tx.send(()).unwrap();
+        finished_rx.recv_timeout(timeout).unwrap();
+        startup.join().unwrap();
+        assert!(waiting_for_dispatch);
+        returned
+            .expect("startup blocked on its application launch")
+            .unwrap();
+    }
 }
 
 fn application_command(

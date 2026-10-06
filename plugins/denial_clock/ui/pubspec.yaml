@@ -1,0 +1,12 @@
+name: denial_clock_ui
+description: Shared clock presentation for Denial desktop and mobile plugins.
+publish_to: none
+version: 0.0.0
+environment:
+  sdk: ^3.13.0
+  flutter: 3.47.5
+dependencies:
+  flutter:
+    sdk: flutter
+  denial_flutter_sdk:
+    path: ../../../packages/denial_flutter_sdk

@@ -75,6 +75,12 @@ Request Dart hot restart when the native tooling backend supports it.
 .B ui build
 Build and activate an optimized custom shell when supported.
 .TP
+.B "ui activate BUNDLE"
+Validate and activate a sealed release plugin composition built by
+.BR denial-plugins .
+The native controller verifies bundle checksums and installed runtime compatibility,
+then waits for startup health before retaining it as the selected composition.
+.TP
 .B ui restore
 Restore the packaged optimized shell.
 This is the native recovery path when custom Flutter UI code is unusable.

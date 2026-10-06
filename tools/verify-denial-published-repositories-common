@@ -85,8 +85,8 @@ mapfile -d '' direct_packages < <(
     -print0 \
     | sort -z
 )
-((${#direct_packages[@]} == 9)) \
-  || fail "expected nine direct packages, found ${#direct_packages[@]}"
+((${#direct_packages[@]} == 12)) \
+  || fail "expected twelve direct packages, found ${#direct_packages[@]}"
 for signed_file in \
   "${direct_packages[@]}" \
   "$SIGNED_ROOT/x86_64/denial.db.tar.zst" \
@@ -100,8 +100,8 @@ mapfile -d '' apt_packages < <(
   find "$SIGNED_ROOT/apt/pool/main/d/denial" \
     -maxdepth 1 -type f -name '*.deb' -print0 | sort -z
 )
-((${#apt_packages[@]} == 2)) \
-  || fail "expected two APT pool packages, found ${#apt_packages[@]}"
+((${#apt_packages[@]} == 3)) \
+  || fail "expected three APT pool packages, found ${#apt_packages[@]}"
 for package in "${apt_packages[@]}"; do
   direct="$SIGNED_ROOT/downloads/x86_64/$(basename -- "$package")"
   [[ -f "$direct" ]] || fail "direct Debian download is missing: $direct"
@@ -133,8 +133,8 @@ for suite in trixie noble; do
   )
 
   packages_index="$release_root/main/binary-amd64/Packages"
-  [[ "$(grep -c '^Package: ' "$packages_index")" == 2 ]] \
-    || fail "$suite Packages index does not contain exactly two packages"
+  [[ "$(grep -c '^Package: ' "$packages_index")" == 3 ]] \
+    || fail "$suite Packages index does not contain exactly three packages"
   for package in "${apt_packages[@]}"; do
     relative="pool/main/d/denial/$(basename -- "$package")"
     checksum="$(sha256sum "$package" | awk '{ print $1 }')"
@@ -169,12 +169,13 @@ apt_options=(
 )
 apt-get "${apt_options[@]}" update
 apt_names="$(
-  apt-cache "${apt_options[@]}" show denial denial-flutter-engine \
+  apt-cache "${apt_options[@]}" show \
+    denial denial-flutter-engine denial-plugin-manager \
     | awk '/^Package: / { print $2 }' \
     | sort -u \
     | paste -sd' ' -
 )"
-[[ "$apt_names" == 'denial denial-flutter-engine' ]] \
+[[ "$apt_names" == 'denial denial-flutter-engine denial-plugin-manager' ]] \
   || fail "APT client resolved the wrong package set: $apt_names"
 
 rpm_repository="$SIGNED_ROOT/rpm/fedora/44/x86_64"
@@ -186,8 +187,8 @@ mapfile -d '' repository_rpms < <(
   find "$rpm_repository/Packages" \
     -maxdepth 1 -type f -name '*.rpm' -print0 | sort -z
 )
-((${#repository_rpms[@]} == 2)) \
-  || fail "expected two DNF packages, found ${#repository_rpms[@]}"
+((${#repository_rpms[@]} == 3)) \
+  || fail "expected three DNF packages, found ${#repository_rpms[@]}"
 for package in "${repository_rpms[@]}"; do
   direct="$SIGNED_ROOT/downloads/x86_64/$(basename -- "$package")"
   [[ -f "$direct" ]] || fail "direct RPM download is missing: $direct"

@@ -403,7 +403,7 @@ source_audit() {
   local engine_dir="$ROOT/prebuilt/flutter-engine/linux-x64-release"
   local engine_package_epoch
   local engine_package_version
-  local flutter_tool_dir="$ROOT/prebuilt/flutter-tools/3.44.7"
+  local flutter_tool_dir="$ROOT/prebuilt/flutter-tools/3.47.5"
   local github_sha
   local installer_fingerprint
   local installer_key_url
@@ -579,7 +579,7 @@ source_audit() {
       and .package.version_source == "denial-release-tag"
       and .package.epoch == 1
       and .package.architecture == "x86_64"
-      and .compatibility.flutter_engine_abi == "3.44.7.denial1"
+      and .compatibility.flutter_engine_abi == "3.47.5.denial1"
       and .assurances.offline_source_closure == false
       and .assurances.reproducible_package == false
       and .assurances.signed_generation_tags == false
@@ -594,7 +594,7 @@ source_audit() {
       and .package.name == "denial-ui-development"
       and .package.architecture == "x86_64"
       and .compatibility.denial_ui_development_api == 1
-      and .compatibility.flutter_engine_abi == "3.44.7.denial1"
+      and .compatibility.flutter_engine_abi == "3.47.5.denial1"
       and .runtime.engine_mode == "debug-jit"
       and .runtime.flutter_tool_snapshot_kind == "app-aot-elf"
       and .runtime.flutter_tool_runtime == "dartaotruntime"
@@ -615,11 +615,11 @@ source_audit() {
   if jq -e '
       .schema_version == 1
       and .flutter.repository == "https://github.com/denialwm/flutter.git"
-      and .flutter.branch == "denial/3.44.7-r1"
+      and .flutter.branch == "denial/3.47.5-r1"
       and (.flutter.revision | test("^[0-9a-f]{40}$"))
       and (.flutter.upstream_revision | test("^[0-9a-f]{40}$"))
       and .skia.repository == "https://github.com/denialwm/skia.git"
-      and .skia.branch == "denial/3.44.7-r1"
+      and .skia.branch == "denial/3.47.5-r1"
       and (.skia.revision | test("^[0-9a-f]{40}$"))
       and (.skia.upstream_revision | test("^[0-9a-f]{40}$"))
       and .depot_tools.repository ==
@@ -632,9 +632,12 @@ source_audit() {
   fi
   if [[ ! -d "$ROOT/patches" ]] \
     && [[ -z "$(
-      find "$ROOT" \
-        -path "$ROOT/.git" -prune \
-        -o -type f -name '*.patch' -print -quit
+      git -C "$ROOT" ls-files \
+        --cached \
+        --others \
+        --exclude-standard \
+        -- \
+        '*.patch'
     )" ]]; then
     pass 'repository contains no downstream patch series'
   else
@@ -738,7 +741,7 @@ source_audit() {
     pass 'pipeline does not consume manually staged Flutter Engine artifacts'
   fi
   if (
-    cd "$ROOT/dart_shell/assets/fonts"
+    cd "$ROOT/packages/denial_flutter_sdk/assets/fonts"
     sha256sum --check --strict JetBrainsMono.sha256
   ) >/dev/null; then
     pass 'bundled JetBrains Mono files match their source manifest'
@@ -748,7 +751,7 @@ source_audit() {
   if (
     cd "$ROOT"
     sha256sum --check --strict \
-      dart_shell/assets/cursors/bibata_modern_ice.sha256
+      packages/denial_flutter_sdk/assets/cursors/bibata_modern_ice.sha256
   ) >/dev/null; then
     pass 'bundled Bibata cursor frames match their import manifest'
   else
@@ -764,28 +767,12 @@ source_audit() {
     'prebuilt/flutter-engine/SOURCE_LOCK.json' \
     "$(jq -r '.source_lock.path' "$manifest")"
   check_equal \
-    'UI manifest uses the canonical source-lock path' \
-    'prebuilt/flutter-engine/SOURCE_LOCK.json' \
-    "$(jq -r '.source_lock.path' "$ui_manifest")"
-  check_equal \
-    'UI manifest identifies the source lock' \
-    "$(jq -r '.source_lock.sha256' "$ui_manifest")" \
-    "$(file_sha256 "$source_lock")"
-  check_equal \
     'engine manifest identifies the Flutter fork commit' \
     "$(jq -r '.sources.flutter_fork_revision' "$manifest")" \
     "$(jq -r '.flutter.revision' "$source_lock")"
   check_equal \
     'engine manifest identifies the Skia fork commit' \
     "$(jq -r '.sources.skia_fork_revision' "$manifest")" \
-    "$(jq -r '.skia.revision' "$source_lock")"
-  check_equal \
-    'UI manifest identifies the Flutter fork commit' \
-    "$(jq -r '.sources.flutter_fork_revision' "$ui_manifest")" \
-    "$(jq -r '.flutter.revision' "$source_lock")"
-  check_equal \
-    'UI manifest identifies the Skia fork commit' \
-    "$(jq -r '.sources.skia_fork_revision' "$ui_manifest")" \
     "$(jq -r '.skia.revision' "$source_lock")"
   check_equal \
     'engine manifest identifies the Flutter fork repository' \
@@ -803,6 +790,18 @@ source_audit() {
     'engine manifest identifies the upstream Skia compatibility revision' \
     "$(jq -r '.sources.skia_revision' "$manifest")" \
     "$(jq -r '.skia.upstream_revision' "$source_lock")"
+  check_equal \
+    'UI manifest identifies the source lock' \
+    "$(jq -r '.source_lock.sha256' "$ui_manifest")" \
+    "$(file_sha256 "$source_lock")"
+  check_equal \
+    'UI manifest identifies the Flutter fork commit' \
+    "$(jq -r '.sources.flutter_fork_revision' "$ui_manifest")" \
+    "$(jq -r '.flutter.revision' "$source_lock")"
+  check_equal \
+    'UI manifest identifies the Skia fork commit' \
+    "$(jq -r '.sources.skia_fork_revision' "$ui_manifest")" \
+    "$(jq -r '.skia.revision' "$source_lock")"
   check_equal \
     'UI manifest identifies the upstream Flutter compatibility revision' \
     "$(jq -r '.sources.flutter_revision' "$ui_manifest")" \
@@ -970,6 +969,7 @@ source_audit() {
     "$ROOT/tools/test-denial-promotion-no-build" \
     "$ROOT/tools/test-denial-repository-generators" \
     "$ROOT/tools/test-denial-repository-setup" \
+    "$ROOT/tools/test-denial-session-launchers" \
     "$ROOT/tools/verify-denial-package-payload" \
     "$ROOT/tools/verify-denial-native-package-metadata" \
     "$ROOT/tools/verify-denial-published-apk-packages" \
@@ -1004,6 +1004,11 @@ source_audit() {
     pass 'native candidate metadata rejects executable and malformed input'
   else
     fail 'native candidate metadata parser test failed'
+  fi
+  if "$ROOT/tools/test-denial-session-launchers"; then
+    pass 'session launchers preserve SDDM greeter restart on startup failure and compositor exit'
+  else
+    fail 'session launcher exit handling failed'
   fi
 
   cargo_version="$(

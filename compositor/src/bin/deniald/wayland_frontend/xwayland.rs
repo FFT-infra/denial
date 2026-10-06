@@ -37,11 +37,16 @@ use super::window_management::{
     ManagedClientStateRequest, apply_managed_client_state_request, managed_client_grab_allowed,
 };
 #[cfg(feature = "flutter")]
-use super::window_management::{apply_managed_minimize, queue_restored_window_state};
+use super::window_management::{
+    apply_managed_minimize, queue_restored_window_state, queue_window_placement,
+};
 use super::{
     KeyboardFocusTarget, MoveSurfaceGrab, ResizeEdges, ResizeSurfaceGrab, WindowIdentity,
     centered_transient_geometry, clamp_window_geometry, constrain_dimension,
+    pointer_grab_drives_window,
 };
+#[cfg(feature = "flutter")]
+use super::{WindowPlacementChange, WindowPlacementPhase};
 
 const XWAYLAND_BASE_DPI: u32 = 96;
 const XWAYLAND_SCALE_MODE_ENV: &str = "DENIAL_XWAYLAND_SCALE_MODE";
@@ -1083,6 +1088,13 @@ impl XwmHandler for RuntimeState {
             .seat
             .get_pointer()
             .expect("seat has no pointer");
+        if pointer_grab_drives_window(&pointer, &element) {
+            debug!(
+                window = window.window_id(),
+                "ignored repeated X11 resize during an active grab"
+            );
+            return;
+        }
         let Some(start_data) = pointer.grab_start_data() else {
             debug!(
                 window = window.window_id(),
@@ -1095,6 +1107,14 @@ impl XwmHandler for RuntimeState {
             .as_ref()
             .expect("missing Wayland frontend")
             .window_geometry_target(&element);
+        #[cfg(feature = "flutter")]
+        queue_window_placement(
+            self,
+            &element,
+            geometry,
+            WindowPlacementPhase::Begin,
+            WindowPlacementChange::Resize,
+        );
         self.wayland
             .as_ref()
             .expect("missing Wayland frontend")
@@ -1111,6 +1131,7 @@ impl XwmHandler for RuntimeState {
             SERIAL_COUNTER.next_serial(),
             Focus::Clear,
         );
+        self.scene_sync.mark_dirty();
     }
 
     fn move_request(&mut self, _xwm: XwmId, window: X11Surface, _button: u32) {
@@ -1127,6 +1148,13 @@ impl XwmHandler for RuntimeState {
             .seat
             .get_pointer()
             .expect("seat has no pointer");
+        if pointer_grab_drives_window(&pointer, &element) {
+            debug!(
+                window = window.window_id(),
+                "ignored repeated X11 move during an active grab"
+            );
+            return;
+        }
         let Some(start_data) = pointer.grab_start_data() else {
             debug!(
                 window = window.window_id(),
@@ -1141,12 +1169,31 @@ impl XwmHandler for RuntimeState {
             .space
             .element_location(&element)
             .unwrap_or_default();
+        // Flutter follows a native move through a retained paint translation
+        // that is enabled only by this begin packet. Without it, every update
+        // during the grab stays invisible until the end packet commits.
+        #[cfg(feature = "flutter")]
+        {
+            let geometry = self
+                .wayland
+                .as_ref()
+                .expect("missing Wayland frontend")
+                .window_geometry_target(&element);
+            queue_window_placement(
+                self,
+                &element,
+                geometry,
+                WindowPlacementPhase::Begin,
+                WindowPlacementChange::Move,
+            );
+        }
         pointer.set_grab(
             self,
             MoveSurfaceGrab::new(start_data, element, initial_location),
             SERIAL_COUNTER.next_serial(),
             Focus::Clear,
         );
+        self.scene_sync.mark_dirty();
     }
 
     fn active_window_request(

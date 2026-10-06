@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 const PROTOCOL_VERSION: u32 = 1;
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(25);
-const MODE_SWITCH_TIMEOUT: Duration = Duration::from_secs(15);
+const MODE_SWITCH_TIMEOUT: Duration = Duration::from_secs(30);
 const POLL_INTERVAL: Duration = Duration::from_millis(75);
 const DENIAL_GIT_REMOTE: &str = "https://github.com/denialwm/denial.git";
 const UI_SOURCE_MARKER: &str = ".denial-ui-source.json";
@@ -135,6 +135,7 @@ enum Command {
     UiStatus,
     UiSetup(Option<PathBuf>),
     UiWorkspace(PathBuf),
+    UiActivate(PathBuf),
     UiLive(bool),
     UiAction {
         method: &'static str,
@@ -217,6 +218,7 @@ fn parse_command(arguments: Vec<OsString>) -> Result<Command, CliError> {
         ["ui"] | ["ui", "status"] => Ok(Command::UiStatus),
         ["ui", "setup"] => Ok(Command::UiSetup(None)),
         ["ui", "setup", _] => Ok(Command::UiSetup(Some(PathBuf::from(&arguments[2])))),
+        ["ui", "activate", _] => Ok(Command::UiActivate(PathBuf::from(&arguments[2]))),
         ["ui", "workspace", _] => Ok(Command::UiWorkspace(PathBuf::from(&arguments[2]))),
         ["ui", "live", value] | ["ui", "dev", value] => Ok(Command::UiLive(parse_switch(value)?)),
         ["ui", "auto-reload", value] => Ok(Command::UiAutoReload(parse_switch(value)?)),
@@ -238,7 +240,7 @@ fn parse_command(arguments: Vec<OsString>) -> Result<Command, CliError> {
         }),
         ["ui", "revert"] => Ok(Command::UiAction {
             method: "ui.revert",
-            expected_mode: None,
+            expected_mode: Some("custom_optimized"),
         }),
         ["ui", "vm-service"] | ["ui", "uri"] => Ok(Command::UiVmService),
         _ => Err(CliError::usage(format!(
@@ -289,6 +291,17 @@ fn execute(client: &mut ControlClient, options: &Options) -> Result<(), CliError
         }
         Command::UiSetup(destination) => {
             setup_ui_workspace(client, options, destination.as_deref())?;
+        }
+        Command::UiActivate(path) => {
+            let bundle = fs::canonicalize(path).map_err(CliError::io)?;
+            let response = client.request("ui.activate", json!({"path": bundle}))?;
+            let result = finish_ui_action(
+                client,
+                response,
+                options.wait.then_some("custom_optimized"),
+                options.json,
+            )?;
+            emit_ui_result(&result, options.json, true)?;
         }
         Command::UiWorkspace(path) => {
             let workspace = validate_workspace(path)?;
@@ -1490,6 +1503,7 @@ Commands:
   ui profile                     Activate the prepared AOT profile UI
   ui build                       Alias for 'ui profile'
   ui restore                     Restore the packaged optimized UI
+  ui activate BUNDLE             Activate a sealed release plugin composition
   ui revert                      Restore the last working custom UI
   ui auto-reload on|off          Configure native source watching
   ui vm-service                  Print the authenticated loopback VM-service URI

@@ -1023,12 +1023,12 @@ fn wait_for_success(
     lock_unpoisoned(&query.state).success
 }
 
-fn read_pulse_level(api: &PulseApi, connection: &PulseConnection) -> Option<f64> {
+fn read_pulse_state(api: &PulseApi, connection: &PulseConnection) -> Option<(f64, bool)> {
     let sink = query_default_sink(api, connection)?;
     let state = query_sink(api, connection, &sink)?;
     // SAFETY: state.volume is a complete pa_cvolume copied from libpulse.
     let current = unsafe { (api.cvolume_avg)(&state.volume) } as f64 / 65_536.0;
-    Some(current.clamp(0.0, 1.0))
+    Some((current.clamp(0.0, 1.0), state.muted))
 }
 
 fn set_pulse_level(api: &PulseApi, connection: &PulseConnection, target: f64) -> Option<f64> {
@@ -1315,6 +1315,7 @@ pub(super) fn run_audio_worker(
     'worker: while let Ok(first) = commands.recv() {
         let mut level = None;
         let mut delta = 0.0;
+        let mut adjusted = false;
         let mut toggle_mute = false;
         let mut state_requested = false;
         let mut request_serial = 0;
@@ -1332,10 +1333,12 @@ pub(super) fn run_audio_worker(
                 } => {
                     level = Some(next.clamp(0.0, 1.0));
                     delta = 0.0;
+                    adjusted = false;
                     request_serial = serial;
                     state_requested = true;
                 }
                 AudioCommand::Adjust(next) => {
+                    adjusted = true;
                     if let Some(current) = level.as_mut() {
                         *current = (*current + next).clamp(0.0, MAX_AUDIO_LEVEL);
                     } else {
@@ -1412,9 +1415,11 @@ pub(super) fn run_audio_worker(
             operation_failed |= set_pulse_output_device(&api, active, &name).is_none();
         }
         if !operation_failed && state_requested {
-            if let Some(level) = read_pulse_level(&api, active) {
+            if let Some((level, muted)) = read_pulse_state(&api, active) {
                 let _ = events.try_send(SystemControlEvent::AudioLevel {
                     level,
+                    muted,
+                    limit_reached: adjusted && (level <= 0.0 || level >= 1.0),
                     request_serial,
                 });
             } else {

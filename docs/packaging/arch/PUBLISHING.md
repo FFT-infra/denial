@@ -7,9 +7,11 @@
 > candidate when the ephemeral runner is armed. Only after that candidate is
 > green is a version chosen; the clean signed tag promotes its exact compiled
 > payloads through the separate hosted release, signing, verification, and
-> Pages path without rebuilding them. Denial 0.2.0 extends that path with the
-> optional, version-coupled `denial-ui-development` package. Stage 2 and Stage
-> 3 remain later hardening work rather than prerequisites for an honest alpha.
+> Pages path without rebuilding them. Flutter 3.47.5 release, debug, and profile
+> engines have been refreshed. `denial-ui-development` publication remains
+> paused pending complete package and editor validation for this generation.
+> Stage 2 and Stage 3 remain later hardening work
+> rather than prerequisites for an honest alpha.
 
 This document defines both the intended production packaging model for Denial
 and the gates used to reach it. It supersedes the earlier monolithic
@@ -22,18 +24,20 @@ public beta discloses that its owner-operated builder is not independently
 reproducible. Later stages progressively close and reproduce every build
 input.
 
-The long-term package model has four roles:
+The long-term package model has five roles:
 
 ```text
 denial-flutter-toolchain ──builds──▶ denial ──requires──▶ denial-flutter-engine
                                          ▲                     ▲
                                          │                     │ same ABI
 denial-ui-development (optional) ─requires┘─────────────────────┘
+denial-plugin-manager (optional) ─requires┘
 ```
 
 Compilation happens in package builders, never during `pacman -S`, an install
 hook, or first launch. The public beta uses the validated two-package runtime
-split, `denial-flutter-engine` plus `denial`, and publishes
+split, `denial-flutter-engine` plus `denial`. It publishes the version-matched
+`denial-plugin-manager` separately for plugin development and installation, and
 `denial-ui-development` separately for users who want live Flutter shell
 editing. The build-only `denial-flutter-toolchain` arrives in Stage 2.
 
@@ -85,10 +89,11 @@ The initial public repository deliberately makes a smaller, testable promise:
 - the tag workflow does no compilation and proves that promoted compiled
   payloads are byte-identical to that candidate;
 - exactly one compatible `denial` and `denial-flutter-engine` pair, plus the
-  optional version-matched `denial-ui-development` package when present in the
-  release contract, is produced as Arch packages; the same exact runtime and
-  engine payloads are also wrapped as one Debian-family pair and one Fedora
-  pair and handed to a separate GitHub-hosted signing job;
+  version-matched optional `denial-plugin-manager` and
+  `denial-ui-development` packages when present in the release contract, is
+  produced as Arch packages; the runtime, engine, and Plugin Manager payloads
+  are also wrapped for Debian and Fedora and handed to a separate
+  GitHub-hosted signing job;
 - packages, direct-download signatures, Pacman databases, and the complete
   checksum manifest are signed;
 - the signed repository is re-verified without a secret key before one Pages
@@ -253,25 +258,25 @@ Denial uses a named Flutter generation rather than treating
 compatibility capability is:
 
 ```text
-3.44.7.denial1
+3.47.5.denial1
 ```
 
 Its human-readable generation identifier is:
 
 ```text
-flutter-3.44.7-engine-69c8c617-denial-r1
+flutter-3.47.5-engine-af7e796e-denial-r1
 ```
 
 The first generation records at least:
 
 ```text
-Flutter version:             3.44.7
-Flutter source revision:     84fc5cbb223bc12f83d65b647ff8a56caf779ffd
-Engine artifact revision:    69c8c61792f04cc809dfef0c910414fb9afc06cd
-Dart source revision:        d684a576a6aa954ae107a03b2b4e1d61c3bebe93
-Skia upstream revision:      e9ed4fc9f1544c58d8a9347c1fc9471d8dd7c465
-Flutter fork revision:       549b7ddb87c836612a909cff7c413c9097c34577
-Skia fork revision:          0ee042f542b3e79f5ac49115387718c6bb3d7d34
+Flutter version:             3.47.5
+Flutter source revision:     6a19cca56475dbfba1478ee68d7bd0c2ef891da1
+Engine artifact revision:    af7e796e161ae0bb1ff0758c71a7105418bd9ded
+Dart source revision:        b530c21f7de367b94fb04787bfed9d8e989d75e8
+Skia upstream revision:      8df24be66531469e576a806749a0202ae26b8d08
+Flutter fork revision:       718ccf2c2314f6cac9808e5eb37d0117407eb4e4
+Skia fork revision:          5b495e3e15a59ee76af882d83316d351654c1e88
 Fork source lock:             prebuilt/flutter-engine/SOURCE_LOCK.json
 Embedder header checksum:    recorded in compositor/flutter-engine/src/sys.rs
 ```
@@ -290,7 +295,7 @@ the versioned virtual capability separately:
 ```bash
 pkgver="${DENIAL_PACKAGE_VERSION}"
 epoch=1
-_flutter_generation=3.44.7.denial1
+_flutter_generation=3.47.5.denial1
 
 provides=("denial-flutter-engine-abi=${_flutter_generation}")
 ```
@@ -304,7 +309,7 @@ provides=("denial-flutter-aot-generation=${_flutter_generation}")
 The Denial package declares:
 
 ```bash
-_flutter_generation=3.44.7.denial1
+_flutter_generation=3.47.5.denial1
 
 depends+=(
   denial-flutter-engine
@@ -352,7 +357,7 @@ Flutter and Denial deliberately have separate cadences.
 Routine development looks like:
 
 ```text
-Flutter generation 3.44.7.denial1
+Flutter generation 3.47.5.denial1
 ├── Denial 0.1.0
 ├── Denial 0.2.0
 ├── Denial 0.3.0
@@ -398,9 +403,9 @@ sources of truth. The exact release inputs are the immutable commits in
 `prebuilt/flutter-engine/SOURCE_LOCK.json`:
 
 - Flutter: [`denialwm/flutter`](https://github.com/denialwm/flutter),
-  branch `denial/3.44.7-r1`, exact commit in `.flutter.revision`;
+  branch `denial/3.47.5-r1`, exact commit in `.flutter.revision`;
 - Skia: [`denialwm/skia`](https://github.com/denialwm/skia),
-  branch `denial/3.44.7-r1`, exact commit in `.skia.revision`.
+  branch `denial/3.47.5-r1`, exact commit in `.skia.revision`.
 
 The engine portions of these histories were independently verified on
 2026-07-25; the three Flutter framework/tool commits were migrated and tested
@@ -408,7 +413,7 @@ on 2026-07-29. The branches are movable review references. Build and release
 inputs use the immutable commit IDs in the lock, never an unpinned branch name.
 
 The
-[engine validation report](../../flutter-engine/3.44.7/VALIDATION.md)
+[engine validation report](../../flutter-engine/3.47.5/VALIDATION.md)
 records the historical reconstruction, exact fork-tree comparison,
 x86_64 source build, artifact comparison, and engine unit-test results.
 
@@ -431,8 +436,8 @@ immutable Flutter commit                 immutable Skia commit
 The branches start at their exact upstream revisions:
 
 ```text
-flutter/flutter @ 84fc5cbb223bc12f83d65b647ff8a56caf779ffd
-└── denial/3.44.7-r1
+flutter/flutter @ 6a19cca56475dbfba1478ee68d7bd0c2ef891da1
+└── denial/3.47.5-r1
     ├── Query embedder FBO capabilities
     ├── Enable stencil for GL surfaces
     ├── Wrap texture-backed FBOs for GLES DMSAA loads
@@ -448,8 +453,8 @@ flutter/flutter @ 84fc5cbb223bc12f83d65b647ff8a56caf779ffd
     ├── Allow explicit attach for raw embedder projects
     └── Keep Denial attach sessions non-pausing
 
-google/skia @ e9ed4fc9f1544c58d8a9347c1fc9471d8dd7c465
-└── denial/3.44.7-r1
+google/skia @ 8df24be66531469e576a806749a0202ae26b8d08
+└── denial/3.47.5-r1
     ├── Fix DMSAA lifetime and stencil continuity on wrapped GL FBOs
     └── Use highp coordinates for partial DMSAA loads
 ```
@@ -492,7 +497,7 @@ For an upgrade, rebase the logical commits and review semantic drift with
 
 ```sh
 git range-diff \
-  old-upstream..denial/3.44.7 \
+  old-upstream..denial/3.47.5-r1 \
   new-upstream..denial/3.45.x
 ```
 
@@ -532,14 +537,14 @@ dependency or be built from redistributable source.
 A suggested release layout is:
 
 ```text
-denial-flutter-source-3.44.7.denial1.tar.zst
-denial-flutter-source-3.44.7.denial1.tar.zst.sig
-denial-flutter-tools-3.44.7.denial1-x86_64.tar.zst
-denial-flutter-tools-3.44.7.denial1-x86_64.tar.zst.sig
-denial-flutter-tools-3.44.7.denial1-aarch64.tar.zst
-denial-flutter-tools-3.44.7.denial1-aarch64.tar.zst.sig
-denial-flutter-3.44.7.denial1-manifest.json
-denial-flutter-3.44.7.denial1-manifest.json.sig
+denial-flutter-source-3.47.5.denial1.tar.zst
+denial-flutter-source-3.47.5.denial1.tar.zst.sig
+denial-flutter-tools-3.47.5.denial1-x86_64.tar.zst
+denial-flutter-tools-3.47.5.denial1-x86_64.tar.zst.sig
+denial-flutter-tools-3.47.5.denial1-aarch64.tar.zst
+denial-flutter-tools-3.47.5.denial1-aarch64.tar.zst.sig
+denial-flutter-3.47.5.denial1-manifest.json
+denial-flutter-3.47.5.denial1-manifest.json.sig
 ```
 
 The source PKGBUILD declares the common closure in `source=()` and the tool
@@ -604,7 +609,7 @@ pkgname=(
   denial-flutter-engine
   denial-flutter-toolchain
 )
-pkgver=3.44.7.denial1
+pkgver=3.47.5.denial1
 pkgrel=1
 arch=(x86_64 aarch64)
 
@@ -684,7 +689,7 @@ pkgver="${DENIAL_PACKAGE_VERSION:?verified tag version is required}"
 pkgrel=1
 arch=(x86_64 aarch64)
 
-_flutter_generation=3.44.7.denial1
+_flutter_generation=3.47.5.denial1
 
 depends=(
   denial-flutter-engine
@@ -1248,7 +1253,7 @@ all 3,893 engine actions, matched the former bootstrap engine's complete
 dynamic export and ELF section tables, passed all 642 tests in the three
 complete engine suites, and ran cleanly in Denial on dual-output x86_64 GPU
 hardware. The
-[validation report](../../flutter-engine/3.44.7/VALIDATION.md) records the
+[validation report](../../flutter-engine/3.47.5/VALIDATION.md) records the
 evidence and explains the source-built library's 29 differing bytes.
 The [package validation report](VALIDATION.md) records the two-package build,
 exact generation dependency, artifact identity, Pacman install/upgrade/remove

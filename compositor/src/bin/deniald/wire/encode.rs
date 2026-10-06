@@ -125,16 +125,51 @@ impl WireBridge {
             })
             .collect::<Vec<_>>();
         validate_windows(&windows)?;
+        // Metadata invalidation is conservative (e.g. surface-tree commits).
+        // Do not wake Dart for a snapshot that is byte-for-byte equivalent in
+        // meaning. Texture generations travel independently of this stream.
+        if self.windows_revision.is_some()
+            && self.windows == windows
+            && self.restored_window_ids == next_restored_window_ids
+        {
+            self.windows_revision = Some(revision);
+            return Ok((None, windows));
+        }
+        let delta = self.window_deltas && self.windows_revision.is_some();
         std::mem::swap(&mut self.windows, &mut windows);
         self.windows_revision = Some(revision);
-        self.restored_window_ids = next_restored_window_ids;
+        let previous_restored =
+            std::mem::replace(&mut self.restored_window_ids, next_restored_window_ids);
         let sequence = self.take_sequence();
         self.outbound_builder.reset();
+        let previous = windows
+            .iter()
+            .map(|window| (window.window_id, window))
+            .collect::<BTreeMap<_, _>>();
+        let changed = self
+            .windows
+            .iter()
+            .filter(|window| {
+                !delta
+                    || previous
+                        .get(&window.window_id)
+                        .is_none_or(|old| *old != *window)
+                    || previous_restored.contains(&window.window_id)
+                        != self.restored_window_ids.contains(&window.window_id)
+            })
+            .collect::<Vec<_>>();
+        let order = delta.then(|| {
+            self.windows
+                .iter()
+                .map(|window| window.window_id)
+                .collect::<Vec<_>>()
+        });
         encode_windows_update(
             &mut self.outbound_builder,
             sequence,
-            &self.windows,
+            &changed,
             &self.restored_window_ids,
+            order.as_deref(),
         )?;
         Ok((Some(self.outbound_builder.finished_data()), windows))
     }
@@ -480,12 +515,45 @@ impl WireBridge {
         Ok(self.outbound_builder.finished_data())
     }
 
+    pub fn encode_plugin_action(
+        &mut self,
+        generation: u64,
+        id: &str,
+        monitor: Option<i64>,
+    ) -> Result<&[u8], WireError> {
+        let sequence = self.take_sequence();
+        self.outbound_builder.reset();
+        let builder = &mut self.outbound_builder;
+        let id = builder.create_string(id);
+        let action = fb::PluginActionInvocation::create(
+            builder,
+            &fb::PluginActionInvocationArgs {
+                generation,
+                id: Some(id),
+                monitor_id: monitor.unwrap_or(-1),
+            },
+        );
+        let envelope = fb::Envelope::create(
+            builder,
+            &fb::EnvelopeArgs {
+                protocol_version: PROTOCOL_VERSION,
+                sequence,
+                request_id: 0,
+                payload_type: fb::Payload::PluginActionInvocation,
+                payload: Some(action.as_union_value()),
+            },
+        );
+        fb::finish_envelope_buffer(builder, envelope);
+        Ok(builder.finished_data())
+    }
+
     pub fn encode_shortcut_configuration_response(
         &mut self,
         request_id: u64,
         revision: u64,
         shortcuts: &[ShortcutBinding],
         supported_inputs: &[ShortcutInputDefinition],
+        plugin_actions: &crate::plugin_actions::ActionCatalog,
         error: Option<&str>,
     ) -> Result<&[u8], WireError> {
         if request_id == 0 || revision == 0 || shortcuts.len() > MAX_SHORTCUTS {
@@ -508,7 +576,7 @@ impl WireBridge {
             None,
             &[],
             0,
-            Some((shortcuts, supported_inputs)),
+            Some((shortcuts, supported_inputs, plugin_actions)),
             None,
             error,
         )?;
@@ -546,13 +614,15 @@ impl WireBridge {
 
 fn create_window_snapshot<'a>(
     builder: &mut FlatBufferBuilder<'a>,
-    descriptions: &[WindowDescription],
+    descriptions: &[&WindowDescription],
     restored_window_ids: &[u64],
+    window_order: Option<&[u64]>,
 ) -> WIPOffset<fb::WindowSnapshot<'a>> {
     let mut windows = Vec::with_capacity(descriptions.len());
     for description in descriptions {
         let mut surface_layers = Vec::with_capacity(description.surfaces.len());
         for surface in &description.surfaces {
+            let window_geometry = wire_window_geometry(surface);
             surface_layers.push(fb::SurfaceLayer::create(
                 builder,
                 &fb::SurfaceLayerArgs {
@@ -576,6 +646,7 @@ fn create_window_snapshot<'a>(
                     composition_order: surface.composition_order,
                     opacity: surface.opacity,
                     opaque: surface.opaque,
+                    window_geometry: window_geometry.as_ref(),
                 },
             ));
         }
@@ -631,11 +702,14 @@ fn create_window_snapshot<'a>(
     }
     let windows = builder.create_vector(&windows);
     let restored_window_ids = builder.create_vector(restored_window_ids);
+    let order = window_order.map(|order| builder.create_vector(order));
     fb::WindowSnapshot::create(
         builder,
         &fb::WindowSnapshotArgs {
             windows: Some(windows),
             restored_window_ids: Some(restored_window_ids),
+            delta: window_order.is_some(),
+            window_order: order,
         },
     )
 }
@@ -647,7 +721,8 @@ pub(super) fn encode_windows_response(
     descriptions: &[WindowDescription],
     restored_window_ids: &[u64],
 ) -> Result<(), WireError> {
-    let snapshot = create_window_snapshot(builder, descriptions, restored_window_ids);
+    let descriptions = descriptions.iter().collect::<Vec<_>>();
+    let snapshot = create_window_snapshot(builder, &descriptions, restored_window_ids, None);
     let response = fb::WindowResponse::create(
         builder,
         &fb::WindowResponseArgs {
@@ -663,10 +738,11 @@ pub(super) fn encode_windows_response(
 fn encode_windows_update(
     builder: &mut FlatBufferBuilder<'_>,
     sequence: u64,
-    descriptions: &[WindowDescription],
+    descriptions: &[&WindowDescription],
     restored_window_ids: &[u64],
+    window_order: Option<&[u64]>,
 ) -> Result<(), WireError> {
-    let snapshot = create_window_snapshot(builder, descriptions, restored_window_ids);
+    let snapshot = create_window_snapshot(builder, descriptions, restored_window_ids, window_order);
     let envelope = fb::Envelope::create(
         builder,
         &fb::EnvelopeArgs {
@@ -813,9 +889,25 @@ pub(super) fn validate_cursor_state_payload(
         }
     }
 
-    let mut identities = HashSet::with_capacity(state.surfaces.len());
+    if (!state.drag_active && !state.drag_surfaces.is_empty())
+        || state.drag_surfaces.len() > MAX_SURFACES
+        || state.drag_surfaces.iter().any(|drag| {
+            state
+                .surfaces
+                .iter()
+                .any(|cursor| cursor.surface_id == drag.surface_id)
+        })
+    {
+        return Err(WireError::Payload);
+    }
+    validate_cursor_surface_tree(&state.surfaces)?;
+    validate_cursor_surface_tree(&state.drag_surfaces)
+}
+
+fn validate_cursor_surface_tree(surfaces: &[SurfaceLayerDescription]) -> Result<(), WireError> {
+    let mut identities = HashSet::with_capacity(surfaces.len());
     let mut previous_order = None;
-    for (index, surface) in state.surfaces.iter().enumerate() {
+    for (index, surface) in surfaces.iter().enumerate() {
         if surface.surface_id == 0
             || !identities.insert(surface.surface_id)
             || surface.transform > 7
@@ -862,10 +954,17 @@ pub(super) fn validate_cursor_state_payload(
     Ok(())
 }
 
+fn wire_window_geometry(surface: &SurfaceLayerDescription) -> Option<fb::WireRect> {
+    surface
+        .window_geometry
+        .map(|geometry| fb::WireRect::new(geometry.x, geometry.y, geometry.width, geometry.height))
+}
+
 fn create_surface_layer<'a>(
     builder: &mut FlatBufferBuilder<'a>,
     surface: &SurfaceLayerDescription,
 ) -> WIPOffset<fb::SurfaceLayer<'a>> {
+    let window_geometry = wire_window_geometry(surface);
     fb::SurfaceLayer::create(
         builder,
         &fb::SurfaceLayerArgs {
@@ -889,6 +988,7 @@ fn create_surface_layer<'a>(
             composition_order: surface.composition_order,
             opacity: surface.opacity,
             opaque: surface.opaque,
+            window_geometry: window_geometry.as_ref(),
         },
     )
 }
@@ -905,6 +1005,12 @@ fn encode_cursor_state(
         .map(|surface| create_surface_layer(builder, surface))
         .collect::<Vec<_>>();
     let surfaces = builder.create_vector(&surfaces);
+    let drag_surfaces = state
+        .drag_surfaces
+        .iter()
+        .map(|surface| create_surface_layer(builder, surface))
+        .collect::<Vec<_>>();
+    let drag_surfaces = builder.create_vector(&drag_surfaces);
     let hotspot = fb::WirePoint::new(state.hotspot_x, state.hotspot_y);
     let cursor = fb::CursorState::create(
         builder,
@@ -918,6 +1024,8 @@ fn encode_cursor_state(
             shape,
             hotspot: Some(&hotspot),
             surfaces: Some(surfaces),
+            drag_active: state.drag_active,
+            drag_surfaces: Some(drag_surfaces),
         },
     );
     let envelope = fb::Envelope::create(
@@ -1001,7 +1109,11 @@ fn encode_settings_response(
     keyboard: Option<&KeyboardSettings>,
     display_names: &[String],
     active_layout: usize,
-    shortcut_configuration: Option<(&[ShortcutBinding], &[ShortcutInputDefinition])>,
+    shortcut_configuration: Option<(
+        &[ShortcutBinding],
+        &[ShortcutInputDefinition],
+        &crate::plugin_actions::ActionCatalog,
+    )>,
     shortcut_validation: Option<&ShortcutValidation>,
     error: Option<&str>,
 ) -> Result<(), WireError> {
@@ -1040,13 +1152,17 @@ fn encode_settings_response(
             },
         )
     });
-    let shortcuts = shortcut_configuration.map(|(bindings, inputs)| {
+    let shortcuts = shortcut_configuration.map(|(bindings, inputs, plugin_actions)| {
         let bindings = bindings
             .iter()
             .map(|binding| encode_shortcut_binding(builder, binding))
             .collect::<Vec<_>>();
         let bindings = builder.create_vector(&bindings);
-        let actions = ShortcutAction::ALL.map(shortcut_action_to_wire);
+        let actions = ShortcutAction::ALL
+            .into_iter()
+            .filter(|a| *a != ShortcutAction::OpenApplications)
+            .map(shortcut_action_to_wire)
+            .collect::<Vec<_>>();
         let actions = builder.create_vector(&actions);
         let inputs = inputs
             .iter()
@@ -1070,12 +1186,17 @@ fn encode_settings_response(
             })
             .collect::<Vec<_>>();
         let inputs = builder.create_vector(&inputs);
+        let plugin_actions_json = builder.create_string(
+            &serde_json::to_string(&plugin_actions.actions).expect("action descriptors"),
+        );
         fb::ShortcutConfiguration::create(
             builder,
             &fb::ShortcutConfigurationArgs {
                 shortcuts: Some(bindings),
                 supported_actions: Some(actions),
                 supported_inputs: Some(inputs),
+                plugin_actions_json: Some(plugin_actions_json),
+                action_generation: plugin_actions.generation,
             },
         )
     });
@@ -1147,6 +1268,17 @@ fn encode_shortcut_binding<'a>(
 ) -> WIPOffset<fb::ShortcutBinding<'a>> {
     let shortcut = builder.create_string(&binding.shortcut);
     let (target_type, target) = match &binding.target {
+        ShortcutTarget::PluginAction { id } => {
+            let id = builder.create_string(id);
+            let target = fb::ShortcutPluginActionTarget::create(
+                builder,
+                &fb::ShortcutPluginActionTargetArgs { id: Some(id) },
+            );
+            (
+                fb::ShortcutTarget::ShortcutPluginActionTarget,
+                target.as_union_value(),
+            )
+        }
         ShortcutTarget::DenialAction { action } => {
             let target = fb::ShortcutDenialActionTarget::create(
                 builder,
@@ -1214,6 +1346,11 @@ fn shortcut_action_to_wire(action: ShortcutAction) -> fb::ShortcutActionKind {
         ShortcutAction::OpenDashboard => fb::ShortcutActionKind::OpenDashboard,
         ShortcutAction::OpenOverview => fb::ShortcutActionKind::OpenOverview,
         ShortcutAction::ToggleVerticalMaximize => fb::ShortcutActionKind::ToggleVerticalMaximize,
+        ShortcutAction::ResizeGrowWidth => fb::ShortcutActionKind::ResizeGrowWidth,
+        ShortcutAction::ResizeShrinkWidth => fb::ShortcutActionKind::ResizeShrinkWidth,
+        ShortcutAction::ResizeGrowHeight => fb::ShortcutActionKind::ResizeGrowHeight,
+        ShortcutAction::ResizeShrinkHeight => fb::ShortcutActionKind::ResizeShrinkHeight,
+        ShortcutAction::ResetWindowHeight => fb::ShortcutActionKind::ResetWindowHeight,
         ShortcutAction::WindowSwitcher => fb::ShortcutActionKind::WindowSwitcher,
         ShortcutAction::OpenClipboard => fb::ShortcutActionKind::OpenClipboard,
         ShortcutAction::CaptureRegion => fb::ShortcutActionKind::CaptureRegion,

@@ -1,0 +1,22 @@
+name: denial_clock
+description: An independently selectable desktop clock.
+publish_to: none
+version: 0.0.0
+environment:
+  sdk: ^3.13.0
+  flutter: 3.47.5
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_riverpod: ^3.3.2
+  denial_sdk:
+    path: ../../packages/denial_sdk
+  denial_flutter_sdk:
+    path: ../../packages/denial_flutter_sdk
+  denial_clock_ui:
+    path: ui
+denial_plugin:
+  schema: 1
+  name: Desktop Clock
+  provides:
+    - contract: package:denial_flutter_sdk/surfaces.dart#ShellSurface

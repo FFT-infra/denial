@@ -6,6 +6,9 @@ use std::io::{Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
+
+use super::plugin_bundle::{self, PluginSelection};
 
 use serde::{Deserialize, Serialize};
 
@@ -75,6 +78,7 @@ pub(super) enum CommandKind {
     RestoreOfficial,
     RevertLastWorking,
     SetAutoReload,
+    ActivatePluginBundle,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -95,7 +99,11 @@ impl UiDevelopmentCommand {
         if request_id == 0 {
             return Err(protocol_error("request id must be non-zero"));
         }
-        if matches!(kind, CommandKind::SetWorkspace) != workspace.is_some() {
+        if matches!(
+            kind,
+            CommandKind::SetWorkspace | CommandKind::ActivatePluginBundle
+        ) != workspace.is_some()
+        {
             return Err(protocol_error(
                 "workspace is only valid for the set-workspace command",
             ));
@@ -216,6 +224,29 @@ struct UiDevelopmentDiagnostic {
     column: u32,
 }
 
+/// The last confirmed plugin composition was built for another installed
+/// Denial. It is intact intent, not a failure: the manager rebuilds it.
+#[derive(Clone, Debug, Serialize)]
+pub(super) struct PluginRebuild {
+    reason: plugin_bundle::UpdateReason,
+    bundle: PathBuf,
+    version: String,
+    /// The identity a rebuilt composition must carry; absent for a
+    /// development bundle without a source marker.
+    installed_source: Option<serde_json::Value>,
+}
+
+/// Facts that decide whether replacing the shell would interrupt the user.
+/// Only control replies carry them; the shell's own state packet does not.
+#[derive(Clone, Copy, Debug, Serialize)]
+pub(super) struct SessionActivity {
+    pub(super) locked: bool,
+    pub(super) input_idle_ms: u64,
+    pub(super) shell_captures_keyboard: bool,
+    /// A visible application, such as a video player, asked not to idle.
+    pub(super) idle_inhibited: bool,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct UiDevelopmentState {
     active_mode: UiRuntimeMode,
@@ -238,11 +269,22 @@ pub(super) struct UiDevelopmentState {
     error: String,
     diagnostics: Vec<UiDevelopmentDiagnostic>,
     progress_basis_points: Option<u16>,
+    plugin_bundle: Option<PathBuf>,
+    plugin_healthy: bool,
+    plugin_rebuild: Option<PluginRebuild>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_activity: Option<SessionActivity>,
+    capabilities: Vec<&'static str>,
 }
 
 impl UiDevelopmentState {
     pub(super) fn error_message(&self) -> Option<&str> {
         (!self.error.is_empty()).then_some(&self.error)
+    }
+
+    pub(super) fn with_session_activity(mut self, activity: SessionActivity) -> Self {
+        self.session_activity = Some(activity);
+        self
     }
 }
 
@@ -377,6 +419,9 @@ pub(super) struct UiDevelopmentController {
     config_path: Option<PathBuf>,
     vm_service_path: Option<PathBuf>,
     state: UiDevelopmentState,
+    plugins: PluginSelection,
+    release_bundle: Option<PathBuf>,
+    plugin_start: Option<Instant>,
 }
 
 impl UiDevelopmentController {
@@ -432,15 +477,68 @@ impl UiDevelopmentController {
         } else {
             "Live development needs a configured JIT Flutter bundle.".to_owned()
         };
+        let plugin_path = config_path
+            .as_ref()
+            .and_then(|p| p.parent())
+            .map(|p| p.join("plugin-composition.json"));
+        let mut plugin_error = String::new();
+        let mut plugin_rebuild = None;
+        let mut plugins = PluginSelection::open(plugin_path).unwrap_or_else(|error| {
+            plugin_error = error;
+            PluginSelection::empty()
+        });
+        // Only a confirmed selection reaches this point: an interrupted start
+        // was already demoted by `open` and is never classified as an update.
+        let release_bundle = plugins
+            .selected()
+            .map(Path::to_owned)
+            .and_then(|candidate| {
+                let validated = plugin_bundle::validate_bundle(&candidate, official_bundle)
+                    .and_then(|bundle| {
+                        plugins.begin(&bundle, true)?;
+                        Ok(bundle)
+                    });
+                match validated {
+                    Ok(bundle) => Some(bundle),
+                    Err(plugin_bundle::Rejection {
+                        update: Some(reason),
+                        ..
+                    }) => {
+                        plugin_rebuild = Some(PluginRebuild {
+                            reason,
+                            bundle: candidate,
+                            version: denial_core::version().to_owned(),
+                            installed_source: plugin_bundle::installed_source_identity(
+                                official_bundle,
+                            )
+                            .ok()
+                            .flatten(),
+                        });
+                        None
+                    }
+                    Err(rejection) => {
+                        plugin_error = rejection.message;
+                        None
+                    }
+                }
+            });
+        let desired_mode = if release_bundle.is_some() {
+            UiRuntimeMode::CustomOptimized
+        } else {
+            UiRuntimeMode::OfficialOptimized
+        };
         Self {
             official_bundle: official_bundle.to_owned(),
             debug_bundle,
             custom_bundle,
             config_path,
             vm_service_path,
+            plugins,
+            release_bundle,
+            plugin_start: None,
             state: UiDevelopmentState {
                 active_mode: UiRuntimeMode::OfficialOptimized,
-                desired_mode: UiRuntimeMode::OfficialOptimized,
+                desired_mode,
                 operation: UiDevelopmentOperation::Idle,
                 developer_components_available,
                 workspace_valid,
@@ -456,11 +554,45 @@ impl UiDevelopmentController {
                 acknowledged_request_id: 0,
                 workspace: workspace_string,
                 status,
-                error: String::new(),
+                error: plugin_error,
                 diagnostics: Vec::new(),
                 progress_basis_points: None,
+                plugin_bundle: None,
+                plugin_healthy: false,
+                plugin_rebuild,
+                session_activity: None,
+                capabilities: vec!["pluginActionsV1"],
             },
         }
+    }
+
+    pub(super) fn plugin_rebuild_needed(&self) -> bool {
+        self.state.plugin_rebuild.is_some()
+    }
+
+    pub(super) fn handle_external_command(
+        &mut self,
+        command: UiDevelopmentCommand,
+    ) -> (UiDevelopmentEffect, UiDevelopmentState) {
+        if self.state.operation == UiDevelopmentOperation::SwitchingRuntime
+            && matches!(
+                command.kind,
+                CommandKind::ActivatePluginBundle
+                    | CommandKind::RevertLastWorking
+                    | CommandKind::BuildAndActivateOptimized
+                    | CommandKind::EnableLiveDevelopment
+            )
+        {
+            // Reject just this caller. A competing request must not poison the
+            // first caller's health status or replace its pending selection.
+            let mut reply = self.state_snapshot();
+            reply.acknowledged_request_id = command.request_id;
+            reply.error =
+                "A UI runtime transition is already in progress; wait for it to finish.".into();
+            return (UiDevelopmentEffect::None, reply);
+        }
+        let effect = self.handle_command(command);
+        (effect, self.state_snapshot())
     }
 
     pub(super) fn handle_command(&mut self, command: UiDevelopmentCommand) -> UiDevelopmentEffect {
@@ -509,9 +641,22 @@ impl UiDevelopmentController {
                 }
                 UiDevelopmentEffect::None
             }
+            CommandKind::ActivatePluginBundle => {
+                self.activate_plugin(command.workspace.expect("validated bundle path"))
+            }
             CommandKind::EnableLiveDevelopment => self.request_mode(UiRuntimeMode::LiveDevelopment),
             CommandKind::DisableLiveDevelopment | CommandKind::RestoreOfficial => {
-                self.request_mode(UiRuntimeMode::OfficialOptimized)
+                if let Err(error) = self.plugins.restore() {
+                    self.reject(error);
+                    UiDevelopmentEffect::None
+                } else {
+                    self.release_bundle = None;
+                    self.plugin_start = None;
+                    // Choosing the packaged shell supersedes the composition
+                    // that was waiting for a rebuild.
+                    self.state.plugin_rebuild = None;
+                    self.request_mode(UiRuntimeMode::OfficialOptimized)
+                }
             }
             CommandKind::HotRestart => {
                 self.reject(
@@ -536,7 +681,11 @@ impl UiDevelopmentController {
                     .ok_or_else(|| "No AOT profile Flutter bundle is configured.".to_owned())
                     .and_then(|bundle| validate_profile_bundle(bundle, expected_workspace));
                 match validation {
-                    Ok(()) => self.request_mode(UiRuntimeMode::CustomOptimized),
+                    Ok(()) => {
+                        self.release_bundle = None;
+                        self.state.operation = UiDevelopmentOperation::SwitchingRuntime;
+                        self.request_mode(UiRuntimeMode::CustomOptimized)
+                    }
                     Err(error) => {
                         self.state.can_build_optimized = false;
                         self.reject(error);
@@ -545,12 +694,77 @@ impl UiDevelopmentController {
                 }
             }
             CommandKind::RevertLastWorking => {
-                self.reject("There is no previous custom optimized UI to restore.");
-                UiDevelopmentEffect::None
+                if let Some(previous) = self.plugins.previous().map(Path::to_owned) {
+                    self.activate_plugin(previous)
+                } else {
+                    self.reject("There is no previous custom optimized UI to restore.");
+                    UiDevelopmentEffect::None
+                }
             }
         };
         self.bump_revision();
         effect
+    }
+
+    fn activate_plugin(&mut self, candidate: PathBuf) -> UiDevelopmentEffect {
+        match plugin_bundle::validate(&candidate, &self.official_bundle).and_then(|bundle| {
+            self.plugins.begin(&bundle, false)?;
+            Ok(bundle)
+        }) {
+            Ok(bundle) => {
+                self.release_bundle = Some(bundle);
+                self.plugin_start = None;
+                self.state.operation = UiDevelopmentOperation::SwitchingRuntime;
+                self.state.status = "Starting the compiled plugin composition…".into();
+                self.state.desired_mode = UiRuntimeMode::CustomOptimized;
+                UiDevelopmentEffect::Reload(UiRuntimeMode::CustomOptimized)
+            }
+            Err(error) => {
+                self.reject(error);
+                UiDevelopmentEffect::None
+            }
+        }
+    }
+
+    pub(super) fn uses_release_plugins(&self) -> bool {
+        self.release_bundle.is_some()
+    }
+
+    pub(super) fn poll_plugin_health(
+        &mut self,
+        produced_frame: bool,
+    ) -> Option<UiDevelopmentEffect> {
+        let started = self.plugin_start?;
+        if produced_frame && started.elapsed() >= Duration::from_secs(3) {
+            match self.plugins.confirm() {
+                Ok(()) => {
+                    self.plugin_start = None;
+                    self.state.plugin_healthy = true;
+                    self.state.plugin_rebuild = None;
+                    self.state.operation = UiDevelopmentOperation::Idle;
+                    self.state.can_revert = self.plugins.previous().is_some();
+                    self.state.status = "Compiled plugin composition is active.".into();
+                    self.bump_revision();
+                    return Some(UiDevelopmentEffect::None);
+                }
+                Err(error) => {
+                    self.runtime_failed(UiRuntimeMode::CustomOptimized, &error);
+                    return Some(UiDevelopmentEffect::Reload(
+                        UiRuntimeMode::OfficialOptimized,
+                    ));
+                }
+            }
+        }
+        if started.elapsed() >= Duration::from_secs(20) {
+            self.runtime_failed(
+                UiRuntimeMode::CustomOptimized,
+                &"No initial frame arrived within 20 seconds",
+            );
+            return Some(UiDevelopmentEffect::Reload(
+                UiRuntimeMode::OfficialOptimized,
+            ));
+        }
+        None
     }
 
     fn set_workspace(&mut self, workspace: PathBuf) {
@@ -633,7 +847,7 @@ impl UiDevelopmentController {
                 self.reject(error);
                 return UiDevelopmentEffect::None;
             }
-        } else if mode == UiRuntimeMode::CustomOptimized {
+        } else if mode == UiRuntimeMode::CustomOptimized && self.release_bundle.is_none() {
             let expected_workspace = self
                 .state
                 .workspace_valid
@@ -692,6 +906,7 @@ impl UiDevelopmentController {
             .ok_or_else(|| "No JIT Flutter bundle is configured.".to_owned())
             .and_then(|bundle| validate_debug_bundle(bundle, expected_workspace));
         self.state.developer_components_available = debug_validation.is_ok();
+        self.state.can_revert = self.plugins.previous().is_some();
         self.state.can_build_optimized = self
             .custom_bundle
             .as_deref()
@@ -727,7 +942,10 @@ impl UiDevelopmentController {
     pub(super) fn bundle_for(&self, mode: UiRuntimeMode) -> Option<&Path> {
         match mode {
             UiRuntimeMode::OfficialOptimized => Some(&self.official_bundle),
-            UiRuntimeMode::CustomOptimized => self.custom_bundle.as_deref(),
+            UiRuntimeMode::CustomOptimized => self
+                .release_bundle
+                .as_deref()
+                .or(self.custom_bundle.as_deref()),
             UiRuntimeMode::LiveDevelopment => self.debug_bundle.as_deref(),
             UiRuntimeMode::Unavailable => None,
         }
@@ -740,6 +958,16 @@ impl UiDevelopmentController {
         self.state.active_mode = mode;
         self.state.desired_mode = mode;
         self.state.operation = UiDevelopmentOperation::Idle;
+        self.state.plugin_bundle = if mode == UiRuntimeMode::CustomOptimized {
+            self.release_bundle.clone()
+        } else {
+            None
+        };
+        self.state.plugin_healthy = false;
+        self.plugin_start = self.state.plugin_bundle.as_ref().map(|_| Instant::now());
+        if self.plugin_start.is_some() {
+            self.state.operation = UiDevelopmentOperation::SwitchingRuntime;
+        }
         self.state.generation = generation;
         self.state.can_hot_restart = false;
         self.state.can_hot_reload = false;
@@ -750,11 +978,16 @@ impl UiDevelopmentController {
             }
             (UiRuntimeMode::OfficialOptimized, false) => {
                 self.state.error.clear();
-                "The packaged optimized Flutter shell is active.".to_owned()
+                if self.state.plugin_rebuild.is_some() {
+                    "The packaged shell is active until your plugins are rebuilt for this Denial version.".to_owned()
+                } else {
+                    "The packaged optimized Flutter shell is active.".to_owned()
+                }
             }
             (UiRuntimeMode::CustomOptimized, _) => {
                 self.state.error.clear();
-                "Optimized AOT profile mode is active.".to_owned()
+                if self.release_bundle.is_some() { "Waiting for the plugin composition's first frame…".into() }
+                else { "Optimized AOT profile mode is active.".to_owned() }
             }
             (UiRuntimeMode::LiveDevelopment, _) => {
                 self.state.error.clear();
@@ -769,6 +1002,11 @@ impl UiDevelopmentController {
     }
 
     pub(super) fn runtime_failed(&mut self, mode: UiRuntimeMode, error: &dyn fmt::Display) {
+        if self.release_bundle.is_some() {
+            let _ = self.plugins.reject();
+            self.release_bundle = None;
+            self.plugin_start = None;
+        }
         self.state.desired_mode = UiRuntimeMode::OfficialOptimized;
         self.state.operation = UiDevelopmentOperation::SwitchingRuntime;
         self.state.error = format!(
@@ -791,6 +1029,9 @@ impl UiDevelopmentController {
         mode: UiRuntimeMode,
         error: &dyn fmt::Display,
     ) {
+        let _ = self.plugins.reject();
+        self.release_bundle = self.state.plugin_bundle.clone();
+        self.plugin_start = None;
         let active_mode = self.state.active_mode;
         self.state.desired_mode = active_mode;
         self.state.operation = UiDevelopmentOperation::Idle;
@@ -912,7 +1153,7 @@ impl UiRuntimeMode {
     fn description(self) -> &'static str {
         match self {
             Self::OfficialOptimized => "the packaged optimized Flutter shell",
-            Self::CustomOptimized => "the optimized AOT profile Flutter shell",
+            Self::CustomOptimized => "the custom optimized Flutter shell",
             Self::LiveDevelopment => "the live Flutter development shell",
             Self::Unavailable => "an unavailable Flutter shell",
         }
@@ -1124,6 +1365,188 @@ fn default_vm_service_path() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn startup_with_selected(
+        fixture: &plugin_bundle::fixtures::Fixture,
+        official: &Path,
+        selected: &Path,
+    ) -> UiDevelopmentController {
+        let config = fixture.0.join("config");
+        fs::create_dir_all(&config).unwrap();
+        fs::write(
+            config.join("plugin-composition.json"),
+            serde_json::to_vec(&serde_json::json!({"schema": 1, "selected": selected})).unwrap(),
+        )
+        .unwrap();
+        UiDevelopmentController::with_paths(
+            official,
+            None,
+            None,
+            None,
+            Some(config.join("ui-development.json")),
+            None,
+        )
+    }
+
+    #[test]
+    fn an_updated_installation_rebuilds_the_confirmed_composition_without_an_error() {
+        use plugin_bundle::fixtures::{Fixture, set_manifest_field};
+        let fixture = Fixture::new();
+        let (bundle, official) = fixture.bundle();
+        set_manifest_field(
+            &bundle,
+            "source_identity",
+            serde_json::json!({"source_revision": "0.2.1"}),
+        );
+        fs::write(
+            official.join(".denial-ui-source.json"),
+            b"{\"source_revision\":\"0.3.0\"}",
+        )
+        .unwrap();
+        let mut controller = startup_with_selected(&fixture, &official, &bundle);
+        assert!(controller.state.error.is_empty());
+        assert!(controller.release_bundle.is_none());
+        assert_eq!(controller.desired_mode(), UiRuntimeMode::OfficialOptimized);
+        assert!(controller.plugin_rebuild_needed());
+        // The composition remains the user's intent until a rebuild confirms
+        // its replacement.
+        assert_eq!(controller.plugins.selected(), Some(bundle.as_path()));
+        let value = serde_json::to_value(&controller.state).unwrap();
+        assert_eq!(value["plugin_rebuild"]["reason"], "source");
+        assert_eq!(value["plugin_rebuild"]["bundle"], bundle.to_str().unwrap());
+        assert_eq!(value["plugin_rebuild"]["version"], denial_core::version());
+        assert_eq!(
+            value["plugin_rebuild"]["installed_source"],
+            serde_json::json!({"source_revision": "0.3.0"})
+        );
+        assert!(value.get("session_activity").is_none());
+        controller.runtime_started(UiRuntimeMode::OfficialOptimized, 1);
+        assert!(controller.state.status.contains("rebuilt"));
+
+        let activity = SessionActivity {
+            locked: false,
+            input_idle_ms: 4_200,
+            shell_captures_keyboard: true,
+            idle_inhibited: false,
+        };
+        let value =
+            serde_json::to_value(controller.state_snapshot().with_session_activity(activity))
+                .unwrap();
+        assert_eq!(value["session_activity"]["input_idle_ms"], 4_200);
+        assert_eq!(value["session_activity"]["shell_captures_keyboard"], true);
+
+        let restore =
+            UiDevelopmentCommand::from_control(CommandKind::RestoreOfficial, 1, None, false)
+                .unwrap();
+        controller.handle_command(restore);
+        assert!(!controller.plugin_rebuild_needed());
+        assert_eq!(controller.plugins.selected(), None);
+    }
+
+    #[test]
+    fn a_confirmed_replacement_ends_the_rebuild_and_damage_stays_an_error() {
+        use plugin_bundle::fixtures::{Fixture, seal, set_manifest_field, unseal};
+        let fixture = Fixture::new();
+        let (bundle, official) = fixture.bundle();
+        set_manifest_field(
+            &bundle,
+            "source_identity",
+            serde_json::json!({"source_revision": "0.2.1"}),
+        );
+        fs::write(
+            official.join(".denial-ui-source.json"),
+            b"{\"source_revision\":\"0.3.0\"}",
+        )
+        .unwrap();
+        let mut controller = startup_with_selected(&fixture, &official, &bundle);
+        controller
+            .plugins
+            .begin(Path::new("/rebuilt"), false)
+            .unwrap();
+        controller.release_bundle = Some(PathBuf::from("/rebuilt"));
+        controller.runtime_started(UiRuntimeMode::CustomOptimized, 2);
+        controller.plugin_start = Some(Instant::now() - Duration::from_secs(4));
+        assert_eq!(
+            controller.poll_plugin_health(true),
+            Some(UiDevelopmentEffect::None)
+        );
+        assert!(!controller.plugin_rebuild_needed());
+        assert_eq!(controller.plugins.selected(), Some(Path::new("/rebuilt")));
+
+        // A damaged bundle for the installed release is a recovery error.
+        set_manifest_field(
+            &bundle,
+            "source_identity",
+            serde_json::json!({"source_revision": "0.3.0"}),
+        );
+        unseal(&bundle);
+        fs::write(bundle.join("lib/libapp.so"), b"damaged").unwrap();
+        seal(&bundle);
+        let controller = startup_with_selected(&fixture, &official, &bundle);
+        assert!(!controller.plugin_rebuild_needed());
+        assert!(controller.state.error.contains("checksum mismatch"));
+    }
+
+    #[test]
+    fn plugin_health_requires_a_frame_and_failed_startup_requests_packaged_recovery() {
+        let directory =
+            std::env::temp_dir().join(format!("denial-plugin-health-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let mut controller = UiDevelopmentController::with_paths(
+            Path::new("/official"),
+            None,
+            None,
+            None,
+            Some(directory.join("ui-development.json")),
+            None,
+        );
+        controller
+            .plugins
+            .begin(Path::new("/candidate"), false)
+            .unwrap();
+        controller.release_bundle = Some(PathBuf::from("/candidate"));
+        controller.runtime_started(UiRuntimeMode::CustomOptimized, 7);
+        controller.plugin_start = Some(Instant::now() - Duration::from_secs(4));
+        let concurrent = UiDevelopmentCommand::from_control(
+            CommandKind::ActivatePluginBundle,
+            42,
+            Some(PathBuf::from("/second")),
+            false,
+        )
+        .unwrap();
+        let (effect, reply) = controller.handle_external_command(concurrent);
+        assert_eq!(effect, UiDevelopmentEffect::None);
+        assert!(reply.error.contains("already in progress"));
+        assert!(controller.state.error.is_empty());
+        assert_eq!(
+            controller.release_bundle.as_deref(),
+            Some(Path::new("/candidate"))
+        );
+        assert_eq!(controller.poll_plugin_health(false), None);
+        assert!(!controller.state.plugin_healthy);
+        assert_eq!(
+            controller.poll_plugin_health(true),
+            Some(UiDevelopmentEffect::None)
+        );
+        assert!(controller.state.plugin_healthy);
+        assert_eq!(controller.plugins.selected(), Some(Path::new("/candidate")));
+        controller
+            .plugins
+            .begin(Path::new("/broken"), false)
+            .unwrap();
+        controller.release_bundle = Some(PathBuf::from("/broken"));
+        controller.runtime_started(UiRuntimeMode::CustomOptimized, 8);
+        controller.plugin_start = Some(Instant::now() - Duration::from_secs(21));
+        assert_eq!(
+            controller.poll_plugin_health(false),
+            Some(UiDevelopmentEffect::Reload(
+                UiRuntimeMode::OfficialOptimized
+            ))
+        );
+        assert_eq!(controller.desired_mode(), UiRuntimeMode::OfficialOptimized);
+        assert_eq!(controller.plugins.selected(), Some(Path::new("/candidate")));
+        fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn renderer_preparation_failure_preserves_the_active_runtime() {

@@ -44,6 +44,7 @@ readonly CANDIDATE_PROVENANCE="$CANDIDATE_ROOT/evidence/provenance.txt"
 [[ -d "$CANDIDATE_PACKAGES" \
   && -d "$CANDIDATE_STAGE/denial" \
   && -d "$CANDIDATE_STAGE/denial-flutter-engine" \
+  && -d "$CANDIDATE_STAGE/denial-plugin-manager" \
   && -f "$CANDIDATE_STAGE/metadata.json" \
   && -f "$CANDIDATE_STAGE/ALPINE-SHA256SUMS" ]] \
   || fail 'candidate Alpine package handoff is incomplete'
@@ -107,7 +108,7 @@ readonly GLIBC_BASELINE FLUTTER_ENGINE_ABI FLUTTER_ENGINE_SHA256
   || fail 'Alpine candidate timestamp does not match main'
 [[ ! -e "$CANDIDATE_STAGE/denial/usr/share/denial/version" ]] \
   || fail 'main Alpine candidate predicts a public runtime version'
-for package_name in denial denial-flutter-engine; do
+for package_name in denial denial-flutter-engine denial-plugin-manager; do
   (
     cd "$CANDIDATE_STAGE/$package_name"
     sha256sum --check --strict --quiet \
@@ -119,8 +120,8 @@ mapfile -d '' candidate_apks < <(
   find "$CANDIDATE_PACKAGES" \
     -maxdepth 1 -type f -name '*.apk' -print0 | sort -z
 )
-((${#candidate_apks[@]} == 2)) \
-  || fail "expected two candidate APKs, found ${#candidate_apks[@]}"
+((${#candidate_apks[@]} == 3)) \
+  || fail "expected three candidate APKs, found ${#candidate_apks[@]}"
 candidate_names=()
 for package in "${candidate_apks[@]}"; do
   if bsdtar -tf "$package" | grep -Eq '^\.SIGN\.'; then
@@ -132,7 +133,7 @@ for package in "${candidate_apks[@]}"; do
       | head -n 1
   )"
   case "$package_name" in
-    denial | denial-flutter-engine) ;;
+    denial | denial-flutter-engine | denial-plugin-manager) ;;
     *) fail "unexpected candidate APK: ${package_name:-unset}" ;;
   esac
   "$ROOT/tools/verify-denial-package-payload" \
@@ -140,7 +141,7 @@ for package in "${candidate_apks[@]}"; do
   candidate_names+=("$package_name")
 done
 [[ "$(printf '%s\n' "${candidate_names[@]}" | sort | paste -sd' ' -)" == \
-  'denial denial-flutter-engine' ]] \
+  'denial denial-flutter-engine denial-plugin-manager' ]] \
   || fail 'candidate APK set is incomplete'
 
 [[ ! -e "$EVIDENCE_FILE" ]] \
@@ -161,7 +162,8 @@ cp -a -- "$CANDIDATE_STAGE" "$release_stage"
 install -Dm644 /dev/null "$release_stage/denial/usr/share/denial/version"
 printf '%s\n' "$release_version" \
   >"$release_stage/denial/usr/share/denial/version"
-find "$release_stage/denial" "$release_stage/denial-flutter-engine" -print0 \
+find "$release_stage/denial" "$release_stage/denial-flutter-engine" \
+  "$release_stage/denial-plugin-manager" -print0 \
   | xargs -0 touch --no-dereference --date="@$source_date_epoch"
 
 jq \
@@ -199,7 +201,7 @@ write_inventory() (
     | sort >"$2"
 )
 
-for package_name in denial denial-flutter-engine; do
+for package_name in denial denial-flutter-engine denial-plugin-manager; do
   write_manifest \
     "$release_stage/$package_name" \
     "$release_stage/$package_name.sha256"
@@ -232,6 +234,7 @@ env \
 expected_packages=(
   "$OUTPUT_ROOT/denial-${release_version}-r1.apk"
   "$OUTPUT_ROOT/denial-flutter-engine-${release_version}-r1.apk"
+  "$OUTPUT_ROOT/denial-plugin-manager-${release_version}-r1.apk"
 )
 for package in "${expected_packages[@]}"; do
   [[ -f "$package" ]] || fail "promoted APK is missing: $package"
@@ -257,6 +260,14 @@ write_manifest \
   "$release_stage/denial-flutter-engine" "$release_engine_manifest"
 cmp -- "$candidate_engine_manifest" "$release_engine_manifest" \
   || fail 'Alpine Flutter Engine payload changed during promotion'
+candidate_plugin_manifest="$work_root/candidate-plugin-manager.manifest"
+release_plugin_manifest="$work_root/release-plugin-manager.manifest"
+write_manifest \
+  "$CANDIDATE_STAGE/denial-plugin-manager" "$candidate_plugin_manifest"
+write_manifest \
+  "$release_stage/denial-plugin-manager" "$release_plugin_manifest"
+cmp -- "$candidate_plugin_manifest" "$release_plugin_manifest" \
+  || fail 'Alpine Plugin Manager payload changed during promotion'
 
 {
   printf 'promotion_schema=1\n'

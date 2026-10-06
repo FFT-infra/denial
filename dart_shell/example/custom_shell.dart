@@ -1,52 +1,42 @@
-import 'package:denial_dart_shell/denial.dart';
+@Plugin()
+library;
+
+import 'package:denial_sdk/composition.dart';
+import 'package:denial_flutter_sdk/application.dart';
+import 'package:denial_flutter_sdk/shell.dart';
+import 'package:denial_flutter_sdk/state.dart';
 import 'package:flutter/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-/// Smallest complete alternate Denial shell.
-///
-/// The framework owns compositor integration; this file owns only feature UI.
-void main() {
-  runDenialShell(
-    shell: const DenialShell(
-      mobile: DenialShellScene(content: _CustomMobileScene()),
-      desktop: DenialShellScene(content: _CustomDesktopScene()),
-    ),
-  );
-}
-
-class _CustomMobileScene extends StatelessWidget {
-  const _CustomMobileScene();
+/// A deliberately minimal root composition using only the SDK. A production
+/// shell also supplies lock UI, input layouts and window-surface presentation.
+@Provides(ShellApplication)
+class CustomShell implements ShellApplication {
+  const CustomShell();
 
   @override
-  Widget build(BuildContext context) {
-    return const Stack(
-      fit: StackFit.expand,
-      children: [ShellWallpaper(), ShellPrimaryWindow()],
-    );
-  }
+  Widget createShell() => const _WindowStatus();
 }
 
-class _CustomDesktopScene extends StatelessWidget {
-  const _CustomDesktopScene();
+Future<void> main() => runDenialShell(shell: const CustomShell().createShell());
+
+class _WindowStatus extends ConsumerWidget {
+  const _WindowStatus();
 
   @override
-  Widget build(BuildContext context) {
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        const ShellWallpaper(),
-        ShellWindowsBuilder(
-          builder: (context, windows, actions) {
-            if (windows.isEmpty) {
-              return const Center(child: Text('Custom Denial shell'));
-            }
-            final window = windows.last;
-            return GestureDetector(
-              onTap: () => actions.focus(window),
-              child: WindowContentRect(window: window, active: true),
-            );
-          },
+  Widget build(BuildContext context, WidgetRef ref) {
+    final state = ref.watch(shellControllerProvider);
+    return Directionality(
+      textDirection: TextDirection.ltr,
+      child: ColoredBox(
+        color: const Color(0xff101010),
+        child: Center(
+          child: Text(
+            state.locked ? 'Locked' : 'Custom Denial shell',
+            style: const TextStyle(color: Color(0xffffffff)),
+          ),
         ),
-      ],
+      ),
     );
   }
 }

@@ -79,10 +79,75 @@ fn feedback_lookup_completes_inside_a_locked_surface_tree_traversal() {
             |_, _, _| true,
         );
         assert!(visited);
+        // Metadata inspection shares this same locked traversal contract.
+        // It must use SurfaceData and the traversal parent, never re-enter
+        // with_states/get_parent from a callback.
+        assert!(super::super::surface_pipeline::surface_tree_metadata_changed(surface));
+        assert!(!super::super::surface_pipeline::surface_tree_metadata_changed(surface));
         done.send(()).unwrap();
     });
     result
         .recv_timeout(Duration::from_secs(2))
         .expect("feedback lookup deadlocked while the surface tree held its lock");
+    worker.join().unwrap();
+}
+
+#[test]
+fn subsurface_order_and_removal_invalidate_the_same_root_from_a_child() {
+    use super::super::surface_pipeline::surface_tree_metadata_changed;
+    use smithay::reexports::wayland_server::protocol::wl_subcompositor::WlSubcompositor;
+    let (done, result) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let mut display = Display::<TestCompositor>::new().unwrap();
+        let mut handle = display.handle();
+        let mut state = TestCompositor {
+            compositor: CompositorState::new::<TestCompositor>(&handle),
+            surface: None,
+        };
+        let (mut writer, reader) = UnixStream::pair().unwrap();
+        let client = handle
+            .insert_client(reader, Arc::new(TestClient::default()))
+            .unwrap();
+        let compositor = client
+            .create_resource::<WlCompositor, _, TestCompositor>(&handle, 6, GlobalData)
+            .unwrap();
+        let subcompositor = client
+            .create_resource::<WlSubcompositor, _, TestCompositor>(&handle, 1, GlobalData)
+            .unwrap();
+        fn send(writer: &mut UnixStream, words: &[u32]) {
+            for word in words {
+                writer.write_all(&word.to_ne_bytes()).unwrap();
+            }
+        }
+        send(&mut writer, &[compositor.id().protocol_id(), 12 << 16, 2]);
+        display.dispatch_clients(&mut state).unwrap();
+        let root = state.surface.clone().unwrap();
+        assert!(surface_tree_metadata_changed(&root));
+        send(&mut writer, &[compositor.id().protocol_id(), 12 << 16, 3]);
+        display.dispatch_clients(&mut state).unwrap();
+        let child = state.surface.clone().unwrap();
+        // get_subsurface(new_id=4, surface=3, parent=2).
+        send(
+            &mut writer,
+            &[subcompositor.id().protocol_id(), (20 << 16) | 1, 4, 3, 2],
+        );
+        display.dispatch_clients(&mut state).unwrap();
+        assert!(surface_tree_metadata_changed(&root));
+        assert!(!surface_tree_metadata_changed(&child));
+        // place_below(parent): order changes without a new buffer.
+        send(&mut writer, &[4, (12 << 16) | 3, 2]);
+        display.dispatch_clients(&mut state).unwrap();
+        assert!(surface_tree_metadata_changed(&child));
+        assert!(!surface_tree_metadata_changed(&root));
+        // Destroy only the subsurface role; the wl_surface remains alive.
+        send(&mut writer, &[4, 8 << 16]);
+        display.dispatch_clients(&mut state).unwrap();
+        assert!(surface_tree_metadata_changed(&root));
+        assert!(!surface_tree_metadata_changed(&root));
+        done.send(()).unwrap();
+    });
+    result
+        .recv_timeout(Duration::from_secs(2))
+        .expect("surface tree metadata traversal deadlocked");
     worker.join().unwrap();
 }

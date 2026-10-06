@@ -8,6 +8,8 @@ use smithay::backend::input::{
     GestureBeginEvent, GestureEndEvent, GestureSwipeUpdateEvent, InputEvent, KeyState,
     KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent, TouchEvent,
 };
+#[cfg(feature = "flutter")]
+use smithay::backend::input::{Switch, SwitchState, SwitchToggleEvent};
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
 use smithay::backend::session::Session;
 use smithay::backend::session::libseat::LibSeatSession;
@@ -1479,6 +1481,20 @@ fn process_input_event(
         return false;
     }
 
+    // libinput's own event type has an inherent `switch()`; ask Smithay's.
+    #[cfg(feature = "flutter")]
+    if let InputEvent::SwitchToggle { event } = &event
+        && SwitchToggleEvent::switch(event) == Some(Switch::Lid)
+    {
+        let closed = SwitchToggleEvent::state(event) == SwitchState::On;
+        state.lid.note_toggle(closed);
+        if !closed {
+            // Opening the lid asks to see the panel, as a key press would.
+            state.note_user_activity();
+        }
+        return false;
+    }
+
     #[cfg(feature = "flutter")]
     if !matches!(&event, InputEvent::DeviceAdded { .. }) {
         state.note_user_activity();
@@ -1713,8 +1729,9 @@ fn reset_input_devices(state: &mut RuntimeState, reset: InputDeviceReset) {
         for keycode in pressed_keys {
             let raw_keycode = keycode.raw();
             let was_retired = previously_retired_keys.contains(&raw_keycode);
-            keyboard.input::<(), _>(
+            super::input_method::input_key(
                 state,
+                &keyboard,
                 keycode,
                 KeyState::Released,
                 SERIAL_COUNTER.next_serial(),
@@ -1937,8 +1954,9 @@ fn dispatch_flutter_repeat(state: &mut RuntimeState, keycode: u32) -> bool {
         .as_ref()
         .map(|frontend| frontend.start_time.elapsed().as_millis() as u32)
         .unwrap_or_default();
-    keyboard.input_forward(
+    super::input_method::forward_key(
         state,
+        &keyboard,
         Keycode::new(keycode),
         KeyState::Pressed,
         SERIAL_COUNTER.next_serial(),
@@ -1946,6 +1964,62 @@ fn dispatch_flutter_repeat(state: &mut RuntimeState, keycode: u32) -> bool {
         false,
     );
     true
+}
+
+#[cfg(feature = "flutter")]
+fn start_system_control_repeat(state: &mut RuntimeState, keycode: u32) {
+    cancel_flutter_repeat(state);
+    let Some(frontend) = state.wayland.as_mut() else {
+        return;
+    };
+    let rate = frontend.settings.keyboard().repeat_rate_hz;
+    if rate == 0 {
+        return;
+    }
+    let delay =
+        std::time::Duration::from_millis(u64::from(frontend.settings.keyboard().repeat_delay_ms));
+    let interval = std::time::Duration::from_secs_f64(1.0 / f64::from(rate));
+    frontend.flutter_repeat_generation = frontend.flutter_repeat_generation.wrapping_add(1);
+    let generation = frontend.flutter_repeat_generation;
+    frontend.flutter_repeat_key = Some(keycode);
+    let loop_handle = frontend.loop_handle.clone();
+    match loop_handle.insert_source(Timer::from_duration(delay), move |_, _, state| {
+        let current = state.wayland.as_ref().is_some_and(|frontend| {
+            frontend.flutter_repeat_generation == generation
+                && frontend.flutter_repeat_key == Some(keycode)
+        });
+        if !current || !dispatch_system_control_repeat(state, keycode) {
+            return TimeoutAction::Drop;
+        }
+        TimeoutAction::ToDuration(interval)
+    }) {
+        Ok(token) => {
+            state
+                .wayland
+                .as_mut()
+                .expect("missing Wayland frontend")
+                .flutter_repeat_token = Some(token);
+        }
+        Err(error) => {
+            warn!(%error, "could not schedule system-control keyboard repeat");
+            cancel_flutter_repeat(state);
+        }
+    }
+}
+
+#[cfg(feature = "flutter")]
+fn dispatch_system_control_repeat(state: &mut RuntimeState, xkb_keycode: u32) -> bool {
+    if !state.flutter_active || state.secure_session_locked() {
+        return false;
+    }
+    let Some(evdev_keycode) = xkb_keycode.checked_sub(8) else {
+        return false;
+    };
+    let disposition = state.native_escape_shortcut.observe(evdev_keycode, true);
+    if !disposition.repeats_with_timer() {
+        return false;
+    }
+    execute_shortcut_disposition(state, disposition)
 }
 
 fn intercept_native_escape(
@@ -1958,6 +2032,15 @@ fn intercept_native_escape(
     let Some(evdev_keycode) = xkb_keycode.checked_sub(8) else {
         return false;
     };
+    #[cfg(feature = "flutter")]
+    if key_state == KeyState::Released
+        && state
+            .wayland
+            .as_ref()
+            .is_some_and(|frontend| frontend.flutter_repeat_key == Some(xkb_keycode))
+    {
+        cancel_flutter_repeat(state);
+    }
     let disposition = state
         .native_escape_shortcut
         .observe(evdev_keycode, key_state == KeyState::Pressed);
@@ -1988,9 +2071,15 @@ fn intercept_native_escape(
             _ => true,
         };
     }
+    #[cfg(feature = "flutter")]
+    let repeats_system_control = key_state == KeyState::Pressed && disposition.repeats_with_timer();
     let handled = execute_shortcut_disposition(state, disposition);
     if !handled && key_state == KeyState::Pressed {
         state.native_escape_shortcut.pass_through_key(evdev_keycode);
+    }
+    #[cfg(feature = "flutter")]
+    if handled && repeats_system_control {
+        start_system_control_repeat(state, xkb_keycode);
     }
     handled
 }
@@ -2023,10 +2112,21 @@ pub(super) fn execute_shortcut_disposition(
                 .request_shutdown(ShutdownReason::NativeEscapeShortcut);
             true
         }
+        ShortcutDisposition::PluginAction(id) => {
+            #[cfg(feature = "flutter")]
+            if state.secure_session_locked() {
+                return false;
+            }
+            state.plugin_actions.queue(id, None)
+        }
         ShortcutDisposition::RequestApplications => {
             #[cfg(feature = "flutter")]
-            state.queue_shell_action(super::super::wire::ShellAction::Applications, None);
-            true
+            if state.secure_session_locked() {
+                return false;
+            }
+            state
+                .plugin_actions
+                .queue(crate::plugin_actions::LEGACY_LAUNCHER_ACTION.into(), None)
         }
         ShortcutDisposition::RequestDashboard => {
             #[cfg(feature = "flutter")]
@@ -2131,6 +2231,13 @@ pub(super) fn execute_shortcut_disposition(
             }
             #[cfg(not(feature = "flutter"))]
             false
+        }
+        ShortcutDisposition::RequestResize(action) => {
+            #[cfg(feature = "flutter")]
+            super::window_management::resize_focused_toplevel(state, action);
+            #[cfg(not(feature = "flutter"))]
+            let _ = action;
+            true
         }
         ShortcutDisposition::RequestToggleVerticalMaximize => {
             #[cfg(feature = "flutter")]
@@ -2540,8 +2647,9 @@ fn process_flutter_keyboard_transition(
             keyboard.current_focus(),
             Some(super::focus::KeyboardFocusTarget::Flutter)
         );
-    keyboard.input::<(), _>(
+    super::input_method::input_key(
         state,
+        &keyboard,
         keycode,
         key_state,
         SERIAL_COUNTER.next_serial(),

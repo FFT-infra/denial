@@ -1,6 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+finish_denial_session() {
+  local status="$1"
+  # SDDM interprets status 1 as an authentication failure and leaves the
+  # stopped greeter down. A failed Denial session must restart the greeter.
+  if [[ "$status" == 1 ]]; then
+    printf 'denial-session: session exited with status 1; reporting session failure (2) to the display manager\n' >&2
+    status=2
+  fi
+  exit "$status"
+}
+
+case "${1:-}" in
+  --check | --print-output-config) ;;
+  *) trap 'finish_denial_session "$?"' EXIT ;;
+esac
+
 die() {
   printf 'denial-session: %s\n' "$*" >&2
   exit 1
@@ -48,6 +64,9 @@ readonly CONFIG_FILE SYSTEM_OUTPUT_CONFIG
 export DENIAL_COMPOSITOR_BINARY="${DENIAL_COMPOSITOR_BINARY:-$DENIALD}"
 export DENIAL_CONTROL_TOOL="${DENIAL_CONTROL_TOOL:-$DENIALCTL}"
 export DENIAL_SETTINGS_BINARY="${DENIAL_SETTINGS_BINARY:-$launcher_bin/denial-settings}"
+# The Plugin Manager is packaged separately. After a Denial update deniald uses
+# it to rebuild the user's plugins; without it deniald searches PATH instead.
+export DENIAL_PLUGINS_BINARY="${DENIAL_PLUGINS_BINARY:-$launcher_bin/denial-plugins}"
 
 discover_user_systemctl() {
   local candidate resolved
@@ -286,12 +305,6 @@ esac
 export DENIAL_SHELL_PROFILE="$shell_profile"
 export DENIA_SHELL_PROFILE="$shell_profile"
 
-flutter_renderer="${DENIAL_FLUTTER_RENDERER-${DENIA_FLUTTER_RENDERER-}}"
-case "$flutter_renderer" in
-  '' | skia | impeller) ;;
-  *) die "DENIAL_FLUTTER_RENDERER must be skia or impeller, got: $flutter_renderer" ;;
-esac
-
 no_predecessor="${DENIAL_NO_PREDECESSOR-${DENIA_NO_PREDECESSOR-}}"
 export DENIAL_NO_PREDECESSOR="$no_predecessor"
 export DENIA_NO_PREDECESSOR="$no_predecessor"
@@ -368,7 +381,7 @@ if [[ "${1:-}" == --check ]]; then
   printf 'ok  %-16s %s\n' 'render driver' "${render_driver:-unknown}"
   printf 'ok  %-16s %s\n' 'Mesa rendering' "$mesa_rendering"
   printf 'ok  %-16s %s\n' 'shell profile' "$DENIAL_SHELL_PROFILE"
-  printf 'ok  %-16s %s\n' 'Flutter renderer' "${flutter_renderer:-impeller (default)}"
+  printf 'ok  %-16s %s\n' 'Flutter renderer' 'impeller (Slimpeller)'
   printf 'ok  %-16s %s\n' 'Xwayland scale' "$xwayland_scale_mode"
   printf 'ok  %-16s %s\n' \
     'Qt platform theme' "${qt_platform_theme:-toolkit default (explicit)}"
@@ -388,9 +401,6 @@ denial_args=(
 if [[ -n "$render_device" ]]; then
   denial_args+=(--render-device "$render_device")
 fi
-if [[ -n "$flutter_renderer" ]]; then
-  denial_args+=(--flutter-renderer "$flutter_renderer")
-fi
 if [[ "$software_rendering" == 1 ]]; then
   denial_args+=(--software-rendering)
 fi
@@ -403,6 +413,11 @@ if [[ -n "${DENIAL_FLUTTER_UI_WORKSPACE:-}" ]]; then
   [[ "$DENIAL_FLUTTER_UI_WORKSPACE" == /* ]] \
     || die "DENIAL_FLUTTER_UI_WORKSPACE must be absolute: $DENIAL_FLUTTER_UI_WORKSPACE"
   denial_args+=(--flutter-ui-workspace "$DENIAL_FLUTTER_UI_WORKSPACE")
+fi
+
+# DENIAL_POLKIT_AGENT=0 leaves PolicyKit to an agent the user runs themselves.
+if [[ "${DENIAL_POLKIT_AGENT:-1}" == 0 ]]; then
+  denial_args+=(--no-polkit-agent)
 fi
 
 unset DISPLAY WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE SWAYSOCK I3SOCK
@@ -431,10 +446,10 @@ terminate_denial() {
   exit 143
 }
 
-trap stop_graphical_session EXIT
+trap 'denial_exit_status=$?; stop_graphical_session; finish_denial_session "$denial_exit_status"' EXIT
 trap terminate_denial HUP INT TERM
 
-"$DENIALD" "${denial_args[@]}" "$@" &
+"$DENIALD" "${denial_args[@]}" "$@" <&0 &
 denial_pid=$!
 set +e
 wait "$denial_pid"

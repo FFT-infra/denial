@@ -53,13 +53,8 @@ case "$format" in
     )
     ;;
   apk)
-    bsdtar -xpf "$package" -C "$temporary_root" --exclude '.*'
-    if find "$temporary_root" -mindepth 1 -maxdepth 1 -name '.*' \
-      -print -quit | grep -q .; then
-      printf 'APK contains unexpected root metadata: %s\n' \
-        "$package" >&2
-      exit 1
-    fi
+    "$(dirname -- "${BASH_SOURCE[0]}")/extract-denial-apk-payload" \
+      "$package" "$temporary_root"
     ;;
 esac
 

@@ -3,7 +3,6 @@
 %global _build_id_links none
 %global __provides_exclude_from ^/usr/lib/denial/.*\\.so$
 # denial-settings resolves this bundled private runtime through $ORIGIN/lib.
-%global __requires_exclude ^libflutter_linux_gtk\\.so.*$
 
 Name:           denial
 Version:        %{denial_version}
@@ -15,10 +14,11 @@ ExclusiveArch:  x86_64
 
 Requires:       bash
 Requires:       coreutils
+Requires:       git
 Requires:       dbus
+Requires:       polkit
 Requires:       denial-flutter-engine = 1:%{version}-%{release}
 Requires:       glibc >= %{glibc_baseline}
-Requires:       gtk3
 Requires:       libEGL.so.1()(64bit)
 Requires:       libpam.so.0()(64bit)
 Requires:       libpulse.so.0()(64bit)
@@ -39,6 +39,7 @@ Suggests:       gdm
 Suggests:       iwd
 Suggests:       NetworkManager
 Suggests:       ModemManager
+Suggests:       denial-plugin-manager = %{version}-%{release}
 Conflicts:      denial-git
 Requires(post): systemd
 Requires(preun): systemd
@@ -60,6 +61,16 @@ Conflicts:      denial-flutter-engine-git
 %description -n denial-flutter-engine
 Source-built Flutter Engine generation coupled to Denial's embedder ABI.
 
+%package -n denial-plugin-manager
+Summary:        Plugin development and composition tools for Denial
+License:        GPL-3.0-or-later
+Requires:       denial = %{version}-%{release}
+Requires:       git
+
+%description -n denial-plugin-manager
+Installs the Plugin Manager app, its backend, and Denial's compiler kit.
+A compatible Dart SDK must be available in PATH before compiling plugins.
+
 %prep
 
 %build
@@ -68,6 +79,7 @@ Source-built Flutter Engine generation coupled to Denial's embedder ABI.
 install -d -m 0755 %{buildroot}
 cp -a -- %{denial_payload}/. %{buildroot}/
 cp -a -- %{engine_payload}/. %{buildroot}/
+cp -a -- %{plugin_manager_payload}/. %{buildroot}/
 
 %check
 test -x %{buildroot}/usr/bin/deniald
@@ -75,9 +87,13 @@ test -x %{buildroot}/usr/bin/denialctl
 test -x %{buildroot}/usr/bin/denial-portal
 test -x %{buildroot}/usr/bin/denial-session
 test -x %{buildroot}/usr/bin/denial-settings
+test -x %{buildroot}/usr/bin/denial-plugin-manager
+test -x %{buildroot}/usr/bin/denial-plugins
+test -f %{buildroot}/usr/bin/denial-plugins.installation.json
+test -f %{buildroot}/usr/lib/denial/plugin-build-kit/kit.json
 test -f %{buildroot}/usr/lib/denial/flutter/lib/libapp.so
 test -f %{buildroot}/usr/lib/denial/flutter/lib/libflutter_engine.so
-test -f %{buildroot}/usr/lib/denial/settings/lib/libflutter_linux_gtk.so
+test -f %{buildroot}/usr/lib/denial/settings/lib/libflutter_engine.so
 
 %post
 if [ $1 -eq 1 ] && [ -x /usr/lib/systemd/systemd-update-helper ]; then
@@ -109,6 +125,10 @@ fi
 /usr/lib/denial/flutter/data/flutter_assets
 /usr/lib/denial/flutter/lib/libapp.so
 /usr/lib/denial/settings
+/usr/bin/denial-polkit-agent
+/usr/lib/denial/polkit
+/usr/lib/systemd/user/denial-polkit-agent.service
+/usr/lib/denial/flutter/.denial-ui-source.json
 /usr/lib/elogind/system-sleep/denial-suspend-mode
 /usr/lib/systemd/system-sleep/denial-suspend-mode
 /usr/lib/systemd/user/denial-session.target
@@ -122,6 +142,7 @@ fi
 /usr/share/man/man1/deniald.1.gz
 /usr/share/wayland-sessions/denial.desktop
 /usr/share/applications/dev.denial.Settings.desktop
+/usr/share/applications/dev.denial.Welcome.desktop
 /usr/share/xdg-desktop-portal/denial-portals.conf
 /usr/share/xdg-desktop-portal/portals/denial.portal
 %{?runtime_version_path:%{runtime_version_path}}
@@ -132,6 +153,16 @@ fi
 /usr/share/denial/flutter-engine
 /usr/share/doc/denial-flutter-engine
 %license /usr/share/licenses/denial-flutter-engine/*
+
+%files -n denial-plugin-manager
+/usr/bin/denial-plugin-manager
+/usr/bin/denial-plugins
+/usr/bin/denial-plugins.installation.json
+/usr/lib/denial/plugin-manager
+/usr/lib/denial/plugin-build-kit
+/usr/share/applications/dev.denial.PluginManager.desktop
+/usr/share/doc/denial-plugin-manager
+%license /usr/share/licenses/denial-plugin-manager/*
 
 %changelog
 * Wed Aug 12 2026 Doctor Logix <doctor.logix@gmail.com> - %{version}-%{release}

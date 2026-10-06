@@ -322,6 +322,7 @@ impl FlutterRuntime {
             fingerprint_scene: fingerprint_scene::FingerprintScene::default(),
             published_text_input_state: None,
             frame_ready_observed: false,
+            first_frame_received: false,
             last_pointer_timestamp_micros: 0,
         })
     }
@@ -414,6 +415,7 @@ impl FlutterRuntime {
         if observed {
             self.handler.acknowledge_frame_ready();
             self.frame_ready_observed = true;
+            self.first_frame_received = true;
         }
     }
 
@@ -500,6 +502,7 @@ impl FlutterRuntime {
                 RuntimeEvent::FrameReady { generation } if generation == self.generation => {
                     self.handler.acknowledge_frame_ready();
                     self.frame_ready_observed = true;
+                    self.first_frame_received = true;
                 }
                 RuntimeEvent::QueueOverflow { generation, queue }
                     if generation == self.generation =>

@@ -1,8 +1,7 @@
 import 'dart:convert';
 
-import 'package:denial_dart_shell/src/platform/denial_bridge.dart';
-import 'package:denial_dart_shell/src/settings/settings_store.dart';
-import 'package:denial_dart_shell/src/settings/shell_settings.dart';
+import 'package:denial_flutter_sdk/platform.dart';
+import 'package:denial_flutter_sdk/settings.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

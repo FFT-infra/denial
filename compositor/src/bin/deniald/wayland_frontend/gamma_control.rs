@@ -260,6 +260,10 @@ impl WaylandFrontend {
         }
     }
 
+    pub(crate) fn has_pending_gamma_changes(&self) -> bool {
+        !self.gamma_control.pending.is_empty()
+    }
+
     pub(crate) fn take_gamma_changes(&mut self) -> BTreeMap<OutputId, Option<Vec<u16>>> {
         std::mem::take(&mut self.gamma_control.pending)
     }

@@ -1,5 +1,22 @@
 {
   "nodes": {
+    "denialPlugins": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1790795186,
+        "narHash": "sha256-nidfJBJvh/r60vhYDytNumZQyLAiIyCf+QB0ECiBV60=",
+        "owner": "denialwm",
+        "repo": "denial-plugins",
+        "rev": "4b7adf998852b09b9a91c1cfab48be58debf2e80",
+        "type": "github"
+      },
+      "original": {
+        "owner": "denialwm",
+        "repo": "denial-plugins",
+        "rev": "4b7adf998852b09b9a91c1cfab48be58debf2e80",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1789542786,
@@ -16,9 +33,27 @@
         "type": "github"
       }
     },
+    "nixpkgsUnstable": {
+      "locked": {
+        "lastModified": 1790689126,
+        "narHash": "sha256-ilerN1WLSvF+HMjziC/Wv99J5y02maDH+6hZPwsORKg=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "b4fd65b198c599cbe814fcb9f42d25d021595ec9",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
-        "nixpkgs": "nixpkgs"
+        "denialPlugins": "denialPlugins",
+        "nixpkgs": "nixpkgs",
+        "nixpkgsUnstable": "nixpkgsUnstable"
       }
     }
   },

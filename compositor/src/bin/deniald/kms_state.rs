@@ -954,6 +954,10 @@ pub(super) struct FlutterLaunchConfiguration<'a> {
 
 #[cfg(feature = "flutter")]
 impl FlutterLauncher {
+    pub(super) fn plugin_rebuild_needed(&self) -> bool {
+        self.ui_development.plugin_rebuild_needed()
+    }
+
     pub(super) fn new(
         configuration: FlutterLaunchConfiguration<'_>,
         events: Sender<flutter_runtime::RuntimeEvent>,
@@ -1142,7 +1146,12 @@ impl FlutterLauncher {
 
     fn activate_requested_factory(&mut self) -> Result<(), Box<dyn Error>> {
         let requested = self.ui_development.desired_mode();
-        if requested == self.active_mode && self.factory.is_some() {
+        if requested == self.active_mode
+            && self
+                .factory
+                .as_ref()
+                .is_some_and(|f| Some(f.bundle()) == self.ui_development.bundle_for(requested))
+        {
             if requested == ui_development::UiRuntimeMode::LiveDevelopment {
                 let bundle = self
                     .ui_development
@@ -1173,7 +1182,11 @@ impl FlutterLauncher {
                 denial_flutter_engine::DartRuntimeMode::Aot
             }
             ui_development::UiRuntimeMode::CustomOptimized => {
-                denial_flutter_engine::DartRuntimeMode::AotProfile
+                if self.ui_development.uses_release_plugins() {
+                    denial_flutter_engine::DartRuntimeMode::Aot
+                } else {
+                    denial_flutter_engine::DartRuntimeMode::AotProfile
+                }
             }
             ui_development::UiRuntimeMode::LiveDevelopment => {
                 denial_flutter_engine::DartRuntimeMode::Jit
@@ -1196,11 +1209,26 @@ impl FlutterLauncher {
         // The old runtime is shut down before this method is reached; release
         // its library before loading the other runtime mode.
         self.factory = None;
-        self.factory = Some(flutter_runtime::FlutterRuntimeFactory::new(
-            &bundle,
-            runtime,
-            self.renderer_backend,
-        )?);
+        self.factory = Some(
+            if requested == ui_development::UiRuntimeMode::CustomOptimized
+                && self.ui_development.uses_release_plugins()
+            {
+                flutter_runtime::FlutterRuntimeFactory::with_engine(
+                    &bundle,
+                    self.ui_development
+                        .bundle_for(ui_development::UiRuntimeMode::OfficialOptimized)
+                        .expect("packaged recovery bundle"),
+                    runtime,
+                    self.renderer_backend,
+                )?
+            } else {
+                flutter_runtime::FlutterRuntimeFactory::new(
+                    &bundle,
+                    runtime,
+                    self.renderer_backend,
+                )?
+            },
+        );
         if let Some(fingerprint) = jit_engine_fingerprint {
             self.resident_jit_engine_fingerprint = Some(fingerprint);
         }
@@ -1212,16 +1240,20 @@ impl FlutterLauncher {
         &mut self,
         runtime: &mut flutter_runtime::FlutterRuntime,
     ) -> Result<bool, Box<dyn Error>> {
+        let health = self
+            .ui_development
+            .poll_plugin_health(runtime.has_produced_frame());
         let vm_service_uri = runtime.take_vm_service_uri();
         let vm_service_changed = vm_service_uri.is_some();
         let commands = runtime.drain_ui_development_commands().collect::<Vec<_>>();
         if let Some(uri) = vm_service_uri {
             self.ui_development.set_vm_service_uri(uri);
         }
-        if commands.is_empty() && !vm_service_changed {
+        if commands.is_empty() && !vm_service_changed && health.is_none() {
             return Ok(false);
         }
-        let mut reload_requested = false;
+        let mut reload_requested =
+            matches!(health, Some(ui_development::UiDevelopmentEffect::Reload(_)));
         for command in commands {
             if let ui_development::UiDevelopmentEffect::Reload(requested_mode) =
                 self.ui_development.handle_command(command)
@@ -1240,17 +1272,15 @@ impl FlutterLauncher {
         runtime: &mut flutter_runtime::FlutterRuntime,
         command: ui_development::UiDevelopmentCommand,
     ) -> (bool, ui_development::UiDevelopmentState) {
-        let reload_requested = matches!(
-            self.ui_development.handle_command(command),
-            ui_development::UiDevelopmentEffect::Reload(_)
-        );
+        let (effect, reply) = self.ui_development.handle_external_command(command);
+        let reload_requested = matches!(effect, ui_development::UiDevelopmentEffect::Reload(_));
         // denialctl is the recovery path when Flutter itself is unavailable
         // or unhealthy. Updating the shell is useful, but it must never be a
         // prerequisite for accepting an external restore command.
         if let Err(error) = self.publish_ui_development_state(runtime) {
             warn!(%error, "could not publish denialctl UI state to Flutter");
         }
-        (reload_requested, self.ui_development.state_snapshot())
+        (reload_requested, reply)
     }
 
     pub(super) fn retain_runtime_after_switch_failure(

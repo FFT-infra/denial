@@ -13,6 +13,39 @@ Engine-internal raster-cache telemetry is not part of the current release
 engine. Inspecting Flutter's rasterization and cache decisions therefore
 requires external profiling or an explicitly instrumented development engine.
 
+## Multi-surface window updates
+
+Pixel-only commits use the external-texture buffer path for both roots and
+subsurfaces. On publication, Denial compares the affected root's ordered
+surface state (parentage, viewport, pixel dimensions, transform, scale, alpha,
+and opaque regions). This catches Smithay subsurface reorders without requiring
+a desktop-wide snapshot for every child buffer. Synchronized children remain
+part of their parent's transaction; desynchronized children inspect their root
+but publish only their own committed subtree.
+
+Surface metadata changes invalidate their owning window. Other desktop windows
+reuse their accepted descriptions; placement, topology, and lifecycle changes
+retain full invalidation. Identical native snapshots produce no Dart message.
+The shell negotiates window deltas through `ListWindows.window_deltas`: each
+delta carries changed descriptions and the complete ordered list of live window
+IDs. Missing IDs are removed, unchanged Dart objects are retained, and ordinary
+list responses remain full snapshots. Older shells receive full publications.
+
+Rendering omits layers completely covered by an opaque layer above them, while
+retaining the protocol tree for input. A single remaining texture uses the
+direct window primitive. An opaque full-window base with children strictly
+inside the rounded-edge fringe can also draw directly when steady and without
+a backdrop effect. Other combinations retain composed rendering, with stable
+surface keys and texture repaint boundaries. The sampled-surface set excludes
+covered layers so their buffer mailboxes do not wait for impossible samples.
+
+Headless coverage is exercised by `tools/denial-pc compositor-test` and the
+pinned Dart SDK running `dart_shell/tool/check_surface_occlusion.dart`. Flutter
+protocol and widget regressions live in `window_delta_test.dart` and
+`window_surface_plan_test.dart`; running those uses the repository's explicitly
+requested Flutter development-engine test path. Visual validation remains
+user-owned.
+
 The audit is compiled into release builds but is opt-in. Start a development
 session with:
 

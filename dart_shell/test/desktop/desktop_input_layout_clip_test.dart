@@ -1,5 +1,5 @@
-import 'package:denial_dart_shell/src/desktop/desktop_input_layout_publisher.dart';
-import 'package:denial_dart_shell/src/models/denial_window.dart';
+import 'package:denial_desktop/src/desktop/desktop_input_layout_publisher.dart';
+import 'package:denial_flutter_sdk/models.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 

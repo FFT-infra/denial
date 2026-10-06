@@ -14,8 +14,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::{Value, json};
 
-const FLUTTER_ENGINE_ABI: &str = "3.44.7.denial1";
-const FLUTTER_SDK_VERSION: &str = "3.44.7";
+const FLUTTER_ENGINE_ABI: &str = "3.47.5.denial1";
+const FLUTTER_SDK_VERSION: &str = "3.47.5";
 const CANONICAL_FLUTTER_SOURCE: &str = "/mnt/exty/denial-flutter-fork-3.44.7";
 const UI_PACKAGE_NAME: &str = "denial-ui-development";
 const UI_DENIAL_MINIMUM_VERSION: &str = "0.2.1";
@@ -106,6 +106,7 @@ fn build_ui_development_package() -> Result<(), ToolError> {
     prepare_locked_development_sdk(&paths)?;
     build_development_client(&paths, &identity)?;
     build_flutter_tool_snapshot(&paths)?;
+    prepare_flutter_version_metadata(&paths)?;
     resolve_ui_dependencies(&paths)?;
     build_flutter_tool_runtime(&paths)?;
     build_flutter_sdk_runtime(&paths)?;
@@ -254,7 +255,7 @@ impl BuildPaths {
             flutter_sdk_runtime,
             ui_workspace_template,
             flutter_tool_checksum: repository
-                .join("prebuilt/flutter-tools/3.44.7/flutter_tools.snapshot.sha256"),
+                .join("prebuilt/flutter-tools/3.47.5/flutter_tools.snapshot.sha256"),
             debug_engine,
             debug_engine_checksum: repository
                 .join("prebuilt/flutter-engine/linux-x64-debug/libflutter_engine.so.sha256"),
@@ -275,6 +276,84 @@ fn prepare_locked_development_sdk(paths: &BuildPaths) -> Result<(), ToolError> {
         &mut command,
         "could not prepare the lock-matched Flutter development SDK artifacts",
     )
+}
+
+fn prepare_flutter_version_metadata(paths: &BuildPaths) -> Result<(), ToolError> {
+    let lock_path = paths
+        .repository
+        .join("prebuilt/flutter-engine/SOURCE_LOCK.json");
+    let lock: Value = serde_json::from_reader(File::open(&lock_path).map_err(ToolError::io)?)
+        .map_err(|error| ToolError::new(format!("invalid source lock: {error}")))?;
+    let revision = lock
+        .get("flutter")
+        .and_then(|flutter| flutter.get("revision"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| ToolError::new("source lock has no Flutter revision"))?;
+    let repository = lock
+        .get("flutter")
+        .and_then(|flutter| flutter.get("repository"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| ToolError::new("source lock has no Flutter repository"))?;
+    let actual = git_output(&paths.flutter_sdk, &["rev-parse", "HEAD"])?;
+    if actual != revision {
+        return Err(ToolError::new(format!(
+            "Flutter source is {actual}, but the source lock requires {revision}"
+        )));
+    }
+
+    // Engine preparation can regenerate this ignored cache file from the fork's
+    // distance from upstream. Package resolution uses the release's explicit
+    // compatibility version instead, as does tools/denial-pc.
+    let flutter = paths.flutter_sdk.join("bin/flutter");
+    let mut bootstrap = Command::new(&flutter);
+    bootstrap
+        .env("FLUTTER_GIT_URL", repository)
+        .args(["--version", "--suppress-analytics"]);
+    checked_status(
+        &mut bootstrap,
+        "could not initialize Flutter version metadata",
+    )?;
+    let version_file = paths.flutter_sdk.join("bin/cache/flutter.version.json");
+    let mut document: Value = serde_json::from_reader(
+        File::open(&version_file).map_err(ToolError::io)?,
+    )
+    .map_err(|error| ToolError::new(format!("invalid Flutter version metadata: {error}")))?;
+    let object = document
+        .as_object_mut()
+        .ok_or_else(|| ToolError::new("Flutter version metadata is not an object"))?;
+    for key in ["frameworkVersion", "flutterVersion"] {
+        object.insert(
+            String::from(key),
+            Value::String(String::from(FLUTTER_SDK_VERSION)),
+        );
+    }
+    object.insert(
+        String::from("frameworkRevision"),
+        Value::String(revision.to_owned()),
+    );
+    let parent = version_file
+        .parent()
+        .ok_or_else(|| ToolError::new("Flutter version metadata has no parent directory"))?;
+    let temporary = TemporaryDirectory::create(parent, "version-metadata")?;
+    let rendered = temporary.path().join("flutter.version.json");
+    let mut file = File::create(&rendered).map_err(ToolError::io)?;
+    serde_json::to_writer_pretty(&mut file, &document).map_err(|error| {
+        ToolError::new(format!("could not write Flutter version metadata: {error}"))
+    })?;
+    use std::io::Write;
+    file.write_all(b"\n").map_err(ToolError::io)?;
+    file.sync_all().map_err(ToolError::io)?;
+    fs::rename(rendered, version_file).map_err(ToolError::io)?;
+    let legacy_version = paths.flutter_sdk.join("version");
+    if legacy_version.is_file()
+        && fs::read_to_string(&legacy_version)
+            .map_err(ToolError::io)?
+            .trim()
+            != FLUTTER_SDK_VERSION
+    {
+        fs::remove_file(legacy_version).map_err(ToolError::io)?;
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -758,12 +837,27 @@ fn write_canonical_package_config(source: &Path, destination: &Path) -> Result<(
 }
 
 fn resolve_ui_dependencies(paths: &BuildPaths) -> Result<(), ToolError> {
+    let lock: Value = serde_json::from_reader(
+        File::open(
+            paths
+                .repository
+                .join("prebuilt/flutter-engine/SOURCE_LOCK.json"),
+        )
+        .map_err(ToolError::io)?,
+    )
+    .map_err(|error| ToolError::new(format!("invalid source lock: {error}")))?;
+    let repository = lock
+        .get("flutter")
+        .and_then(|flutter| flutter.get("repository"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| ToolError::new("source lock has no Flutter repository"))?;
     let flutter = paths.flutter_sdk.join("bin/flutter");
     require_executable(&flutter)?;
     let mut command = Command::new(flutter);
     command
         .current_dir(paths.repository.join("dart_shell"))
         .env("PUB_CACHE", &paths.pub_cache)
+        .env("FLUTTER_GIT_URL", repository)
         .env("DART_SUPPRESS_ANALYTICS", "true")
         .env("FLUTTER_ALREADY_LOCKED", "true")
         .env("FLUTTER_SUPPRESS_ANALYTICS", "true")
@@ -927,6 +1021,11 @@ fn copy_ui_dependency_sources(
     let mut dependency_count = 0_usize;
 
     for package in packages {
+        // The locked Git taskbar is vendored into the editable workspace below,
+        // rather than shipping a Git checkout as part of the hosted Pub cache.
+        if package.get("name").and_then(Value::as_str) == Some("denial_taskbar") {
+            continue;
+        }
         let root = package
             .get("rootUri")
             .and_then(Value::as_str)
@@ -1234,6 +1333,12 @@ fn build_ui_workspace_template(
         "LICENSE",
         "README.md",
         "dart_shell",
+        "packages/denial_sdk",
+        "packages/denial_flutter_sdk",
+        "plugins/denial_top_bar",
+        "plugins/denial_desktop",
+        "plugins/denial_launcher",
+        "plugins/denial_clock",
         "docs/UI_DEVELOPMENT.md",
         "protocol/generated/dart",
     ]);
@@ -1263,10 +1368,15 @@ fn build_ui_workspace_template(
                 relative.display()
             )));
         }
-        copy_runtime_tree(
-            &paths.repository.join(relative),
-            &destination.join(relative),
-        )?;
+        let source = paths.repository.join(relative);
+        // Cached Git paths include files removed by an uncommitted migration.
+        // Snapshot the working tree, including its deletions and new packages.
+        match fs::symlink_metadata(&source) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(ToolError::io(error)),
+            Ok(_) => {}
+        }
+        copy_runtime_tree(&source, &destination.join(relative))?;
         copied += 1;
     }
     if copied == 0 {
@@ -1275,9 +1385,99 @@ fn build_ui_workspace_template(
         ));
     }
 
+    // Pub has already resolved the exact Git commit from the shell lock. Vendor
+    // that package only; the collection root is not itself a Dart package.
+    let config: Value = serde_json::from_reader(
+        File::open(
+            paths
+                .repository
+                .join("dart_shell/.dart_tool/package_config.json"),
+        )
+        .map_err(ToolError::io)?,
+    )
+    .map_err(|error| ToolError::new(format!("invalid shell package config: {error}")))?;
+    let taskbar_uri = config
+        .get("packages")
+        .and_then(Value::as_array)
+        .and_then(|packages| {
+            packages.iter().find(|package| {
+                package.get("name").and_then(Value::as_str) == Some("denial_taskbar")
+            })
+        })
+        .and_then(|package| package.get("rootUri"))
+        .and_then(Value::as_str)
+        .and_then(|uri| uri.strip_prefix("file://"))
+        .ok_or_else(|| ToolError::new("locked taskbar has no absolute package URI"))?;
+    let taskbar_source = fs::canonicalize(taskbar_uri).map_err(ToolError::io)?;
+    let git_cache = fs::canonicalize(paths.pub_cache.join("git")).map_err(ToolError::io)?;
+    if !taskbar_source.starts_with(git_cache) {
+        return Err(ToolError::new(
+            "locked taskbar is outside the resolved Git cache",
+        ));
+    }
+    let taskbar_destination = destination.join("plugins/denial_taskbar");
+    copy_package_source(&taskbar_source, &taskbar_destination)?;
+    copy_runtime_tree(
+        &taskbar_source.join("README.md"),
+        &taskbar_destination.join("README.md"),
+    )?;
+    // JSON is also YAML. Parse with the already locked yaml package and change
+    // only the source descriptor in the generated workspace, keeping versions,
+    // SDK overrides and all other lock metadata intact for offline preparation.
+    let vendor_script = temporary.path().join("vendor-taskbar.dart");
+    fs::write(
+        &vendor_script,
+        r#"
+import 'dart:convert';
+import 'dart:io';
+import 'package:yaml/yaml.dart';
+
+void main(List<String> args) {
+  Map<String, dynamic> read(String path) =>
+      jsonDecode(jsonEncode(loadYaml(File(path).readAsStringSync())))
+          as Map<String, dynamic>;
+  final manifest = read(args[0]);
+  manifest['dev_dependencies']['denial_taskbar'] = {'path': '../plugins/denial_taskbar'};
+  final lock = read(args[1]);
+  final taskbar = lock['packages']['denial_taskbar'];
+  taskbar['source'] = 'path';
+  taskbar['description'] = {'path': '../plugins/denial_taskbar', 'relative': true};
+  const encoder = JsonEncoder.withIndent('  ');
+  File(args[0]).writeAsStringSync('${encoder.convert(manifest)}\n');
+  File(args[1]).writeAsStringSync('${encoder.convert(lock)}\n');
+}
+"#,
+    )
+    .map_err(ToolError::io)?;
+    let mut vendor = Command::new(paths.flutter_sdk.join("bin/cache/dart-sdk/bin/dart"));
+    vendor
+        .arg(format!(
+            "--packages={}",
+            paths
+                .repository
+                .join("dart_shell/.dart_tool/package_config.json")
+                .display()
+        ))
+        .arg(&vendor_script)
+        .arg(destination.join("dart_shell/pubspec.yaml"))
+        .arg(destination.join("dart_shell/pubspec.lock"));
+    checked_status(
+        &mut vendor,
+        "could not vendor the locked taskbar source descriptor",
+    )?;
+    fs::remove_file(vendor_script).map_err(ToolError::io)?;
+
     for required in [
         destination.join("dart_shell/pubspec.yaml"),
         destination.join("dart_shell/lib/main.dart"),
+        destination.join("packages/denial_sdk/pubspec.yaml"),
+        destination.join("packages/denial_sdk/lib/denial_sdk.dart"),
+        destination.join("packages/denial_flutter_sdk/pubspec.yaml"),
+        destination.join("packages/denial_flutter_sdk/lib/panels.dart"),
+        destination.join("plugins/denial_top_bar/pubspec.yaml"),
+        destination.join("plugins/denial_taskbar/pubspec.yaml"),
+        destination.join("plugins/denial_top_bar/lib/denial_top_bar.dart"),
+        destination.join("plugins/denial_taskbar/lib/denial_taskbar.dart"),
         destination.join("protocol/generated/dart/pubspec.yaml"),
         destination.join("dart_shell/.vscode/launch.json"),
         destination.join("dart_shell/.vscode/settings.json"),
@@ -1520,6 +1720,18 @@ fn validate_package_inputs(paths: &BuildPaths) -> Result<(), ToolError> {
             .join("pub-cache")
             .join(PUB_CACHE_GENERATION_MARKER),
         paths.ui_workspace_template.join("dart_shell/pubspec.yaml"),
+        paths
+            .ui_workspace_template
+            .join("packages/denial_sdk/pubspec.yaml"),
+        paths
+            .ui_workspace_template
+            .join("packages/denial_flutter_sdk/pubspec.yaml"),
+        paths
+            .ui_workspace_template
+            .join("plugins/denial_top_bar/pubspec.yaml"),
+        paths
+            .ui_workspace_template
+            .join("plugins/denial_taskbar/pubspec.yaml"),
         paths
             .ui_workspace_template
             .join("protocol/generated/dart/pubspec.yaml"),
@@ -1815,6 +2027,14 @@ fn validate_package(
         "usr/share/denial/ui-development/workspace/dart_shell/.vscode/settings.json",
         "usr/share/denial/ui-development/workspace/dart_shell/pubspec.yaml",
         "usr/share/denial/ui-development/workspace/dart_shell/lib/main.dart",
+        "usr/share/denial/ui-development/workspace/packages/denial_sdk/pubspec.yaml",
+        "usr/share/denial/ui-development/workspace/packages/denial_sdk/lib/denial_sdk.dart",
+        "usr/share/denial/ui-development/workspace/packages/denial_flutter_sdk/pubspec.yaml",
+        "usr/share/denial/ui-development/workspace/packages/denial_flutter_sdk/lib/panels.dart",
+        "usr/share/denial/ui-development/workspace/plugins/denial_top_bar/pubspec.yaml",
+        "usr/share/denial/ui-development/workspace/plugins/denial_taskbar/pubspec.yaml",
+        "usr/share/denial/ui-development/workspace/plugins/denial_top_bar/lib/denial_top_bar.dart",
+        "usr/share/denial/ui-development/workspace/plugins/denial_taskbar/lib/denial_taskbar.dart",
         "usr/share/denial/ui-development/workspace/protocol/generated/dart/pubspec.yaml",
         "usr/share/doc/denial-ui-development/BUILD_INFO.md",
         "usr/share/doc/denial-ui-development/FLUTTER_TOOL_BUILD_INFO.md",
@@ -1884,6 +2104,14 @@ fn validate_package(
         "usr/share/denial/ui-development/workspace/.git",
         "usr/share/denial/ui-development/workspace/dart_shell/.dart_tool",
         "usr/share/denial/ui-development/workspace/dart_shell/build",
+        "usr/share/denial/ui-development/workspace/packages/denial_sdk/.dart_tool",
+        "usr/share/denial/ui-development/workspace/packages/denial_sdk/build",
+        "usr/share/denial/ui-development/workspace/packages/denial_flutter_sdk/.dart_tool",
+        "usr/share/denial/ui-development/workspace/packages/denial_flutter_sdk/build",
+        "usr/share/denial/ui-development/workspace/plugins/denial_top_bar/.dart_tool",
+        "usr/share/denial/ui-development/workspace/plugins/denial_taskbar/.dart_tool",
+        "usr/share/denial/ui-development/workspace/plugins/denial_top_bar/build",
+        "usr/share/denial/ui-development/workspace/plugins/denial_taskbar/build",
     ] {
         let path = root.join(forbidden);
         if fs::symlink_metadata(&path).is_ok() {
@@ -1895,7 +2123,9 @@ fn validate_package(
     }
 
     let development_bytes = tree_bytes(&root.join("usr/lib/denial/ui-development"))?;
-    const MAX_DEVELOPMENT_BYTES: u64 = 608 * 1024 * 1024;
+    // The lock-matched 3.47.5 SDK and both development engines occupy 609.1 MiB.
+    // Retain a narrow ceiling while allowing this verified source generation.
+    const MAX_DEVELOPMENT_BYTES: u64 = 616 * 1024 * 1024;
     if development_bytes > MAX_DEVELOPMENT_BYTES {
         return Err(ToolError::new(format!(
             "development runtime is {}, above the {} size budget",

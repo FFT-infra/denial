@@ -43,7 +43,7 @@ verify-locks
   Pub JSON files describe their authoritative pubspec.lock files.
 
 refresh-pub-locks
-  Regenerate the three checked-in Pub JSON files. The Flutter source comes from
+  Regenerate the checked-in Pub JSON files. The Flutter source comes from
   DENIAL_FLUTTER_SOURCE_ROOT, the canonical source tree, or the locked Nix
   framework source in that order.
 
@@ -166,6 +166,15 @@ refresh_pub_locks() {
   write_pub_lock \
     "$ROOT/settings_app/pubspec.lock" \
     "$ROOT/nix/settings_app-pubspec-lock.json"
+  write_pub_lock \
+    "$ROOT/plugin_manager_app/pubspec.lock" \
+    "$ROOT/nix/plugin_manager_app-pubspec-lock.json"
+  write_pub_lock \
+    "$ROOT/polkit_app/pubspec.lock" \
+    "$ROOT/nix/polkit_app-pubspec-lock.json"
+  write_pub_lock \
+    "$ROOT/packages/denial_plugin_manager/pubspec.lock" \
+    "$ROOT/nix/plugin_manager_backend-pubspec-lock.json"
   write_flutter_pub_lock "$flutter_source"
   printf 'Refreshed Nix Pub locks from their authoritative YAML files.\n'
 }
@@ -211,6 +220,15 @@ verify_locks() {
   verify_pub_lock \
     "$ROOT/settings_app/pubspec.lock" \
     "$ROOT/nix/settings_app-pubspec-lock.json"
+  verify_pub_lock \
+    "$ROOT/plugin_manager_app/pubspec.lock" \
+    "$ROOT/nix/plugin_manager_app-pubspec-lock.json"
+  verify_pub_lock \
+    "$ROOT/polkit_app/pubspec.lock" \
+    "$ROOT/nix/polkit_app-pubspec-lock.json"
+  verify_pub_lock \
+    "$ROOT/packages/denial_plugin_manager/pubspec.lock" \
+    "$ROOT/nix/plugin_manager_backend-pubspec-lock.json"
   flutter_source="$(resolve_flutter_source)"
   test "$(sha256sum \
     "$flutter_source/packages/flutter_tools/pubspec.yaml" | awk '{print $1}')" = \
@@ -253,7 +271,6 @@ hash_from_expected_failure() {
 }
 
 refresh_engine_lock() {
-  local backup
   local depot_hash
   local engine_hash
   local flutter_hash
@@ -265,9 +282,11 @@ refresh_engine_lock() {
   require_command sha256sum
   require_command tr
   source_hash="$(sha256sum "$ENGINE_SOURCE_LOCK" | awk '{print $1}')"
-  backup="$(mktemp)"
-  cp -- "$NIX_ENGINE_LOCK" "$backup"
-  trap 'cp -- "$backup" "$NIX_ENGINE_LOCK"; rm -f -- "$backup"' EXIT
+  # EXIT can run after this function's local scope unwinds under `set -e`.
+  # Keep the backup alive until either the transaction commits or rollback runs.
+  DENIAL_NIX_LOCK_BACKUP="$(mktemp)"
+  cp -- "$NIX_ENGINE_LOCK" "$DENIAL_NIX_LOCK_BACKUP"
+  trap 'cp -- "$DENIAL_NIX_LOCK_BACKUP" "$NIX_ENGINE_LOCK"; rm -f -- "$DENIAL_NIX_LOCK_BACKUP"' EXIT
 
   replace_engine_lock \
     '.source_lock_sha256 = $source_hash
@@ -298,8 +317,9 @@ refresh_engine_lock() {
   nix build "$ROOT#denial-flutter-framework-source" \
     "$ROOT#denial-flutter-engine-source" --no-link --print-build-logs
   verify_engine_lock
-  rm -f -- "$backup"
+  rm -f -- "$DENIAL_NIX_LOCK_BACKUP"
   trap - EXIT
+  unset DENIAL_NIX_LOCK_BACKUP
   printf 'Refreshed and verified nix/flutter-engine-lock.json.\n'
 }
 

@@ -49,8 +49,8 @@ fi
 mapfile -d '' packages < <(
   find "$PACKAGE_ROOT" -maxdepth 1 -type f -name '*.rpm' -print0 | sort -z
 )
-((${#packages[@]} == 2)) \
-  || fail "expected two RPM packages, found ${#packages[@]}"
+((${#packages[@]} == 3)) \
+  || fail "expected three RPM packages, found ${#packages[@]}"
 
 repository_root="$OUTPUT_ROOT/fedora/44/x86_64"
 package_output="$repository_root/Packages"
@@ -72,7 +72,8 @@ for package in "${packages[@]}"; do
   package_name="$(rpm --dbpath "$rpm_query_db" -qp --qf '%{NAME}' "$package")"
   package_version="$(rpm --dbpath "$rpm_query_db" -qp --qf '%{VERSION}-%{RELEASE}' "$package")"
   package_arch="$(rpm --dbpath "$rpm_query_db" -qp --qf '%{ARCH}' "$package")"
-  [[ "$package_name" == denial || "$package_name" == denial-flutter-engine ]] \
+  [[ "$package_name" == denial || "$package_name" == denial-flutter-engine \
+    || "$package_name" == denial-plugin-manager ]] \
     || fail "unexpected RPM package: ${package_name:-unset}"
   [[ "$package_version" == "$VERSION-$RELEASE" ]] \
     || fail "$(basename -- "$package") has version $package_version"
@@ -95,11 +96,12 @@ for package in "${packages[@]}"; do
   "$ROOT/tools/verify-denial-package-payload" \
     rpm "$destination" "$expected_payload"
   "$ROOT/tools/verify-denial-native-package-metadata" \
-    rpm "$destination" "$VERSION" "$RELEASE" '3.44.7.denial1' 2.39
+    rpm "$destination" "$VERSION" "$RELEASE" '3.47.5.denial1' 2.39
   package_names+=("$package_name")
 done
 mapfile -t package_names < <(printf '%s\n' "${package_names[@]}" | sort)
-[[ "${package_names[*]}" == 'denial denial-flutter-engine' ]] \
+[[ "${package_names[*]}" == \
+  'denial denial-flutter-engine denial-plugin-manager' ]] \
   || fail 'RPM package set is incomplete'
 
 createrepo_c \

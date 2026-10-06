@@ -760,7 +760,7 @@ pub(super) struct FrameDeadlineBlocker {
 }
 
 impl FrameDeadlineBlocker {
-    fn new(deadline: Instant, epoch_guard: Arc<AtomicU64>, epoch: u64) -> Self {
+    pub(super) fn new(deadline: Instant, epoch_guard: Arc<AtomicU64>, epoch: u64) -> Self {
         Self {
             state: Arc::new(AtomicU8::new(DEADLINE_PENDING)),
             deadline,
@@ -987,6 +987,54 @@ fn duration_nanos(value: Duration) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn acquire_before_deadline_settles_target_once() {
+        let now = Instant::now();
+        let guard = Arc::new(AtomicU64::new(7));
+        let blocker = FrameDeadlineBlocker::new(now + Duration::from_secs(1), guard, 7);
+
+        assert_eq!(blocker.state(), BlockerState::Pending);
+        assert_eq!(blocker.release_if_on_time(now), Some(true));
+        assert_eq!(blocker.state(), BlockerState::Released);
+        assert!(!blocker.cancel_if_pending());
+        assert_eq!(blocker.release_if_on_time(now), None);
+    }
+
+    #[test]
+    fn acquire_at_or_after_deadline_cancels_target() {
+        let now = Instant::now();
+        for acquired_at in [now, now + Duration::from_nanos(1)] {
+            let blocker = FrameDeadlineBlocker::new(now, Arc::new(AtomicU64::new(7)), 7);
+            assert_eq!(blocker.release_if_on_time(acquired_at), Some(false));
+            assert_eq!(blocker.state(), BlockerState::Cancelled);
+            assert!(!blocker.cancel_if_pending());
+        }
+    }
+
+    #[test]
+    fn deadline_wins_if_dispatched_before_acquire() {
+        let now = Instant::now();
+        let blocker =
+            FrameDeadlineBlocker::new(now + Duration::from_secs(1), Arc::new(AtomicU64::new(7)), 7);
+
+        assert!(blocker.cancel_if_pending());
+        assert_eq!(blocker.state(), BlockerState::Cancelled);
+        assert_eq!(blocker.release_if_on_time(now), None);
+    }
+
+    #[test]
+    fn invalidated_epoch_cannot_release_target() {
+        let now = Instant::now();
+        let guard = Arc::new(AtomicU64::new(7));
+        let blocker =
+            FrameDeadlineBlocker::new(now + Duration::from_secs(1), Arc::clone(&guard), 7);
+        guard.store(8, Ordering::Release);
+
+        assert_eq!(blocker.state(), BlockerState::Cancelled);
+        assert_eq!(blocker.release_if_on_time(now), Some(false));
+        assert!(!blocker.cancel_if_pending());
+    }
 
     #[test]
     fn identity_conversion_preserves_all_bits() {

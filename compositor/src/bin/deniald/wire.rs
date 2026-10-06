@@ -146,6 +146,23 @@ pub enum WindowCommand {
         workspace_id: u8,
         follow: bool,
     },
+    /// Overview drop onto one workspace of an output, which may be hidden.
+    /// `geometry` is the dragged preview in that workspace's own coordinates;
+    /// its centre resolves to a layout-owned tile operation.
+    DropOnWorkspace {
+        window_id: u64,
+        monitor_id: i64,
+        workspace_id: u8,
+        geometry: WindowGeometry,
+    },
+    /// Plans [`WindowCommand::DropOnWorkspace`] without committing it. A
+    /// missing geometry ends the preview.
+    PreviewWorkspaceDrop {
+        window_id: u64,
+        monitor_id: i64,
+        workspace_id: u8,
+        geometry: Option<WindowGeometry>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -237,7 +254,9 @@ impl WindowCommand {
             Self::Close { window_id }
             | Self::Focus { window_id }
             | Self::Configure { window_id, .. }
-            | Self::MoveToWorkspace { window_id, .. } => Some(*window_id),
+            | Self::MoveToWorkspace { window_id, .. }
+            | Self::DropOnWorkspace { window_id, .. }
+            | Self::PreviewWorkspaceDrop { window_id, .. } => Some(*window_id),
         }
     }
 }
@@ -448,6 +467,9 @@ pub struct SurfaceLayerDescription {
     pub composition_order: u32,
     pub opacity: f32,
     pub opaque: bool,
+    /// A popup root's declared xdg window geometry in surface-local logical
+    /// coordinates, when it excludes part of the surface (a client shadow).
+    pub window_geometry: Option<WindowGeometry>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -465,6 +487,8 @@ pub struct CursorStateDescription {
     pub hotspot_x: f64,
     pub hotspot_y: f64,
     pub surfaces: Vec<SurfaceLayerDescription>,
+    pub drag_active: bool,
+    pub drag_surfaces: Vec<SurfaceLayerDescription>,
 }
 
 impl CursorStateDescription {
@@ -476,6 +500,8 @@ impl CursorStateDescription {
             hotspot_x: 0.0,
             hotspot_y: 0.0,
             surfaces: Vec::new(),
+            drag_active: false,
+            drag_surfaces: Vec::new(),
         }
     }
 
@@ -487,6 +513,8 @@ impl CursorStateDescription {
             hotspot_x: 0.0,
             hotspot_y: 0.0,
             surfaces: Vec::new(),
+            drag_active: false,
+            drag_surfaces: Vec::new(),
         }
     }
 }
@@ -675,6 +703,7 @@ pub struct WireBridge {
     work_area: WorkAreaOptions,
     windows: Vec<WindowDescription>,
     windows_revision: Option<u64>,
+    window_deltas: bool,
     restored_window_ids: Vec<u64>,
     active_workspaces: BTreeMap<i64, u8>,
     // Flutter copies platform-channel payloads during the synchronous engine
@@ -691,6 +720,7 @@ pub struct WireBridge {
     pending_xembed_tray_commands: VecDeque<XEmbedTrayCommand>,
     pending_settings_commands: VecDeque<SettingsCommand>,
     pending_theme_accent: Option<u32>,
+    pending_plugin_actions: Option<crate::plugin_actions::ActionCatalog>,
     pending_work_area: Option<WorkAreaOptions>,
     next_sequence: u64,
 }
@@ -717,6 +747,7 @@ impl WireBridge {
             work_area,
             windows: Vec::new(),
             windows_revision: None,
+            window_deltas: false,
             restored_window_ids: Vec::new(),
             active_workspaces,
             outbound_builder: FlatBufferBuilder::with_capacity(1024),
@@ -729,6 +760,7 @@ impl WireBridge {
             pending_xembed_tray_commands: VecDeque::new(),
             pending_settings_commands: VecDeque::new(),
             pending_theme_accent: None,
+            pending_plugin_actions: None,
             pending_work_area: None,
             next_sequence: 1,
         })
@@ -778,6 +810,10 @@ impl WireBridge {
     /// Takes the latest resolved shell accent. Theme state is intentionally
     /// last-writer-wins: wallpaper extraction and setting changes may finish
     /// in the same event-loop turn, and only the final color is observable.
+    pub fn take_plugin_actions(&mut self) -> Option<crate::plugin_actions::ActionCatalog> {
+        self.pending_plugin_actions.take()
+    }
+
     pub fn take_theme_accent(&mut self) -> Option<u32> {
         self.pending_theme_accent.take()
     }

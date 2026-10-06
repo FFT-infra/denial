@@ -51,6 +51,7 @@ if [[ -n "$PREPARED_STAGE" ]]; then
   PREPARED_STAGE="$(realpath -e -- "$PREPARED_STAGE")"
   [[ -d "$PREPARED_STAGE/denial" \
     && -d "$PREPARED_STAGE/denial-flutter-engine" \
+    && -d "$PREPARED_STAGE/denial-plugin-manager" \
     && -f "$PREPARED_STAGE/metadata.json" ]] \
     || fail "prepared Alpine stage is incomplete: $PREPARED_STAGE"
 elif [[ "${DENIAL_PROMOTION_MODE:-0}" == 1 ]]; then
@@ -78,11 +79,16 @@ readonly FLUTTER_ENGINE_ABI
   || fail 'Alpine package versions cannot contain a hyphen'
 [[ "$PACKAGE_RELEASE" =~ ^[0-9]+$ ]] \
   || fail 'package release must be numeric'
-if [[ "$PACKAGE_VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+)\.r([0-9]+)\.g[0-9a-f]{8}$ ]]; then
+if [[ "$PACKAGE_VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+)\.r([0-9]+)\.g[0-9a-f]{8}(\.dirty)?$ ]]; then
   # Alpine accepts its ordered _git suffix, but not Denial's cross-format
   # .rCOUNT.gCOMMIT development identity. The full source identity remains in
   # metadata and provenance; the APK version uses the monotonic commit count.
   APK_VERSION="${BASH_REMATCH[1]}_git${BASH_REMATCH[2]}"
+  # Keep local test builds distinct without putting an invalid `.dirty` suffix
+  # into APK versions. The complete dirty identity remains in staged metadata.
+  if [[ -n "${BASH_REMATCH[3]}" ]]; then
+    APK_VERSION+='_p0'
+  fi
 elif [[ "$PACKAGE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   APK_VERSION="$PACKAGE_VERSION"
 else
@@ -204,13 +210,14 @@ else
   # request only the actual build tools instead of the alpine-sdk metapackage.
   run_alpine online \
     /sbin/apk add --no-cache \
-    '!abuild-sudo' abuild build-base coreutils patchelf
+    '!abuild-sudo' abuild build-base coreutils patchelf python3
 fi
 
 for source_file in \
   APKBUILD \
   denial-alpine-session \
   denial-pthread-stack.c \
+  denial-plugin-kit-adapt.py \
   denial-resolver-bridge.c \
   denial-runtime-dirs \
   denial.desktop \
@@ -259,8 +266,8 @@ run_alpine offline \
 mapfile -d '' built_packages < <(
   find "$package_mount" -type f -name '*.apk' -print0 | sort -z
 )
-((${#built_packages[@]} == 2)) \
-  || fail "expected two APK outputs, found ${#built_packages[@]}"
+((${#built_packages[@]} == 3)) \
+  || fail "expected three APK outputs, found ${#built_packages[@]}"
 
 strip_signature() {
   local package="$1"
@@ -301,6 +308,7 @@ done
 expected_files=(
   "$PACKAGE_ROOT/denial-${APK_VERSION}-r${PACKAGE_RELEASE}.apk"
   "$PACKAGE_ROOT/denial-flutter-engine-${APK_VERSION}-r${PACKAGE_RELEASE}.apk"
+  "$PACKAGE_ROOT/denial-plugin-manager-${APK_VERSION}-r${PACKAGE_RELEASE}.apk"
 )
 for package in "${expected_files[@]}"; do
   [[ -f "$package" ]] || fail "expected APK is missing: $package"
@@ -333,14 +341,12 @@ if [[ -z "$PREPARED_STAGE" ]]; then
         | head -n 1
     )"
     case "$package_name" in
-      denial | denial-flutter-engine) ;;
+      denial | denial-flutter-engine | denial-plugin-manager) ;;
       *) fail "unexpected APK package name: ${package_name:-unset}" ;;
     esac
     install -d -m 0755 "$temporary_stage/$package_name"
-    bsdtar \
-      -xpf "$package" \
-      -C "$temporary_stage/$package_name" \
-      --exclude '.*'
+    "$ROOT/tools/extract-denial-apk-payload" \
+      "$package" "$temporary_stage/$package_name"
   done
   install -m 0644 "$NATIVE_STAGE/metadata.json" \
     "$temporary_stage/metadata.json"
@@ -354,7 +360,7 @@ if [[ -z "$PREPARED_STAGE" ]]; then
     printf 'native_package_version=%s\n' "$PACKAGE_VERSION"
     printf 'apk_package_version=%s\n' "$APK_VERSION"
   } >"$temporary_stage/adapter.txt"
-  for package_name in denial denial-flutter-engine; do
+  for package_name in denial denial-flutter-engine denial-plugin-manager; do
     write_manifest \
       "$temporary_stage/$package_name" \
       "$temporary_stage/$package_name.sha256"
@@ -425,7 +431,8 @@ fi
 printf '%s\n' \
   "Alpine ${ALPINE_VERSION} packages ready:" \
   "${expected_files[0]}" \
-  "${expected_files[1]}"
+  "${expected_files[1]}" \
+  "${expected_files[2]}"
 if [[ -z "$PREPARED_STAGE" ]]; then
   printf 'Adapted Alpine payload: %s\n' "$ALPINE_STAGE"
 fi

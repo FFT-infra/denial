@@ -1,8 +1,11 @@
+import 'package:denial_flutter_sdk/service_backends.dart'
+    show AuthenticationPacket, AuthenticationPacketKind;
+
 import 'dart:async';
 
-import 'package:denial_dart_shell/src/platform/authentication_protocol.dart';
-import 'package:denial_dart_shell/src/services/authentication_service.dart';
-import 'package:denial_dart_shell/src/state/authentication.dart';
+import 'package:denial_flutter_sdk/platform.dart';
+import 'package:denial_flutter_sdk/system_services.dart';
+import 'package:denial_flutter_sdk/state.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 

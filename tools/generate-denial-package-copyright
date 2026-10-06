@@ -38,7 +38,7 @@ case "$package_name" in
       append_license 'Creative Commons Attribution-ShareAlike 4.0' \
         "$ROOT/LICENSES/CC-BY-SA-4.0.txt"
       append_license 'SIL Open Font License 1.1' \
-        "$ROOT/dart_shell/assets/fonts/OFL.txt"
+        "$ROOT/packages/denial_flutter_sdk/assets/fonts/OFL.txt"
     } >"$output"
     ;;
   denial-flutter-engine)

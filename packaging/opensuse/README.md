@@ -13,7 +13,9 @@ RPMs are extracted and compared byte-for-byte with that shared payload.
 Outputs are written below
 `$XDG_CACHE_HOME/denial/pc-build/packages/opensuse/` by default.
 
-The two required packages are `denial-flutter-engine` and `denial`. Install a
+The two required desktop packages are `denial-flutter-engine` and `denial`.
+`denial-plugin-manager` is an optional third package for plugin development and
+installation; it checks for the compatible Dart SDK in `PATH`. Install a
 locally built pair together so Zypper can resolve their exact version lock:
 
 ```sh

@@ -318,10 +318,74 @@ pub(super) fn next_serial(serial: u64) -> u64 {
     }
 }
 
+#[cfg(feature = "flutter")]
+fn is_wallpaper_layer(
+    kind: super::wire::WindowContentKind,
+    size: (f64, f64),
+    output_size: Option<(u32, u32)>,
+) -> bool {
+    use super::wire::WindowContentKind;
+    match kind {
+        WindowContentKind::LayerShellBackground => true,
+        // Bottom-layer docks are not wallpapers. Only output-sized clients
+        // belong here. Surface coordinates are local, not desktop coordinates.
+        WindowContentKind::LayerShellBottom => output_size.is_some_and(|(width, height)| {
+            width > 0 && height > 0 && size.0 >= f64::from(width) && size.1 >= f64::from(height)
+        }),
+        _ => false,
+    }
+}
+
+#[cfg(all(test, feature = "flutter"))]
+mod wallpaper_status_tests {
+    use super::is_wallpaper_layer;
+    use crate::wire::WindowContentKind::*;
+
+    #[test]
+    fn wallpapers_exclude_docks_and_fullscreen_application_windows() {
+        let output = Some((1920, 1080));
+        assert!(is_wallpaper_layer(
+            LayerShellBackground,
+            (1920.0, 1080.0),
+            output
+        ));
+        assert!(is_wallpaper_layer(
+            LayerShellBottom,
+            (1920.0, 1080.0),
+            output
+        ));
+        assert!(!is_wallpaper_layer(
+            LayerShellBottom,
+            (1920.0, 48.0),
+            output
+        ));
+        assert!(!is_wallpaper_layer(SurfaceTree, (1920.0, 1080.0), output));
+        assert!(!is_wallpaper_layer(
+            LayerShellOverlay,
+            (1920.0, 1080.0),
+            output
+        ));
+        assert!(!is_wallpaper_layer(
+            LayerShellBottom,
+            (1920.0, 1080.0),
+            None
+        ));
+    }
+}
+
+/// A mapped desktop background supplied by a Wayland client. This can be a
+/// still-image client too; the protocol deliberately does not claim animation.
+#[derive(Clone, Debug, Serialize)]
+struct WallpaperSurface {
+    monitor_id: i64,
+    app_id: String,
+}
+
 #[derive(Clone)]
 pub(super) struct OutputControlPublisher {
     snapshot: Arc<RwLock<OutputControlSnapshot>>,
     settings_documents: SettingsDocumentPublisher,
+    wallpaper: Arc<RwLock<Option<Vec<WallpaperSurface>>>>,
 }
 
 impl OutputControlPublisher {
@@ -332,6 +396,7 @@ impl OutputControlPublisher {
     ) -> Self {
         Self {
             snapshot: Arc::new(RwLock::new(OutputControlSnapshot::new(initial))),
+            wallpaper: Arc::new(RwLock::new(None)),
             settings_documents: SettingsDocumentPublisher::new(
                 settings_revision,
                 settings_document,
@@ -372,6 +437,47 @@ impl OutputControlPublisher {
         let snapshot = self.publish(build_state()?);
         *dirty = false;
         Ok(Some(snapshot))
+    }
+
+    /// Metadata only: never copy or capture wallpaper pixels for Settings.
+    #[cfg(feature = "flutter")]
+    pub(super) fn publish_wallpaper(&self, windows: &[super::wire::WindowDescription]) {
+        let outputs = self
+            .snapshot
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let surfaces = windows
+            .iter()
+            .filter(|window| {
+                let output_size = outputs
+                    .outputs
+                    .iter()
+                    .find(|output| output.monitor_id == window.monitor_id)
+                    .map(|output| (output.logical_width, output.logical_height));
+                is_wallpaper_layer(
+                    window.content_kind,
+                    (window.surface_width, window.surface_height),
+                    output_size,
+                ) && !window.minimized
+                    && window.opacity > 0.0
+            })
+            .map(|window| WallpaperSurface {
+                monitor_id: window.monitor_id,
+                app_id: window.app_id.clone(),
+            })
+            .collect();
+        *self
+            .wallpaper
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(surfaces);
+    }
+
+    fn wallpaper_status(&self) -> Value {
+        let surfaces = self
+            .wallpaper
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        json!({"available": surfaces.is_some(), "surfaces": surfaces.as_deref().unwrap_or_default()})
     }
 
     pub(super) fn settings_document_revision(&self) -> u64 {
@@ -1056,6 +1162,7 @@ fn handle_connection(
 
     let response = match request.method.as_str() {
         "outputs.get" => success_response(request.id, publisher.snapshot()),
+        "wallpaper.status" => success_response(request.id, publisher.wallpaper_status()),
         "outputs.apply" => {
             let configuration =
                 match serde_json::from_value::<ApplyOutputConfiguration>(request.params) {
@@ -1571,6 +1678,24 @@ fn handle_connection(
             false,
             events,
         ),
+        "ui.activate" => {
+            let parameters = match serde_json::from_value::<UiWorkspaceParams>(request.params) {
+                Ok(parameters) => parameters,
+                Err(error) => {
+                    return write_response(
+                        &mut stream,
+                        &error_response(Some(request.id), "invalid_params", error.to_string()),
+                    );
+                }
+            };
+            queue_ui_development(
+                request.id,
+                UiDevelopmentCommandKind::ActivatePluginBundle,
+                Some(parameters.path),
+                false,
+                events,
+            )
+        }
         "ui.workspace.set" => {
             let parameters = match serde_json::from_value::<UiWorkspaceParams>(request.params) {
                 Ok(parameters) => parameters,

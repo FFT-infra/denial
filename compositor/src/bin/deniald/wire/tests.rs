@@ -123,6 +123,40 @@ fn workspace_request(
     builder.finished_data().to_vec()
 }
 
+fn workspace_drop_request(
+    window_id: u64,
+    monitor_id: i64,
+    workspace_id: u32,
+    flags: u32,
+    geometry: Option<fb::WireRect>,
+) -> Vec<u8> {
+    let mut builder = FlatBufferBuilder::new();
+    let request = fb::WindowRequest::create(
+        &mut builder,
+        &fb::WindowRequestArgs {
+            kind: fb::WindowRequestKind::MoveWindowToWorkspace,
+            window_id,
+            geometry: geometry.as_ref(),
+            monitor_id,
+            workspace_id,
+            flags,
+            ..Default::default()
+        },
+    );
+    let envelope = fb::Envelope::create(
+        &mut builder,
+        &fb::EnvelopeArgs {
+            protocol_version: PROTOCOL_VERSION,
+            sequence: 4,
+            request_id: 0,
+            payload_type: fb::Payload::WindowRequest,
+            payload: Some(request.as_union_value()),
+        },
+    );
+    fb::finish_envelope_buffer(&mut builder, envelope);
+    builder.finished_data().to_vec()
+}
+
 fn system_bar_request(
     side: fb::SystemBarSide,
     monitor_ids: &[i64],
@@ -282,6 +316,83 @@ fn workspace_requests_preserve_monitor_membership_and_follow_policy() {
             },
         ]
     );
+}
+
+#[test]
+fn workspace_drops_resolve_on_one_output_and_previews_end_without_geometry() {
+    let geometry = fb::WireRect::new(100.0, 200.0, 800.0, 600.0);
+    let expected = WindowGeometry {
+        x: 100.0,
+        y: 200.0,
+        width: 800.0,
+        height: 600.0,
+    };
+    let mut bridge = bridge();
+    for request in [
+        workspace_drop_request(42, 7, 3, 2, Some(geometry)),
+        workspace_drop_request(42, 7, 3, 4, Some(geometry)),
+        workspace_drop_request(42, 7, 3, 4, None),
+    ] {
+        assert!(bridge.handle(&request).unwrap().is_none());
+    }
+    assert_eq!(
+        bridge.drain_window_commands().collect::<Vec<_>>(),
+        vec![
+            WindowCommand::DropOnWorkspace {
+                window_id: 42,
+                monitor_id: 7,
+                workspace_id: 3,
+                geometry: expected,
+            },
+            WindowCommand::PreviewWorkspaceDrop {
+                window_id: 42,
+                monitor_id: 7,
+                workspace_id: 3,
+                geometry: Some(expected),
+            },
+            WindowCommand::PreviewWorkspaceDrop {
+                window_id: 42,
+                monitor_id: 7,
+                workspace_id: 3,
+                geometry: None,
+            },
+        ]
+    );
+
+    assert!(matches!(
+        bridge.handle(&workspace_drop_request(42, 7, 3, 2, None)),
+        Err(WireError::Geometry)
+    ));
+    assert!(matches!(
+        bridge.handle(&workspace_drop_request(42, -1, 3, 2, Some(geometry))),
+        Err(WireError::Identity)
+    ));
+    // Scrolling strips extend left of their output.
+    assert!(
+        bridge
+            .handle(&workspace_drop_request(
+                42,
+                7,
+                3,
+                4,
+                Some(fb::WireRect::new(-1_200.0, 300.0, 2.0, 2.0)),
+            ))
+            .unwrap()
+            .is_none()
+    );
+    assert!(matches!(
+        bridge.drain_window_commands().next(),
+        Some(WindowCommand::PreviewWorkspaceDrop {
+            geometry: Some(WindowGeometry { x: -1_200.0, .. }),
+            ..
+        })
+    ));
+    for flags in [3, 6, 8] {
+        assert!(matches!(
+            bridge.handle(&workspace_drop_request(42, 7, 3, flags, Some(geometry))),
+            Err(WireError::Flags)
+        ));
+    }
 }
 
 #[test]
@@ -581,18 +692,22 @@ fn encodes_atomic_cursor_states_and_rejects_invalid_values_without_sequence_gaps
         hotspot_x: 0.0,
         hotspot_y: 0.0,
         surfaces: Vec::new(),
+        drag_active: false,
+        drag_surfaces: Vec::new(),
     };
     assert!(matches!(
         bridge.encode_cursor_state(&invalid_named),
         Err(WireError::Payload)
     ));
 
-    let state = CursorStateDescription {
+    let mut state = CursorStateDescription {
         epoch: 27,
         kind: CursorStateKind::Surface,
         shape: String::new(),
         hotspot_x: 4.5,
         hotspot_y: 7.25,
+        drag_active: false,
+        drag_surfaces: Vec::new(),
         surfaces: vec![SurfaceLayerDescription {
             surface_id: 91,
             parent_surface_id: 0,
@@ -614,6 +729,7 @@ fn encodes_atomic_cursor_states_and_rejects_invalid_values_without_sequence_gaps
             composition_order: 0,
             opacity: 1.0,
             opaque: false,
+            window_geometry: None,
         }],
     };
     let bytes = bridge.encode_cursor_state(&state).unwrap();
@@ -643,6 +759,83 @@ fn encodes_atomic_cursor_states_and_rejects_invalid_values_without_sequence_gaps
         envelope.payload_as_cursor_state().unwrap().shape(),
         Some("text")
     );
+
+    // Drag textures can accompany a themed cursor. A subsurface tree and
+    // negative attachment offset survive the same atomic cursor epoch.
+    let mut root = state.surfaces[0].clone();
+    root.surface_id = 92;
+    root.texture_id = 502;
+    root.surface_x = -12.0;
+    root.surface_y = -18.0;
+    let mut child = root.clone();
+    child.surface_id = 93;
+    child.texture_id = 503;
+    child.parent_surface_id = 92;
+    child.role = SurfaceRoleDescription::Subsurface;
+    child.surface_x = 3.0;
+    child.surface_y = 4.0;
+    child.composition_order = 1;
+    state = CursorStateDescription {
+        epoch: 29,
+        drag_active: true,
+        drag_surfaces: vec![root, child],
+        ..CursorStateDescription::named("default")
+    };
+    let bytes = bridge.encode_cursor_state(&state).unwrap();
+    let cursor = fb::root_as_envelope(bytes)
+        .unwrap()
+        .payload_as_cursor_state()
+        .unwrap();
+    assert_eq!(cursor.epoch(), 29);
+    assert!(cursor.drag_active());
+    assert_eq!(cursor.kind(), fb::CursorStateKind::Named);
+    assert!(cursor.surfaces().unwrap().is_empty());
+    let drag = cursor.drag_surfaces().unwrap();
+    assert_eq!(drag.len(), 2);
+    assert_eq!(drag.get(0).surface_x(), -12.0);
+    assert_eq!(drag.get(0).surface_y(), -18.0);
+    assert_eq!(drag.get(0).transform(), 0);
+    assert_eq!(drag.get(0).scale_120(), 240);
+    assert_eq!(drag.get(1).parent_surface_id(), 92);
+
+    let mut invalid = state.clone();
+    invalid.drag_active = false;
+    assert!(matches!(
+        bridge.encode_cursor_state(&invalid),
+        Err(WireError::Payload)
+    ));
+    invalid = state.clone();
+    invalid.drag_surfaces[1].parent_surface_id = 99;
+    assert!(matches!(
+        bridge.encode_cursor_state(&invalid),
+        Err(WireError::Payload)
+    ));
+    invalid = state.clone();
+    invalid.drag_surfaces[1].surface_id = 92;
+    assert!(matches!(
+        bridge.encode_cursor_state(&invalid),
+        Err(WireError::Payload)
+    ));
+
+    // A drag need not supply artwork; completion/cancellation clears both
+    // the active flag and the texture tree without leaving a stale icon.
+    state.epoch += 1;
+    state.drag_surfaces.clear();
+    let bytes = bridge.encode_cursor_state(&state).unwrap();
+    let cursor = fb::root_as_envelope(bytes)
+        .unwrap()
+        .payload_as_cursor_state()
+        .unwrap();
+    assert!(cursor.drag_active());
+    assert!(cursor.drag_surfaces().unwrap().is_empty());
+    state.epoch += 1;
+    state.drag_active = false;
+    let bytes = bridge.encode_cursor_state(&state).unwrap();
+    let envelope = fb::root_as_envelope(bytes).unwrap();
+    let cursor = envelope.payload_as_cursor_state().unwrap();
+    assert!(!cursor.drag_active());
+    assert!(cursor.drag_surfaces().unwrap().is_empty());
+    assert_eq!(envelope.sequence(), 5);
 }
 
 #[test]
@@ -703,4 +896,235 @@ fn malformed_truncated_and_mutated_corpus_never_panics() {
         }
         exercise(&bytes);
     }
+}
+
+fn scene_window(id: u64) -> WindowDescription {
+    WindowDescription {
+        object_id: id,
+        surface_id: id,
+        window_id: id,
+        texture_id: id,
+        title: format!("window {id}"),
+        app_id: "test".into(),
+        width: 100,
+        height: 80,
+        surface_x: 0.0,
+        surface_y: 0.0,
+        surface_width: 100.0,
+        surface_height: 80.0,
+        texture_source_x: 0.0,
+        texture_source_y: 0.0,
+        texture_source_width: 100.0,
+        texture_source_height: 80.0,
+        geometry_x: 0.0,
+        geometry_y: 0.0,
+        geometry_width: 100.0,
+        geometry_height: 80.0,
+        monitor_id: 9,
+        workspace_id: 1,
+        transient_parent_id: 0,
+        minimized: false,
+        fullscreen: false,
+        maximized: false,
+        pinned: false,
+        transform: 0,
+        scale_120: 120,
+        content_x: 0.0,
+        content_y: 0.0,
+        content_width: 100.0,
+        content_height: 80.0,
+        surfaces: vec![],
+        suppress_animations: false,
+        server_side_decorated: true,
+        opacity: 1.0,
+        content_kind: WindowContentKind::SurfaceTree,
+        opacity_class: WindowOpacityClass::FullyOpaque,
+    }
+}
+
+#[test]
+fn metadata_updates_suppress_identical_snapshots_even_at_new_revisions() {
+    let mut bridge = bridge();
+    let windows = vec![scene_window(1), scene_window(2)];
+    assert!(
+        bridge
+            .update_windows(1, windows.clone(), &BTreeSet::new())
+            .unwrap()
+            .0
+            .is_some()
+    );
+    assert!(
+        bridge
+            .update_windows(2, windows, &BTreeSet::new())
+            .unwrap()
+            .0
+            .is_none()
+    );
+    assert_eq!(bridge.windows_revision, Some(2));
+}
+
+#[test]
+fn negotiated_window_deltas_preserve_order_removals_and_restored_state() {
+    let mut bridge = bridge();
+    let mut windows = vec![scene_window(1), scene_window(2)];
+    bridge
+        .update_windows(1, windows.clone(), &BTreeSet::new())
+        .unwrap();
+    let mut builder = FlatBufferBuilder::new();
+    let req = fb::WindowRequest::create(
+        &mut builder,
+        &fb::WindowRequestArgs {
+            window_deltas: true,
+            ..Default::default()
+        },
+    );
+    let envelope = fb::Envelope::create(
+        &mut builder,
+        &fb::EnvelopeArgs {
+            protocol_version: PROTOCOL_VERSION,
+            sequence: 1,
+            request_id: 1,
+            payload_type: fb::Payload::WindowRequest,
+            payload: Some(req.as_union_value()),
+        },
+    );
+    fb::finish_envelope_buffer(&mut builder, envelope);
+    let full = bridge.handle(builder.finished_data()).unwrap().unwrap();
+    let full = fb::root_as_envelope(full)
+        .unwrap()
+        .payload_as_window_response()
+        .unwrap()
+        .windows()
+        .unwrap();
+    assert!(!full.delta());
+    assert_eq!(full.windows().unwrap().len(), 2);
+
+    windows[1].title = "updated".into();
+    let (bytes, _) = bridge
+        .update_windows(2, windows.clone(), &BTreeSet::new())
+        .unwrap();
+    let update = fb::root_as_envelope(bytes.unwrap())
+        .unwrap()
+        .payload_as_window_snapshot()
+        .unwrap();
+    assert!(update.delta());
+    assert_eq!(update.windows().unwrap().len(), 1);
+    assert_eq!(update.windows().unwrap().get(0).window_id(), 2);
+    assert_eq!(
+        update.window_order().unwrap().iter().collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+
+    windows.reverse();
+    let (bytes, _) = bridge
+        .update_windows(3, windows.clone(), &BTreeSet::new())
+        .unwrap();
+    let update = fb::root_as_envelope(bytes.unwrap())
+        .unwrap()
+        .payload_as_window_snapshot()
+        .unwrap();
+    assert_eq!(update.windows().unwrap().len(), 0);
+    assert_eq!(
+        update.window_order().unwrap().iter().collect::<Vec<_>>(),
+        vec![2, 1]
+    );
+
+    let (bytes, _) = bridge
+        .update_windows(4, windows, &BTreeSet::from([1]))
+        .unwrap();
+    let update = fb::root_as_envelope(bytes.unwrap())
+        .unwrap()
+        .payload_as_window_snapshot()
+        .unwrap();
+    assert_eq!(update.windows().unwrap().get(0).window_id(), 1);
+    assert_eq!(update.restored_window_ids().unwrap().get(0), 1);
+
+    let (bytes, _) = bridge.update_windows(5, vec![], &BTreeSet::new()).unwrap();
+    let update = fb::root_as_envelope(bytes.unwrap())
+        .unwrap()
+        .payload_as_window_snapshot()
+        .unwrap();
+    assert!(update.delta());
+    assert_eq!(update.window_order().unwrap().len(), 0);
+}
+
+#[test]
+fn legacy_window_readers_continue_receiving_full_snapshots() {
+    let mut bridge = bridge();
+    bridge
+        .update_windows(1, vec![scene_window(1)], &BTreeSet::new())
+        .unwrap();
+    let (bytes, _) = bridge
+        .update_windows(2, vec![scene_window(1), scene_window(2)], &BTreeSet::new())
+        .unwrap();
+    let update = fb::root_as_envelope(bytes.unwrap())
+        .unwrap()
+        .payload_as_window_snapshot()
+        .unwrap();
+    assert!(!update.delta());
+    assert_eq!(update.windows().unwrap().len(), 2);
+}
+
+#[test]
+fn plugin_action_transport_preserves_catalog_ids_and_generations() {
+    let mut bridge = bridge();
+    let mut builder = FlatBufferBuilder::new();
+    let json = r#"[{"id":"external.run","label":"Run","description":"","provider":"External"}]"#;
+    let descriptors = builder.create_string(json);
+    let catalog = fb::PluginActionCatalog::create(
+        &mut builder,
+        &fb::PluginActionCatalogArgs {
+            generation: 42,
+            actions_json: Some(descriptors),
+        },
+    );
+    let envelope = fb::Envelope::create(
+        &mut builder,
+        &fb::EnvelopeArgs {
+            protocol_version: PROTOCOL_VERSION,
+            sequence: 1,
+            request_id: 0,
+            payload_type: fb::Payload::PluginActionCatalog,
+            payload: Some(catalog.as_union_value()),
+        },
+    );
+    fb::finish_envelope_buffer(&mut builder, envelope);
+    assert!(bridge.handle(builder.finished_data()).unwrap().is_none());
+    let catalog = bridge.take_plugin_actions().unwrap();
+    assert_eq!(catalog.generation, 42);
+    assert!(catalog.contains("external.run"));
+    assert!(bridge.take_plugin_actions().is_none());
+    let bindings = [ShortcutBinding {
+        shortcut: "Super".into(),
+        target: ShortcutTarget::PluginAction {
+            id: "external.run".into(),
+        },
+    }];
+    let bytes = bridge
+        .encode_shortcut_configuration_response(1, 5, &bindings, &[], &catalog, None)
+        .unwrap();
+    let envelope = fb::root_as_envelope(bytes).unwrap();
+    let configuration = envelope
+        .payload_as_settings_response()
+        .unwrap()
+        .shortcuts()
+        .unwrap();
+    assert_eq!(configuration.action_generation(), 42);
+    let binding = configuration.shortcuts().unwrap().get(0);
+    assert_eq!(
+        binding
+            .target_as_shortcut_plugin_action_target()
+            .unwrap()
+            .id(),
+        Some("external.run")
+    );
+    assert_eq!(configuration.plugin_actions_json(), Some(json));
+    let bytes = bridge
+        .encode_plugin_action(42, "external.run", Some(9))
+        .unwrap();
+    let envelope = fb::root_as_envelope(bytes).unwrap();
+    let invocation = envelope.payload_as_plugin_action_invocation().unwrap();
+    assert_eq!(invocation.generation(), 42);
+    assert_eq!(invocation.id(), Some("external.run"));
+    assert_eq!(invocation.monitor_id(), 9);
 }

@@ -569,7 +569,12 @@ enum ShortcutActionKind {
   MoveToWorkspace7(50),
   MoveToWorkspace8(51),
   MoveToWorkspace9(52),
-  ToggleWindowAlwaysOnTop(53);
+  ToggleWindowAlwaysOnTop(53),
+  ResizeGrowWidth(54),
+  ResizeShrinkWidth(55),
+  ResizeGrowHeight(56),
+  ResizeShrinkHeight(57),
+  ResetWindowHeight(58);
 
   final int value;
   const ShortcutActionKind(this.value);
@@ -630,6 +635,11 @@ enum ShortcutActionKind {
       case 51: return ShortcutActionKind.MoveToWorkspace8;
       case 52: return ShortcutActionKind.MoveToWorkspace9;
       case 53: return ShortcutActionKind.ToggleWindowAlwaysOnTop;
+      case 54: return ShortcutActionKind.ResizeGrowWidth;
+      case 55: return ShortcutActionKind.ResizeShrinkWidth;
+      case 56: return ShortcutActionKind.ResizeGrowHeight;
+      case 57: return ShortcutActionKind.ResizeShrinkHeight;
+      case 58: return ShortcutActionKind.ResetWindowHeight;
       default: throw StateError('Invalid value $value for bit flag enum');
     }
   }
@@ -638,7 +648,7 @@ enum ShortcutActionKind {
       value == null ? null : ShortcutActionKind.fromValue(value);
 
   static const int minValue = 0;
-  static const int maxValue = 53;
+  static const int maxValue = 58;
   static const fb.Reader<ShortcutActionKind> reader = _ShortcutActionKindReader();
 }
 
@@ -1031,7 +1041,8 @@ enum ShortcutTargetTypeId {
   NONE(0),
   ShortcutDenialActionTarget(1),
   ShortcutSpawnTarget(2),
-  ShortcutSpawnShTarget(3);
+  ShortcutSpawnShTarget(3),
+  ShortcutPluginActionTarget(4);
 
   final int value;
   const ShortcutTargetTypeId(this.value);
@@ -1042,6 +1053,7 @@ enum ShortcutTargetTypeId {
       case 1: return ShortcutTargetTypeId.ShortcutDenialActionTarget;
       case 2: return ShortcutTargetTypeId.ShortcutSpawnTarget;
       case 3: return ShortcutTargetTypeId.ShortcutSpawnShTarget;
+      case 4: return ShortcutTargetTypeId.ShortcutPluginActionTarget;
       default: throw StateError('Invalid value $value for bit flag enum');
     }
   }
@@ -1050,7 +1062,7 @@ enum ShortcutTargetTypeId {
       value == null ? null : ShortcutTargetTypeId.fromValue(value);
 
   static const int minValue = 0;
-  static const int maxValue = 3;
+  static const int maxValue = 4;
   static const fb.Reader<ShortcutTargetTypeId> reader = _ShortcutTargetTypeIdReader();
 }
 
@@ -1085,7 +1097,9 @@ enum PayloadTypeId {
   XEmbedTrayEvent(16),
   XEmbedTrayCommand(17),
   ThemeState(18),
-  CursorState(19);
+  CursorState(19),
+  PluginActionCatalog(20),
+  PluginActionInvocation(21);
 
   final int value;
   const PayloadTypeId(this.value);
@@ -1112,6 +1126,8 @@ enum PayloadTypeId {
       case 17: return PayloadTypeId.XEmbedTrayCommand;
       case 18: return PayloadTypeId.ThemeState;
       case 19: return PayloadTypeId.CursorState;
+      case 20: return PayloadTypeId.PluginActionCatalog;
+      case 21: return PayloadTypeId.PluginActionInvocation;
       default: throw StateError('Invalid value $value for bit flag enum');
     }
   }
@@ -1120,7 +1136,7 @@ enum PayloadTypeId {
       value == null ? null : PayloadTypeId.fromValue(value);
 
   static const int minValue = 0;
-  static const int maxValue = 19;
+  static const int maxValue = 21;
   static const fb.Reader<PayloadTypeId> reader = _PayloadTypeIdReader();
 }
 
@@ -1605,10 +1621,11 @@ class SurfaceLayer {
   int get compositionOrder => const fb.Uint32Reader().vTableGet(_bc, _bcOffset, 38, 0);
   double get opacity => const fb.Float32Reader().vTableGet(_bc, _bcOffset, 40, 1.0);
   bool get opaque => const fb.BoolReader().vTableGet(_bc, _bcOffset, 42, false);
+  WireRect? get windowGeometry => WireRect.reader.vTableGetNullable(_bc, _bcOffset, 44);
 
   @override
   String toString() {
-    return 'SurfaceLayer{surfaceId: ${surfaceId}, parentSurfaceId: ${parentSurfaceId}, popupRootSurfaceId: ${popupRootSurfaceId}, role: ${role}, textureId: ${textureId}, width: ${width}, height: ${height}, surfaceX: ${surfaceX}, surfaceY: ${surfaceY}, surfaceWidth: ${surfaceWidth}, surfaceHeight: ${surfaceHeight}, textureSourceX: ${textureSourceX}, textureSourceY: ${textureSourceY}, textureSourceWidth: ${textureSourceWidth}, textureSourceHeight: ${textureSourceHeight}, transform: ${transform}, scale120: ${scale120}, compositionOrder: ${compositionOrder}, opacity: ${opacity}, opaque: ${opaque}}';
+    return 'SurfaceLayer{surfaceId: ${surfaceId}, parentSurfaceId: ${parentSurfaceId}, popupRootSurfaceId: ${popupRootSurfaceId}, role: ${role}, textureId: ${textureId}, width: ${width}, height: ${height}, surfaceX: ${surfaceX}, surfaceY: ${surfaceY}, surfaceWidth: ${surfaceWidth}, surfaceHeight: ${surfaceHeight}, textureSourceX: ${textureSourceX}, textureSourceY: ${textureSourceY}, textureSourceWidth: ${textureSourceWidth}, textureSourceHeight: ${textureSourceHeight}, transform: ${transform}, scale120: ${scale120}, compositionOrder: ${compositionOrder}, opacity: ${opacity}, opaque: ${opaque}, windowGeometry: ${windowGeometry}}';
   }
 }
 
@@ -1626,7 +1643,7 @@ class SurfaceLayerBuilder {
   final fb.Builder fbBuilder;
 
   void begin() {
-    fbBuilder.startTable(20);
+    fbBuilder.startTable(21);
   }
 
   int addSurfaceId(int? surfaceId) {
@@ -1709,6 +1726,10 @@ class SurfaceLayerBuilder {
     fbBuilder.addBool(19, opaque);
     return fbBuilder.offset;
   }
+  int addWindowGeometry(int offset) {
+    fbBuilder.addStruct(20, offset);
+    return fbBuilder.offset;
+  }
 
   int finish() {
     return fbBuilder.endTable();
@@ -1736,6 +1757,7 @@ class SurfaceLayerObjectBuilder extends fb.ObjectBuilder {
   final int? _compositionOrder;
   final double? _opacity;
   final bool? _opaque;
+  final WireRectObjectBuilder? _windowGeometry;
 
   SurfaceLayerObjectBuilder({
     int? surfaceId,
@@ -1758,6 +1780,7 @@ class SurfaceLayerObjectBuilder extends fb.ObjectBuilder {
     int? compositionOrder,
     double? opacity,
     bool? opaque,
+    WireRectObjectBuilder? windowGeometry,
   })
       : _surfaceId = surfaceId,
         _parentSurfaceId = parentSurfaceId,
@@ -1778,12 +1801,13 @@ class SurfaceLayerObjectBuilder extends fb.ObjectBuilder {
         _scale120 = scale120,
         _compositionOrder = compositionOrder,
         _opacity = opacity,
-        _opaque = opaque;
+        _opaque = opaque,
+        _windowGeometry = windowGeometry;
 
   /// Finish building, and store into the [fbBuilder].
   @override
   int finish(fb.Builder fbBuilder) {
-    fbBuilder.startTable(20);
+    fbBuilder.startTable(21);
     fbBuilder.addUint64(0, _surfaceId);
     fbBuilder.addUint64(1, _parentSurfaceId);
     fbBuilder.addUint64(2, _popupRootSurfaceId);
@@ -1804,6 +1828,9 @@ class SurfaceLayerObjectBuilder extends fb.ObjectBuilder {
     fbBuilder.addUint32(17, _compositionOrder);
     fbBuilder.addFloat32(18, _opacity);
     fbBuilder.addBool(19, _opaque);
+    if (_windowGeometry != null) {
+      fbBuilder.addStruct(20, _windowGeometry!.finish(fbBuilder));
+    }
     return fbBuilder.endTable();
   }
 
@@ -2275,10 +2302,12 @@ class WindowSnapshot {
 
   List<Window>? get windows => const fb.ListReader<Window>(Window.reader).vTableGetNullable(_bc, _bcOffset, 4);
   List<int>? get restoredWindowIds => const fb.ListReader<int>(fb.Uint64Reader()).vTableGetNullable(_bc, _bcOffset, 6);
+  bool get delta => const fb.BoolReader().vTableGet(_bc, _bcOffset, 8, false);
+  List<int>? get windowOrder => const fb.ListReader<int>(fb.Uint64Reader()).vTableGetNullable(_bc, _bcOffset, 10);
 
   @override
   String toString() {
-    return 'WindowSnapshot{windows: ${windows}, restoredWindowIds: ${restoredWindowIds}}';
+    return 'WindowSnapshot{windows: ${windows}, restoredWindowIds: ${restoredWindowIds}, delta: ${delta}, windowOrder: ${windowOrder}}';
   }
 }
 
@@ -2296,7 +2325,7 @@ class WindowSnapshotBuilder {
   final fb.Builder fbBuilder;
 
   void begin() {
-    fbBuilder.startTable(2);
+    fbBuilder.startTable(4);
   }
 
   int addWindowsOffset(int? offset) {
@@ -2305,6 +2334,14 @@ class WindowSnapshotBuilder {
   }
   int addRestoredWindowIdsOffset(int? offset) {
     fbBuilder.addOffset(1, offset);
+    return fbBuilder.offset;
+  }
+  int addDelta(bool? delta) {
+    fbBuilder.addBool(2, delta);
+    return fbBuilder.offset;
+  }
+  int addWindowOrderOffset(int? offset) {
+    fbBuilder.addOffset(3, offset);
     return fbBuilder.offset;
   }
 
@@ -2316,13 +2353,19 @@ class WindowSnapshotBuilder {
 class WindowSnapshotObjectBuilder extends fb.ObjectBuilder {
   final List<WindowObjectBuilder>? _windows;
   final List<int>? _restoredWindowIds;
+  final bool? _delta;
+  final List<int>? _windowOrder;
 
   WindowSnapshotObjectBuilder({
     List<WindowObjectBuilder>? windows,
     List<int>? restoredWindowIds,
+    bool? delta,
+    List<int>? windowOrder,
   })
       : _windows = windows,
-        _restoredWindowIds = restoredWindowIds;
+        _restoredWindowIds = restoredWindowIds,
+        _delta = delta,
+        _windowOrder = windowOrder;
 
   /// Finish building, and store into the [fbBuilder].
   @override
@@ -2331,9 +2374,13 @@ class WindowSnapshotObjectBuilder extends fb.ObjectBuilder {
         : fbBuilder.writeList(_windows!.map((b) => b.getOrCreateOffset(fbBuilder)).toList());
     final int? restoredWindowIdsOffset = _restoredWindowIds == null ? null
         : fbBuilder.writeListUint64(_restoredWindowIds!);
-    fbBuilder.startTable(2);
+    final int? windowOrderOffset = _windowOrder == null ? null
+        : fbBuilder.writeListUint64(_windowOrder!);
+    fbBuilder.startTable(4);
     fbBuilder.addOffset(0, windowsOffset);
     fbBuilder.addOffset(1, restoredWindowIdsOffset);
+    fbBuilder.addBool(2, _delta);
+    fbBuilder.addOffset(3, windowOrderOffset);
     return fbBuilder.endTable();
   }
 
@@ -2691,10 +2738,11 @@ class WindowRequest {
   int get workspaceId => const fb.Uint32Reader().vTableGet(_bc, _bcOffset, 22, 1);
   double get systemBarThickness => const fb.Float64Reader().vTableGet(_bc, _bcOffset, 24, -1.0);
   double get maximizePadding => const fb.Float64Reader().vTableGet(_bc, _bcOffset, 26, -1.0);
+  bool get windowDeltas => const fb.BoolReader().vTableGet(_bc, _bcOffset, 28, false);
 
   @override
   String toString() {
-    return 'WindowRequest{kind: ${kind}, windowId: ${windowId}, geometry: ${geometry}, appId: ${appId}, title: ${title}, systemBarSide: ${systemBarSide}, systemBarMonitorIds: ${systemBarMonitorIds}, flags: ${flags}, monitorId: ${monitorId}, workspaceId: ${workspaceId}, systemBarThickness: ${systemBarThickness}, maximizePadding: ${maximizePadding}}';
+    return 'WindowRequest{kind: ${kind}, windowId: ${windowId}, geometry: ${geometry}, appId: ${appId}, title: ${title}, systemBarSide: ${systemBarSide}, systemBarMonitorIds: ${systemBarMonitorIds}, flags: ${flags}, monitorId: ${monitorId}, workspaceId: ${workspaceId}, systemBarThickness: ${systemBarThickness}, maximizePadding: ${maximizePadding}, windowDeltas: ${windowDeltas}}';
   }
 }
 
@@ -2712,7 +2760,7 @@ class WindowRequestBuilder {
   final fb.Builder fbBuilder;
 
   void begin() {
-    fbBuilder.startTable(12);
+    fbBuilder.startTable(13);
   }
 
   int addKind(WindowRequestKind? kind) {
@@ -2763,6 +2811,10 @@ class WindowRequestBuilder {
     fbBuilder.addFloat64(11, maximizePadding);
     return fbBuilder.offset;
   }
+  int addWindowDeltas(bool? windowDeltas) {
+    fbBuilder.addBool(12, windowDeltas);
+    return fbBuilder.offset;
+  }
 
   int finish() {
     return fbBuilder.endTable();
@@ -2782,6 +2834,7 @@ class WindowRequestObjectBuilder extends fb.ObjectBuilder {
   final int? _workspaceId;
   final double? _systemBarThickness;
   final double? _maximizePadding;
+  final bool? _windowDeltas;
 
   WindowRequestObjectBuilder({
     WindowRequestKind? kind,
@@ -2796,6 +2849,7 @@ class WindowRequestObjectBuilder extends fb.ObjectBuilder {
     int? workspaceId,
     double? systemBarThickness,
     double? maximizePadding,
+    bool? windowDeltas,
   })
       : _kind = kind,
         _windowId = windowId,
@@ -2808,7 +2862,8 @@ class WindowRequestObjectBuilder extends fb.ObjectBuilder {
         _monitorId = monitorId,
         _workspaceId = workspaceId,
         _systemBarThickness = systemBarThickness,
-        _maximizePadding = maximizePadding;
+        _maximizePadding = maximizePadding,
+        _windowDeltas = windowDeltas;
 
   /// Finish building, and store into the [fbBuilder].
   @override
@@ -2819,7 +2874,7 @@ class WindowRequestObjectBuilder extends fb.ObjectBuilder {
         : fbBuilder.writeString(_title!);
     final int? systemBarMonitorIdsOffset = _systemBarMonitorIds == null ? null
         : fbBuilder.writeListInt64(_systemBarMonitorIds!);
-    fbBuilder.startTable(12);
+    fbBuilder.startTable(13);
     fbBuilder.addUint8(0, _kind?.value);
     fbBuilder.addUint64(1, _windowId);
     if (_geometry != null) {
@@ -2834,6 +2889,7 @@ class WindowRequestObjectBuilder extends fb.ObjectBuilder {
     fbBuilder.addUint32(9, _workspaceId);
     fbBuilder.addFloat64(10, _systemBarThickness);
     fbBuilder.addFloat64(11, _maximizePadding);
+    fbBuilder.addBool(12, _windowDeltas);
     return fbBuilder.endTable();
   }
 
@@ -3242,10 +3298,12 @@ class CursorState {
   String? get shape => const fb.StringReader().vTableGetNullable(_bc, _bcOffset, 8);
   WirePoint? get hotspot => WirePoint.reader.vTableGetNullable(_bc, _bcOffset, 10);
   List<SurfaceLayer>? get surfaces => const fb.ListReader<SurfaceLayer>(SurfaceLayer.reader).vTableGetNullable(_bc, _bcOffset, 12);
+  bool get dragActive => const fb.BoolReader().vTableGet(_bc, _bcOffset, 14, false);
+  List<SurfaceLayer>? get dragSurfaces => const fb.ListReader<SurfaceLayer>(SurfaceLayer.reader).vTableGetNullable(_bc, _bcOffset, 16);
 
   @override
   String toString() {
-    return 'CursorState{epoch: ${epoch}, kind: ${kind}, shape: ${shape}, hotspot: ${hotspot}, surfaces: ${surfaces}}';
+    return 'CursorState{epoch: ${epoch}, kind: ${kind}, shape: ${shape}, hotspot: ${hotspot}, surfaces: ${surfaces}, dragActive: ${dragActive}, dragSurfaces: ${dragSurfaces}}';
   }
 }
 
@@ -3263,7 +3321,7 @@ class CursorStateBuilder {
   final fb.Builder fbBuilder;
 
   void begin() {
-    fbBuilder.startTable(5);
+    fbBuilder.startTable(7);
   }
 
   int addEpoch(int? epoch) {
@@ -3286,6 +3344,14 @@ class CursorStateBuilder {
     fbBuilder.addOffset(4, offset);
     return fbBuilder.offset;
   }
+  int addDragActive(bool? dragActive) {
+    fbBuilder.addBool(5, dragActive);
+    return fbBuilder.offset;
+  }
+  int addDragSurfacesOffset(int? offset) {
+    fbBuilder.addOffset(6, offset);
+    return fbBuilder.offset;
+  }
 
   int finish() {
     return fbBuilder.endTable();
@@ -3298,6 +3364,8 @@ class CursorStateObjectBuilder extends fb.ObjectBuilder {
   final String? _shape;
   final WirePointObjectBuilder? _hotspot;
   final List<SurfaceLayerObjectBuilder>? _surfaces;
+  final bool? _dragActive;
+  final List<SurfaceLayerObjectBuilder>? _dragSurfaces;
 
   CursorStateObjectBuilder({
     int? epoch,
@@ -3305,12 +3373,16 @@ class CursorStateObjectBuilder extends fb.ObjectBuilder {
     String? shape,
     WirePointObjectBuilder? hotspot,
     List<SurfaceLayerObjectBuilder>? surfaces,
+    bool? dragActive,
+    List<SurfaceLayerObjectBuilder>? dragSurfaces,
   })
       : _epoch = epoch,
         _kind = kind,
         _shape = shape,
         _hotspot = hotspot,
-        _surfaces = surfaces;
+        _surfaces = surfaces,
+        _dragActive = dragActive,
+        _dragSurfaces = dragSurfaces;
 
   /// Finish building, and store into the [fbBuilder].
   @override
@@ -3319,7 +3391,9 @@ class CursorStateObjectBuilder extends fb.ObjectBuilder {
         : fbBuilder.writeString(_shape!);
     final int? surfacesOffset = _surfaces == null ? null
         : fbBuilder.writeList(_surfaces!.map((b) => b.getOrCreateOffset(fbBuilder)).toList());
-    fbBuilder.startTable(5);
+    final int? dragSurfacesOffset = _dragSurfaces == null ? null
+        : fbBuilder.writeList(_dragSurfaces!.map((b) => b.getOrCreateOffset(fbBuilder)).toList());
+    fbBuilder.startTable(7);
     fbBuilder.addUint64(0, _epoch);
     fbBuilder.addUint8(1, _kind?.value);
     fbBuilder.addOffset(2, shapeOffset);
@@ -3327,6 +3401,8 @@ class CursorStateObjectBuilder extends fb.ObjectBuilder {
       fbBuilder.addStruct(3, _hotspot!.finish(fbBuilder));
     }
     fbBuilder.addOffset(4, surfacesOffset);
+    fbBuilder.addBool(5, _dragActive);
+    fbBuilder.addOffset(6, dragSurfacesOffset);
     return fbBuilder.endTable();
   }
 
@@ -3922,6 +3998,79 @@ class ShortcutDenialActionTargetObjectBuilder extends fb.ObjectBuilder {
     return fbBuilder.buffer;
   }
 }
+class ShortcutPluginActionTarget {
+  ShortcutPluginActionTarget._(this._bc, this._bcOffset);
+  factory ShortcutPluginActionTarget(List<int> bytes) {
+    final rootRef = fb.BufferContext.fromBytes(bytes);
+    return reader.read(rootRef, 0);
+  }
+
+  static const fb.Reader<ShortcutPluginActionTarget> reader = _ShortcutPluginActionTargetReader();
+
+  final fb.BufferContext _bc;
+  final int _bcOffset;
+
+  String? get id => const fb.StringReader().vTableGetNullable(_bc, _bcOffset, 4);
+
+  @override
+  String toString() {
+    return 'ShortcutPluginActionTarget{id: ${id}}';
+  }
+}
+
+class _ShortcutPluginActionTargetReader extends fb.TableReader<ShortcutPluginActionTarget> {
+  const _ShortcutPluginActionTargetReader();
+
+  @override
+  ShortcutPluginActionTarget createObject(fb.BufferContext bc, int offset) => 
+    ShortcutPluginActionTarget._(bc, offset);
+}
+
+class ShortcutPluginActionTargetBuilder {
+  ShortcutPluginActionTargetBuilder(this.fbBuilder);
+
+  final fb.Builder fbBuilder;
+
+  void begin() {
+    fbBuilder.startTable(1);
+  }
+
+  int addIdOffset(int? offset) {
+    fbBuilder.addOffset(0, offset);
+    return fbBuilder.offset;
+  }
+
+  int finish() {
+    return fbBuilder.endTable();
+  }
+}
+
+class ShortcutPluginActionTargetObjectBuilder extends fb.ObjectBuilder {
+  final String? _id;
+
+  ShortcutPluginActionTargetObjectBuilder({
+    String? id,
+  })
+      : _id = id;
+
+  /// Finish building, and store into the [fbBuilder].
+  @override
+  int finish(fb.Builder fbBuilder) {
+    final int? idOffset = _id == null ? null
+        : fbBuilder.writeString(_id!);
+    fbBuilder.startTable(1);
+    fbBuilder.addOffset(0, idOffset);
+    return fbBuilder.endTable();
+  }
+
+  /// Convenience method to serialize to byte list.
+  @override
+  Uint8List toBytes([String? fileIdentifier]) {
+    final fbBuilder = fb.Builder(deduplicateTables: false);
+    fbBuilder.finish(finish(fbBuilder), fileIdentifier);
+    return fbBuilder.buffer;
+  }
+}
 class ShortcutSpawnTarget {
   ShortcutSpawnTarget._(this._bc, this._bcOffset);
   factory ShortcutSpawnTarget(List<int> bytes) {
@@ -4098,6 +4247,7 @@ class ShortcutBinding {
       case 1: return ShortcutDenialActionTarget.reader.vTableGetNullable(_bc, _bcOffset, 8);
       case 2: return ShortcutSpawnTarget.reader.vTableGetNullable(_bc, _bcOffset, 8);
       case 3: return ShortcutSpawnShTarget.reader.vTableGetNullable(_bc, _bcOffset, 8);
+      case 4: return ShortcutPluginActionTarget.reader.vTableGetNullable(_bc, _bcOffset, 8);
       default: return null;
     }
   }
@@ -4295,10 +4445,12 @@ class ShortcutConfiguration {
   List<ShortcutBinding>? get shortcuts => const fb.ListReader<ShortcutBinding>(ShortcutBinding.reader).vTableGetNullable(_bc, _bcOffset, 4);
   List<ShortcutActionKind>? get supportedActions => const fb.ListReader<ShortcutActionKind>(ShortcutActionKind.reader).vTableGetNullable(_bc, _bcOffset, 6);
   List<ShortcutInput>? get supportedInputs => const fb.ListReader<ShortcutInput>(ShortcutInput.reader).vTableGetNullable(_bc, _bcOffset, 8);
+  String? get pluginActionsJson => const fb.StringReader().vTableGetNullable(_bc, _bcOffset, 10);
+  int get actionGeneration => const fb.Uint64Reader().vTableGet(_bc, _bcOffset, 12, 0);
 
   @override
   String toString() {
-    return 'ShortcutConfiguration{shortcuts: ${shortcuts}, supportedActions: ${supportedActions}, supportedInputs: ${supportedInputs}}';
+    return 'ShortcutConfiguration{shortcuts: ${shortcuts}, supportedActions: ${supportedActions}, supportedInputs: ${supportedInputs}, pluginActionsJson: ${pluginActionsJson}, actionGeneration: ${actionGeneration}}';
   }
 }
 
@@ -4316,7 +4468,7 @@ class ShortcutConfigurationBuilder {
   final fb.Builder fbBuilder;
 
   void begin() {
-    fbBuilder.startTable(3);
+    fbBuilder.startTable(5);
   }
 
   int addShortcutsOffset(int? offset) {
@@ -4331,6 +4483,14 @@ class ShortcutConfigurationBuilder {
     fbBuilder.addOffset(2, offset);
     return fbBuilder.offset;
   }
+  int addPluginActionsJsonOffset(int? offset) {
+    fbBuilder.addOffset(3, offset);
+    return fbBuilder.offset;
+  }
+  int addActionGeneration(int? actionGeneration) {
+    fbBuilder.addUint64(4, actionGeneration);
+    return fbBuilder.offset;
+  }
 
   int finish() {
     return fbBuilder.endTable();
@@ -4341,15 +4501,21 @@ class ShortcutConfigurationObjectBuilder extends fb.ObjectBuilder {
   final List<ShortcutBindingObjectBuilder>? _shortcuts;
   final List<ShortcutActionKind>? _supportedActions;
   final List<ShortcutInputObjectBuilder>? _supportedInputs;
+  final String? _pluginActionsJson;
+  final int? _actionGeneration;
 
   ShortcutConfigurationObjectBuilder({
     List<ShortcutBindingObjectBuilder>? shortcuts,
     List<ShortcutActionKind>? supportedActions,
     List<ShortcutInputObjectBuilder>? supportedInputs,
+    String? pluginActionsJson,
+    int? actionGeneration,
   })
       : _shortcuts = shortcuts,
         _supportedActions = supportedActions,
-        _supportedInputs = supportedInputs;
+        _supportedInputs = supportedInputs,
+        _pluginActionsJson = pluginActionsJson,
+        _actionGeneration = actionGeneration;
 
   /// Finish building, and store into the [fbBuilder].
   @override
@@ -4360,10 +4526,14 @@ class ShortcutConfigurationObjectBuilder extends fb.ObjectBuilder {
         : fbBuilder.writeListUint8(_supportedActions!.map((f) => f.value).toList());
     final int? supportedInputsOffset = _supportedInputs == null ? null
         : fbBuilder.writeList(_supportedInputs!.map((b) => b.getOrCreateOffset(fbBuilder)).toList());
-    fbBuilder.startTable(3);
+    final int? pluginActionsJsonOffset = _pluginActionsJson == null ? null
+        : fbBuilder.writeString(_pluginActionsJson!);
+    fbBuilder.startTable(5);
     fbBuilder.addOffset(0, shortcutsOffset);
     fbBuilder.addOffset(1, supportedActionsOffset);
     fbBuilder.addOffset(2, supportedInputsOffset);
+    fbBuilder.addOffset(3, pluginActionsJsonOffset);
+    fbBuilder.addUint64(4, _actionGeneration);
     return fbBuilder.endTable();
   }
 
@@ -6112,6 +6282,179 @@ class ThemeStateObjectBuilder extends fb.ObjectBuilder {
     return fbBuilder.buffer;
   }
 }
+class PluginActionCatalog {
+  PluginActionCatalog._(this._bc, this._bcOffset);
+  factory PluginActionCatalog(List<int> bytes) {
+    final rootRef = fb.BufferContext.fromBytes(bytes);
+    return reader.read(rootRef, 0);
+  }
+
+  static const fb.Reader<PluginActionCatalog> reader = _PluginActionCatalogReader();
+
+  final fb.BufferContext _bc;
+  final int _bcOffset;
+
+  int get generation => const fb.Uint64Reader().vTableGet(_bc, _bcOffset, 4, 0);
+  String? get actionsJson => const fb.StringReader().vTableGetNullable(_bc, _bcOffset, 6);
+
+  @override
+  String toString() {
+    return 'PluginActionCatalog{generation: ${generation}, actionsJson: ${actionsJson}}';
+  }
+}
+
+class _PluginActionCatalogReader extends fb.TableReader<PluginActionCatalog> {
+  const _PluginActionCatalogReader();
+
+  @override
+  PluginActionCatalog createObject(fb.BufferContext bc, int offset) => 
+    PluginActionCatalog._(bc, offset);
+}
+
+class PluginActionCatalogBuilder {
+  PluginActionCatalogBuilder(this.fbBuilder);
+
+  final fb.Builder fbBuilder;
+
+  void begin() {
+    fbBuilder.startTable(2);
+  }
+
+  int addGeneration(int? generation) {
+    fbBuilder.addUint64(0, generation);
+    return fbBuilder.offset;
+  }
+  int addActionsJsonOffset(int? offset) {
+    fbBuilder.addOffset(1, offset);
+    return fbBuilder.offset;
+  }
+
+  int finish() {
+    return fbBuilder.endTable();
+  }
+}
+
+class PluginActionCatalogObjectBuilder extends fb.ObjectBuilder {
+  final int? _generation;
+  final String? _actionsJson;
+
+  PluginActionCatalogObjectBuilder({
+    int? generation,
+    String? actionsJson,
+  })
+      : _generation = generation,
+        _actionsJson = actionsJson;
+
+  /// Finish building, and store into the [fbBuilder].
+  @override
+  int finish(fb.Builder fbBuilder) {
+    final int? actionsJsonOffset = _actionsJson == null ? null
+        : fbBuilder.writeString(_actionsJson!);
+    fbBuilder.startTable(2);
+    fbBuilder.addUint64(0, _generation);
+    fbBuilder.addOffset(1, actionsJsonOffset);
+    return fbBuilder.endTable();
+  }
+
+  /// Convenience method to serialize to byte list.
+  @override
+  Uint8List toBytes([String? fileIdentifier]) {
+    final fbBuilder = fb.Builder(deduplicateTables: false);
+    fbBuilder.finish(finish(fbBuilder), fileIdentifier);
+    return fbBuilder.buffer;
+  }
+}
+class PluginActionInvocation {
+  PluginActionInvocation._(this._bc, this._bcOffset);
+  factory PluginActionInvocation(List<int> bytes) {
+    final rootRef = fb.BufferContext.fromBytes(bytes);
+    return reader.read(rootRef, 0);
+  }
+
+  static const fb.Reader<PluginActionInvocation> reader = _PluginActionInvocationReader();
+
+  final fb.BufferContext _bc;
+  final int _bcOffset;
+
+  int get generation => const fb.Uint64Reader().vTableGet(_bc, _bcOffset, 4, 0);
+  String? get id => const fb.StringReader().vTableGetNullable(_bc, _bcOffset, 6);
+  int get monitorId => const fb.Int64Reader().vTableGet(_bc, _bcOffset, 8, -1);
+
+  @override
+  String toString() {
+    return 'PluginActionInvocation{generation: ${generation}, id: ${id}, monitorId: ${monitorId}}';
+  }
+}
+
+class _PluginActionInvocationReader extends fb.TableReader<PluginActionInvocation> {
+  const _PluginActionInvocationReader();
+
+  @override
+  PluginActionInvocation createObject(fb.BufferContext bc, int offset) => 
+    PluginActionInvocation._(bc, offset);
+}
+
+class PluginActionInvocationBuilder {
+  PluginActionInvocationBuilder(this.fbBuilder);
+
+  final fb.Builder fbBuilder;
+
+  void begin() {
+    fbBuilder.startTable(3);
+  }
+
+  int addGeneration(int? generation) {
+    fbBuilder.addUint64(0, generation);
+    return fbBuilder.offset;
+  }
+  int addIdOffset(int? offset) {
+    fbBuilder.addOffset(1, offset);
+    return fbBuilder.offset;
+  }
+  int addMonitorId(int? monitorId) {
+    fbBuilder.addInt64(2, monitorId);
+    return fbBuilder.offset;
+  }
+
+  int finish() {
+    return fbBuilder.endTable();
+  }
+}
+
+class PluginActionInvocationObjectBuilder extends fb.ObjectBuilder {
+  final int? _generation;
+  final String? _id;
+  final int? _monitorId;
+
+  PluginActionInvocationObjectBuilder({
+    int? generation,
+    String? id,
+    int? monitorId,
+  })
+      : _generation = generation,
+        _id = id,
+        _monitorId = monitorId;
+
+  /// Finish building, and store into the [fbBuilder].
+  @override
+  int finish(fb.Builder fbBuilder) {
+    final int? idOffset = _id == null ? null
+        : fbBuilder.writeString(_id!);
+    fbBuilder.startTable(3);
+    fbBuilder.addUint64(0, _generation);
+    fbBuilder.addOffset(1, idOffset);
+    fbBuilder.addInt64(2, _monitorId);
+    return fbBuilder.endTable();
+  }
+
+  /// Convenience method to serialize to byte list.
+  @override
+  Uint8List toBytes([String? fileIdentifier]) {
+    final fbBuilder = fb.Builder(deduplicateTables: false);
+    fbBuilder.finish(finish(fbBuilder), fileIdentifier);
+    return fbBuilder.buffer;
+  }
+}
 class Envelope {
   Envelope._(this._bc, this._bcOffset);
   factory Envelope(List<int> bytes) {
@@ -6149,6 +6492,8 @@ class Envelope {
       case 17: return XembedTrayCommand.reader.vTableGetNullable(_bc, _bcOffset, 12);
       case 18: return ThemeState.reader.vTableGetNullable(_bc, _bcOffset, 12);
       case 19: return CursorState.reader.vTableGetNullable(_bc, _bcOffset, 12);
+      case 20: return PluginActionCatalog.reader.vTableGetNullable(_bc, _bcOffset, 12);
+      case 21: return PluginActionInvocation.reader.vTableGetNullable(_bc, _bcOffset, 12);
       default: return null;
     }
   }

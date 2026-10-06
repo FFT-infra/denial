@@ -108,12 +108,13 @@ apt_options=(
 )
 apt-get "${apt_options[@]}" update
 apt_names="$(
-  apt-cache "${apt_options[@]}" show denial denial-flutter-engine \
+  apt-cache "${apt_options[@]}" show \
+    denial denial-flutter-engine denial-plugin-manager \
     | awk '/^Package: / { print $2 }' \
     | sort -u \
     | paste -sd' ' -
 )"
-[[ "$apt_names" == 'denial denial-flutter-engine' ]] \
+[[ "$apt_names" == 'denial denial-flutter-engine denial-plugin-manager' ]] \
   || fail "APT resolved the wrong package set: $apt_names"
 
 printf '\n' >>"$work_root/apt/dists/trixie/Release"

@@ -43,8 +43,8 @@ fi
 mapfile -d '' packages < <(
   find "$PACKAGE_ROOT" -maxdepth 1 -type f -name '*.deb' -print0 | sort -z
 )
-((${#packages[@]} == 2)) \
-  || fail "expected two Debian packages, found ${#packages[@]}"
+((${#packages[@]} == 3)) \
+  || fail "expected three Debian packages, found ${#packages[@]}"
 
 pool_root="$OUTPUT_ROOT/pool/main/d/denial"
 install -d -m 0755 "$pool_root"
@@ -53,7 +53,8 @@ for package in "${packages[@]}"; do
   package_name="$(dpkg-deb --field "$package" Package)"
   package_version="$(dpkg-deb --field "$package" Version)"
   package_arch="$(dpkg-deb --field "$package" Architecture)"
-  [[ "$package_name" == denial || "$package_name" == denial-flutter-engine ]] \
+  [[ "$package_name" == denial || "$package_name" == denial-flutter-engine \
+    || "$package_name" == denial-plugin-manager ]] \
     || fail "unexpected Debian package: ${package_name:-unset}"
   [[ "$package_version" == "$VERSION-$RELEASE" ]] \
     || fail "$(basename -- "$package") has version $package_version"
@@ -63,7 +64,8 @@ for package in "${packages[@]}"; do
   package_names+=("$package_name")
 done
 mapfile -t package_names < <(printf '%s\n' "${package_names[@]}" | sort)
-[[ "${package_names[*]}" == 'denial denial-flutter-engine' ]] \
+[[ "${package_names[*]}" == \
+  'denial denial-flutter-engine denial-plugin-manager' ]] \
   || fail 'Debian package set is incomplete'
 
 for suite in trixie noble; do
@@ -78,7 +80,7 @@ for suite in trixie noble; do
   xz --threads=1 -9e --stdout "$binary_root/Packages" \
     >"$binary_root/Packages.xz"
 
-  [[ "$(grep -c '^Package: ' "$binary_root/Packages")" == 2 ]] \
+  [[ "$(grep -c '^Package: ' "$binary_root/Packages")" == 3 ]] \
     || fail "$suite Packages index has the wrong package count"
   for package in "${packages[@]}"; do
     filename="pool/main/d/denial/$(basename -- "$package")"

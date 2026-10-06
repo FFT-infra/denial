@@ -1,24 +1,24 @@
 {
   "schema_version": 1,
-  "source_lock_sha256": "7d5c1cd7c3b4811bf39f5f78938e7085d128bc4493d5be4c5d323325845979b0",
+  "source_lock_sha256": "d4f9fe3b21eea50e7b22177e97a09c9933b095967ccacea5e3e33275ec428583",
   "flutter": {
-    "revision": "d0817320163b3fb5a284e63cc21f2d6b9138442b",
-    "hash": "sha256-k7tdgQM221bMSFeYp4IZIIZUlzfvAaWgQ/hGkewoOXU="
+    "revision": "8ccaca769f497d5cb5e376e12d7e053d6adb6b2d",
+    "hash": "sha256-IQSGqrVy+SMS7P03AVHUcMgNRlDmTiAZButy9+HSsmw="
   },
   "skia": {
-    "revision": "0ee042f542b3e79f5ac49115387718c6bb3d7d34"
+    "revision": "5b495e3e15a59ee76af882d83316d351654c1e88"
   },
   "depot_tools": {
     "revision": "580b4ff3f5cd0dcaa2eacda28cefe0f45320e8f7",
     "hash": "sha256-k+XQSYJQYc9vAUjwrRxaAlX/sK74W45m5byS31hSpwc="
   },
   "engine": {
-    "revision": "69c8c61792f04cc809dfef0c910414fb9afc06cd",
-    "source_hash": "sha256-kDaDwXX8pjpZEDRlj7GP8Ii/8a85RXWYXbbzGIkW9Js="
+    "revision": "af7e796e161ae0bb1ff0758c71a7105418bd9ded",
+    "source_hash": "sha256-h7Rond9nStRszAWdelg9PvU5uU9oQO0gnkFBPv9f1To="
   },
   "dart": {
-    "version": "3.12.2",
-    "hash": "sha256-KOR7RM8HXzZ3EEbAaLsNF0IBz5x2CHRK7RzCMgQpnC0="
+    "version": "3.13.4",
+    "hash": "sha256-ZIehDfXquJDXRtFKVfTHC+w8HAYz9RgE61BMvA/Dlbs="
   },
   "swiftshader": {
     "revision": "794b0cfce1d828d187637e6d932bae484fbe0976",

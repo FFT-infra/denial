@@ -104,15 +104,18 @@ pub(super) fn synchronize_sleep_transition(scanouts: &[Scanout], events: &mut Ru
                 .collect::<Vec<_>>();
             let requests = events.sleep_transition.prepare(outputs);
             events.queue_idle_power_requests(requests);
-            info!("secured the session and queued display power-off before system sleep");
+            info!("queued display power-off before system sleep");
         }
         system_controls::SleepTransition::Resumed => {
             // PrepareForSleep(false) can also report a failed sleep. Remaining
-            // locked is the fail-closed result in either case.
+            // locked is the fail-closed result when an unlock method exists.
             ensure_session_locked(events);
+            // Opening the lid often ends the sleep, and some lid drivers report
+            // no toggle on resume.
+            events.lid.request_reading();
             let requests = events.sleep_transition.resume();
             events.queue_idle_power_requests(requests);
-            info!("queued locked display restoration after system sleep");
+            info!("queued display restoration after system sleep");
         }
     }
 }
@@ -139,7 +142,7 @@ pub(super) fn release_sleep_delay_if_ready(scanouts: &[Scanout], events: &mut Ru
 fn ensure_session_locked(events: &mut RuntimeState) {
     if let Some(authentication) = events.authentication.as_ref() {
         if !authentication.locked() {
-            authentication.lock();
+            authentication.lock_automatically();
         }
         // Close Wayland input routing in this turn, before releasing logind or
         // allowing any later Flutter work to observe the transition.

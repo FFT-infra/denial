@@ -99,6 +99,12 @@ verify_deb() {
       done
       grep -Fxq './usr/share/doc/denial/copyright' <<<"$payload_listing" \
         || fail 'Debian package has no policy copyright file'
+      grep -Fxq './usr/lib/denial/flutter/.denial-ui-source.json' \
+        <<<"$payload_listing" \
+        || fail 'Debian package lacks its source identity'
+      if grep -Fq './usr/bin/denial-plugin-manager' <<<"$payload_listing"; then
+        fail 'Debian package embeds the Plugin Manager'
+      fi
       for portal_artifact in \
         ./usr/bin/denial-portal \
         ./usr/lib/systemd/user/denial-portal.service \
@@ -120,6 +126,25 @@ verify_deb() {
       )"
       grep -Fqx 'org.freedesktop.impl.portal.Settings=denial;gtk' <<<"$routing" \
         || fail 'Debian package does not route Settings through Denial with GTK fallback'
+      ;;
+    denial-plugin-manager)
+      has_deb_relation "$package_dependencies" "denial (= $expected_version)" \
+        || fail 'Debian Plugin Manager has the wrong exact Denial dependency'
+      for plugin_artifact in \
+        ./usr/bin/denial-plugins \
+        ./usr/bin/denial-plugins.installation.json \
+        ./usr/lib/denial/plugin-manager/denial-plugin-manager.installation.json \
+        ./usr/bin/denial-plugin-manager \
+        ./usr/lib/denial/plugin-manager/lib/libapp.so \
+        ./usr/lib/denial/plugin-build-kit/kit.json \
+        ./usr/share/applications/dev.denial.PluginManager.desktop; do
+        grep -Fxq "$plugin_artifact" <<<"$payload_listing" \
+          || fail "Debian Plugin Manager lacks $plugin_artifact"
+      done
+      if grep -Fq './usr/lib/denial/plugin-build-kit/flutter/bin/cache/dart-sdk/' \
+          <<<"$payload_listing"; then
+        fail 'Debian Plugin Manager embeds the Dart SDK'
+      fi
       ;;
     denial-flutter-engine)
       has_deb_relation "$package_dependencies" "libc6 (>= $glibc_baseline)" \
@@ -182,7 +207,7 @@ verify_rpm() {
         <<<"$requirements" \
         || fail 'Denial RPM has the wrong exact engine dependency'
       if grep -Eq '^libflutter_linux_gtk\.so' <<<"$requirements"; then
-        fail 'Denial RPM requires its bundled private Flutter GTK library'
+        fail 'Denial RPM unexpectedly depends on a Flutter GTK runner'
       fi
       grep -Fxq rtkit <<<"$requirements" \
         || fail 'Denial RPM does not require rtkit'
@@ -204,10 +229,15 @@ verify_rpm() {
       done
       grep -Fxq /usr/share/doc/denial/copyright <<<"$package_files" \
         || fail 'Denial RPM has no package copyright file'
+      grep -Fxq /usr/lib/denial/flutter/.denial-ui-source.json \
+        <<<"$package_files" || fail 'Denial RPM lacks its source identity'
+      if grep -Fxq /usr/bin/denial-plugin-manager <<<"$package_files"; then
+        fail 'Denial RPM embeds the Plugin Manager'
+      fi
       grep -Fxq \
-        /usr/lib/denial/settings/lib/libflutter_linux_gtk.so \
+        /usr/lib/denial/settings/lib/libflutter_engine.so \
         <<<"$package_files" \
-        || fail 'Denial RPM lacks the private Flutter GTK settings runtime'
+        || fail 'Denial RPM lacks the raw Flutter settings engine'
       for portal_artifact in \
         /usr/bin/denial-portal \
         /usr/lib/systemd/user/denial-portal.service \
@@ -233,6 +263,27 @@ verify_rpm() {
       if grep -Fq 'mark-restart-user-units denial-session.target' \
           <<<"$scripts"; then
         fail 'Denial RPM restarts the graphical session target during upgrades'
+      fi
+      ;;
+    denial-plugin-manager)
+      [[ "$package_epoch" == '(none)' ]] \
+        || fail 'Plugin Manager RPM unexpectedly has an epoch'
+      grep -Fxq "denial = $expected_version" <<<"$requirements" \
+        || fail 'Plugin Manager RPM has the wrong exact Denial dependency'
+      for plugin_artifact in \
+        /usr/bin/denial-plugins \
+        /usr/bin/denial-plugins.installation.json \
+        /usr/lib/denial/plugin-manager/denial-plugin-manager.installation.json \
+        /usr/bin/denial-plugin-manager \
+        /usr/lib/denial/plugin-manager/lib/libapp.so \
+        /usr/lib/denial/plugin-build-kit/kit.json \
+        /usr/share/applications/dev.denial.PluginManager.desktop; do
+        grep -Fxq "$plugin_artifact" <<<"$package_files" \
+          || fail "Plugin Manager RPM lacks $plugin_artifact"
+      done
+      if grep -Fq '/usr/lib/denial/plugin-build-kit/flutter/bin/cache/dart-sdk/' \
+          <<<"$package_files"; then
+        fail 'Plugin Manager RPM embeds the Dart SDK'
       fi
       ;;
     denial-flutter-engine)

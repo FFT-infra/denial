@@ -7,10 +7,8 @@ use super::kms_session::{
     log_shutdown, recover_stalled_kms_presentation, service_session_lifecycle,
 };
 use super::*;
-use denial_core::volition;
-use smithay::reexports::calloop::channel::{
-    Event as ChannelEvent, SyncSender, channel, sync_channel,
-};
+use smithay::reexports::calloop::channel::{Event as ChannelEvent, channel};
+use smithay::reexports::calloop::ping::make_ping;
 
 const BACKGROUND_SERVICE_INTERVAL: Duration = Duration::from_nanos(1_000_000_000 / 30);
 const BACKGROUND_MAINTENANCE_INTERVAL: Duration = Duration::from_millis(100);
@@ -56,7 +54,8 @@ fn take_periodic_deadline(now: Instant, deadline: &mut Instant, interval: Durati
 }
 
 fn interactive_service_work_pending(events: &RuntimeState) -> bool {
-    !events.pending_shell_actions.is_empty()
+    !events.plugin_actions.pending.is_empty()
+        || !events.pending_shell_actions.is_empty()
         || !events.pending_shortcut_launches.is_empty()
         || !events.pending_window_events.is_empty()
 }
@@ -143,6 +142,7 @@ fn synchronize_software_dimming(
     scanouts: &[Scanout],
     events: &mut RuntimeState,
     flutter: &mut Option<flutter_runtime::FlutterRuntime>,
+    known_topology: &mut Option<Vec<(OutputId, crtc::Handle)>>,
 ) -> Result<(), Box<dyn Error>> {
     let requests = flutter
         .as_mut()
@@ -152,6 +152,32 @@ fn synchronize_software_dimming(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    let topology_changed = gamma_topology_changed(
+        known_topology.as_deref(),
+        scanouts
+            .iter()
+            .map(|scanout| (scanout.output.id, scanout.output.crtc)),
+    );
+    let external_changes_pending = events
+        .wayland
+        .as_ref()
+        .is_some_and(wayland_frontend::WaylandFrontend::has_pending_gamma_changes);
+    if !gamma_work_pending(
+        topology_changed,
+        !requests.is_empty() || !events.pending_software_dimming.is_empty(),
+        external_changes_pending,
+        events.gamma_reapply_requested || events.scanout_rebased,
+    ) {
+        return Ok(());
+    }
+    if topology_changed {
+        *known_topology = Some(
+            scanouts
+                .iter()
+                .map(|scanout| (scanout.output.id, scanout.output.crtc))
+                .collect(),
+        );
+    }
     let gamma_reapply_requested = std::mem::take(&mut events.gamma_reapply_requested);
     let force_gamma_reapply = events.scanout_rebased || gamma_reapply_requested;
     let states = gamma_control::synchronize_gamma_control(
@@ -167,6 +193,22 @@ fn synchronize_software_dimming(
         }
     }
     Ok(())
+}
+
+fn gamma_topology_changed<T: Copy + PartialEq>(
+    known: Option<&[T]>,
+    current: impl ExactSizeIterator<Item = T>,
+) -> bool {
+    known.is_none_or(|known| known.len() != current.len() || known.iter().copied().ne(current))
+}
+
+fn gamma_work_pending(
+    topology_changed: bool,
+    internal_request: bool,
+    external_request: bool,
+    force_reapply: bool,
+) -> bool {
+    topology_changed || internal_request || external_request || force_reapply
 }
 
 fn handle_ui_development_requests(
@@ -188,6 +230,21 @@ fn handle_ui_development_requests(
         if reload_requested {
             events.flutter_reload_requested = true;
         }
+        // The plugin manager applies a rebuilt composition only while the
+        // user is not in the middle of something.
+        let state = state.with_session_activity(ui_development::SessionActivity {
+            locked: events.secure_session_locked(),
+            input_idle_ms: u64::try_from(events.idle_policy.idle_for(Instant::now()).as_millis())
+                .unwrap_or(u64::MAX),
+            shell_captures_keyboard: events
+                .wayland
+                .as_ref()
+                .is_some_and(|frontend| frontend.shell_captures_keyboard()),
+            idle_inhibited: events
+                .wayland
+                .as_mut()
+                .is_some_and(wayland_frontend::WaylandFrontend::idle_inhibited),
+        });
         if !is_query && let Some(error) = state.error_message() {
             request.reply(Err(output_control::OutputControlFailure::new(
                 "rejected", error,
@@ -456,7 +513,7 @@ fn next_dispatch_timeout(
 
 fn create_frame_schedulers(
     drm: &DrmDevice,
-    volition_events: &SyncSender<volition::Event>,
+    volition_events: &output_scheduler::VolitionEvents,
     scanouts: &[Scanout],
     swapchain: &RenderSwapchains,
     flutter: &mut Option<flutter_runtime::FlutterRuntime>,
@@ -509,8 +566,11 @@ fn drain_frames_before_reconfiguration(
     Ok(())
 }
 
-fn output_properties_changed(outputs: &[ConnectedOutput], scanouts: &[Scanout]) -> bool {
-    outputs.iter().any(|output| {
+fn output_properties_changed<'a>(
+    outputs: impl IntoIterator<Item = &'a ConnectedOutput>,
+    scanouts: &[Scanout],
+) -> bool {
+    outputs.into_iter().any(|output| {
         scanouts
             .iter()
             .find(|scanout| scanout.output.id == output.id)
@@ -595,7 +655,9 @@ fn prepare_output_persistence(
         .iter()
         .map(|output| options::PersistedOutput {
             name: output.name.clone(),
-            enabled: output.enabled,
+            // Settings shows the effective state, which can include a transient
+            // fallback or clamshell. Save the reconciled preference instead.
+            enabled: !staged_configuration.disabled_outputs.contains(&output.name),
             x: output.x,
             y: output.y,
             width: output.mode.width,
@@ -743,7 +805,7 @@ fn stage_output_apply(
         }
     };
     let outputs = match configured_outputs(connectors, max_outputs, &configuration) {
-        Ok(outputs) => outputs,
+        Ok(configured) => configured.outputs,
         Err(error) => {
             request.reply(Err(output_control::OutputControlFailure::new(
                 "invalid_configuration",
@@ -975,7 +1037,7 @@ fn apply_hardware_output_configuration(
     active_output_confirmation: &mut Option<ActiveOutputConfirmation>,
     pending_output_success: &mut Option<PendingOutputApply>,
     retired_output_flips: &mut u64,
-    volition_event_sender: &SyncSender<volition::Event>,
+    volition_events: &output_scheduler::VolitionEvents,
 ) -> Result<(), Box<dyn Error>> {
     scheduler.prepare_reconfiguration(scanouts, events)?;
     let apply = if resident_mode_change {
@@ -1030,7 +1092,7 @@ fn apply_hardware_output_configuration(
         *retired_output_flips = retired_output_flips.saturating_add(scheduler.presented_frames());
         (*scheduler, *frame_scheduler) = create_frame_schedulers(
             drm,
-            volition_event_sender,
+            volition_events,
             scanouts,
             swapchain,
             flutter,
@@ -1050,7 +1112,7 @@ fn apply_hardware_output_configuration(
     events.output_control_dirty = true;
     (*scheduler, *frame_scheduler) = create_frame_schedulers(
         drm,
-        volition_event_sender,
+        volition_events,
         scanouts,
         swapchain,
         flutter,
@@ -1101,7 +1163,7 @@ fn apply_staged_output_configuration(
     active_output_confirmation: &mut Option<ActiveOutputConfirmation>,
     pending_output_success: &mut Option<PendingOutputApply>,
     retired_output_flips: &mut u64,
-    volition_event_sender: &SyncSender<volition::Event>,
+    volition_events: &output_scheduler::VolitionEvents,
 ) -> Result<(), Box<dyn Error>> {
     let StagedOutputApply {
         request,
@@ -1194,7 +1256,7 @@ fn apply_staged_output_configuration(
         active_output_confirmation,
         pending_output_success,
         retired_output_flips,
-        volition_event_sender,
+        volition_events,
     )
 }
 
@@ -1224,7 +1286,7 @@ fn service_ready_output_apply(
     active_output_confirmation: &mut Option<ActiveOutputConfirmation>,
     pending_output_success: &mut Option<PendingOutputApply>,
     retired_output_flips: &mut u64,
-    volition_event_sender: &SyncSender<volition::Event>,
+    volition_events: &output_scheduler::VolitionEvents,
     deadline: Option<Instant>,
 ) -> Result<bool, Box<dyn Error>> {
     if scanout_rebased {
@@ -1285,7 +1347,7 @@ fn service_ready_output_apply(
             active_output_confirmation,
             pending_output_success,
             retired_output_flips,
-            volition_event_sender,
+            volition_events,
         )?;
     }
     Ok(true)
@@ -1340,6 +1402,7 @@ fn observe_output_topology(
     output_configuration: &RuntimeOutputConfiguration,
     scanouts: &[Scanout],
     outputs_disconnected: &mut bool,
+    policy_journal: &mut output_policy::OutputPolicyJournal,
     flutter: &mut Option<flutter_runtime::FlutterRuntime>,
     events: &mut RuntimeState,
     event_loop: &mut EventLoop<'_, RuntimeState>,
@@ -1349,8 +1412,20 @@ fn observe_output_topology(
         kms_reconfigure_requested,
         resident_geometry_reconfigure_requested,
     } = request;
-    let outputs = connected_outputs(drm_scanner, drm, max_outputs, output_configuration)?;
-    let observed_output_changed = output_properties_changed(&outputs, scanouts);
+    let ConfiguredOutputs { outputs, selection } =
+        connected_outputs(drm_scanner, drm, max_outputs, output_configuration)?;
+    policy_journal.record(&selection);
+    // The DPMS debounce judges connectors. A fallback output and the panels
+    // under a closed lid are lit or dark by policy, so they are left out: a
+    // monitor which drops its connector while asleep must not light the
+    // fallback in its place, and closing the lid needs no debounce.
+    let connector_decided = |name: &str| !selection.policy.overrides(name);
+    let observed_output_changed = output_properties_changed(
+        outputs
+            .iter()
+            .filter(|output| connector_decided(&output.name)),
+        scanouts,
+    );
     let dpms_debounce_bypassed = scanout_rebased
         || kms_reconfigure_requested
         || resident_geometry_reconfigure_requested
@@ -1366,8 +1441,14 @@ fn observe_output_topology(
     } else {
         events.dpms_topology.defer_missing_outputs(
             Instant::now(),
-            scanouts.iter().map(|scanout| scanout.output.id),
-            outputs.iter().map(|output| output.id),
+            scanouts
+                .iter()
+                .filter(|scanout| connector_decided(&scanout.output.name))
+                .map(|scanout| scanout.output.id),
+            outputs
+                .iter()
+                .filter(|output| connector_decided(&output.name))
+                .map(|output| output.id),
         )
     };
     let topology_deferred = if let Some(deferred) = deferred_dpms_topology {
@@ -1402,7 +1483,7 @@ fn observe_output_topology(
                 .set_outputs_visible(false)?;
             warn!(
                 retry_ms = KMS_PRESENTATION_RECOVERY_RETRY.as_millis(),
-                "all DRM outputs disconnected; keeping the session alive until one reconnects"
+                "no connected display can be lit; keeping the session alive until one can"
             );
         }
         events.topology_dirty = true;
@@ -1414,14 +1495,14 @@ fn observe_output_topology(
         *outputs_disconnected = false;
         info!(
             connected_outputs = outputs.len(),
-            "DRM output reconnected; rebuilding presentation state"
+            "a display can be lit again; rebuilding presentation state"
         );
     }
     if !topology_deferred {
         events.output_control_dirty = true;
     }
-    let changed =
-        !topology_deferred && (outputs.len() != scanouts.len() || observed_output_changed);
+    let changed = !topology_deferred
+        && (outputs.len() != scanouts.len() || output_properties_changed(&outputs, scanouts));
     if !topology_deferred {
         info!(
             connected_outputs = outputs.len(),
@@ -1467,7 +1548,7 @@ fn apply_observed_output_topology(
     scheduler: &mut output_scheduler::OutputScheduler,
     frame_scheduler: &mut frame_scheduler::FrameScheduler,
     retired_output_flips: &mut u64,
-    volition_event_sender: &SyncSender<volition::Event>,
+    volition_events: &output_scheduler::VolitionEvents,
 ) -> Result<(), Box<dyn Error>> {
     let TopologyReconfigurationRequest {
         scanout_rebased,
@@ -1565,7 +1646,7 @@ fn apply_observed_output_topology(
     }
     (*scheduler, *frame_scheduler) = create_frame_schedulers(
         drm,
-        volition_event_sender,
+        volition_events,
         scanouts,
         swapchain,
         flutter,
@@ -1602,7 +1683,7 @@ fn service_flutter_reload(
     scheduler: &mut output_scheduler::OutputScheduler,
     frame_scheduler: &mut frame_scheduler::FrameScheduler,
     retired_output_flips: &mut u64,
-    volition_event_sender: &SyncSender<volition::Event>,
+    volition_events: &output_scheduler::VolitionEvents,
 ) -> Result<bool, Box<dyn Error>> {
     if !events.flutter_reload_requested {
         return Ok(false);
@@ -1647,7 +1728,7 @@ fn service_flutter_reload(
                 retired_output_flips.saturating_add(scheduler.presented_frames());
             (*scheduler, *frame_scheduler) = create_frame_schedulers(
                 drm,
-                volition_event_sender,
+                volition_events,
                 scanouts,
                 swapchain,
                 flutter,
@@ -1758,6 +1839,7 @@ fn publish_completed_flutter_frames(
     // wakeup and transfer the finished batch before the timeline decision.
     runtime.observe_frame_ready_events(&mut events.flutter_events);
     submit_ready_frames(runtime, scheduler, swapchain, scanouts, events)?;
+    let mut published = false;
     loop {
         let Some(ready) =
             runtime.take_ready_frame(|output| scheduler.ready_handoff_available(output))
@@ -1771,6 +1853,12 @@ fn publish_completed_flutter_frames(
         }
         frame_scheduler.complete_render(output, dirty_serial);
         *raster_frames = raster_frames.saturating_add(1);
+        published = true;
+    }
+    // A freshly published frame may be ready for handoff immediately. Keep
+    // that submission on this wake even when no output timeline tick is due.
+    if published {
+        submit_ready_frames(runtime, scheduler, swapchain, scanouts, events)?;
     }
     Ok(())
 }
@@ -1833,6 +1921,7 @@ fn schedule_next_flutter_frame(
 
 #[allow(clippy::too_many_arguments)]
 fn dispatch_output_ticks(
+    renderer: &mut GlesRenderer,
     runtime: &mut flutter_runtime::FlutterRuntime,
     scheduler: &mut output_scheduler::OutputScheduler,
     swapchain: &RenderSwapchains,
@@ -1840,13 +1929,13 @@ fn dispatch_output_ticks(
     events: &mut RuntimeState,
     frame_scheduler: &frame_scheduler::FrameScheduler,
 ) -> Result<(), Box<dyn Error>> {
-    submit_ready_frames(runtime, scheduler, swapchain, scanouts, events)?;
     for tick in frame_scheduler.output_ticks().iter().copied() {
         if let Some(frontend) = events.wayland.as_mut() {
             frontend.frame_tick(tick)?;
         }
         scheduler.process_screencopies_at_tick(
             tick,
+            renderer,
             runtime,
             swapchain
                 .outputs()
@@ -2006,6 +2095,7 @@ fn cancel_invalid_screenshot_selection(
 }
 
 fn synchronize_flutter_scene_and_input(
+    output_control: &output_control::OutputControlPublisher,
     runtime: &mut flutter_runtime::FlutterRuntime,
     background_services_due: bool,
     frame_scheduler: &mut frame_scheduler::FrameScheduler,
@@ -2014,7 +2104,7 @@ fn synchronize_flutter_scene_and_input(
     if background_services_due {
         synchronize_flutter_window_management(runtime, events)?;
     }
-    synchronize_flutter_scene(runtime, events)?;
+    synchronize_flutter_scene(output_control, runtime, events)?;
     collect_flutter_output_damage(runtime, frame_scheduler);
     synchronize_flutter_input_layout(runtime, events)?;
     synchronize_wayland_cursor(runtime, events)?;
@@ -2060,6 +2150,7 @@ fn acknowledge_render_events(
     events: &mut RuntimeState,
     flutter: &Option<flutter_runtime::FlutterRuntime>,
     scheduler: &mut output_scheduler::OutputScheduler,
+    volition_events: &output_scheduler::VolitionEvents,
 ) -> Result<bool, Box<dyn Error>> {
     if !events.sampled_buffer_releases.is_empty() {
         install_sampled_buffer_releases(event_loop, events)?;
@@ -2072,6 +2163,7 @@ fn acknowledge_render_events(
             events.ready_fence_signals.drain(..),
         )?;
     }
+    volition_events.drain_into(&mut events.volition_events);
     if events.volition_events.is_empty() {
         return Ok(false);
     }
@@ -2134,6 +2226,29 @@ fn apply_pending_sensor_orientation(
     }
     frame_scheduler.reconfigure(scanouts, now);
     Ok(())
+}
+
+/// Lets the display policy follow the lid. A topology rescan then lights or
+/// turns off the built-in panels; nothing changes when the lid covers no
+/// output that the policy would otherwise light.
+fn apply_pending_lid_position(
+    output_configuration: &mut RuntimeOutputConfiguration,
+    active_output_confirmation: &mut Option<ActiveOutputConfirmation>,
+    events: &mut RuntimeState,
+) {
+    let Some(closed) = events.lid.take_pending() else {
+        return;
+    };
+    if closed == output_configuration.lid_closed {
+        return;
+    }
+    output_configuration.lid_closed = closed;
+    // A rollback restores the user's configuration, not an older lid position.
+    if let Some(pending) = active_output_confirmation.as_mut() {
+        pending.rollback_configuration.lid_closed = closed;
+    }
+    info!(closed, "lid moved");
+    events.topology_dirty = true;
 }
 
 fn expire_output_confirmation(
@@ -2337,6 +2452,7 @@ pub(super) struct FlutterEventLoopContext<'a, 'event_loop> {
     pub(super) topology: &'a mut TopologyManager,
     pub(super) max_outputs: usize,
     pub(super) output_configuration: RuntimeOutputConfiguration,
+    pub(super) output_policy_journal: output_policy::OutputPolicyJournal,
     pub(super) output_config: Option<PathBuf>,
     pub(super) output_control: output_control::OutputControlPublisher,
     pub(super) portal_ipc: Option<portal_ipc::PortalIpcPublisher>,
@@ -2366,6 +2482,7 @@ pub(super) fn run_flutter_event_loop(
         topology,
         max_outputs,
         mut output_configuration,
+        output_policy_journal: mut policy_journal,
         output_config,
         output_control,
         portal_ipc,
@@ -2431,22 +2548,29 @@ pub(super) fn run_flutter_event_loop(
         warn!(%error, path = %settings_path.display(), "could not watch Denial settings for external edits");
     }
     let _orientation_sensor = start_orientation_sensor(event_loop)?;
-    let (volition_event_sender, volition_event_source) = sync_channel(8);
+    let (volition_wake, volition_wake_source) = make_ping()?;
+    // Queued Volition records are acknowledged at the top of each iteration.
+    event_loop
+        .handle()
+        .insert_source(volition_wake_source, |(), _, _: &mut RuntimeState| {})?;
+    let volition_events = output_scheduler::VolitionEvents::new(volition_wake);
+    let (lid_readings, lid_reading_source) = channel();
     event_loop.handle().insert_source(
-        volition_event_source,
+        lid_reading_source,
         |event, _, state: &mut RuntimeState| {
-            if let ChannelEvent::Msg(event) = event {
-                state.volition_events.push(event);
+            if let ChannelEvent::Msg(reading) = event {
+                state.lid.note_reading(reading);
             }
         },
     )?;
+    events.lid = lid_switch::LidSwitch::new(lid_readings);
     events.synchronize_flutter_pointer_position();
     let mut raster_frames = 0u64;
     let mut delivered_vsyncs = 0u64;
     let mut retired_output_flips = 0u64;
     let (mut scheduler, mut frame_scheduler) = create_frame_schedulers(
         drm,
-        &volition_event_sender,
+        &volition_events,
         scanouts,
         swapchain,
         flutter,
@@ -2474,6 +2598,7 @@ pub(super) fn run_flutter_event_loop(
     let mut pending_sensor_rotation = output_configuration.sensor_rotation;
     let mut outputs_disconnected = false;
     let mut operation_cadence = OperationCadence::new(Instant::now());
+    let mut gamma_topology = None;
 
     // Any native helper inadvertently created by an elevated Flutter thread
     // is normalized before the compositor itself becomes realtime.
@@ -2492,7 +2617,10 @@ pub(super) fn run_flutter_event_loop(
         )? {
             continue;
         }
-        synchronize_software_dimming(drm, scanouts, &mut events, flutter)?;
+        synchronize_software_dimming(drm, scanouts, &mut events, flutter, &mut gamma_topology)?;
+        if let Some(frontend) = events.wayland.as_mut() {
+            frontend.reap_capture_source_reads();
+        }
         let iteration_now = Instant::now();
         if events.dpms_topology.service_deadline(iteration_now) {
             events.topology_dirty = true;
@@ -2521,6 +2649,7 @@ pub(super) fn run_flutter_event_loop(
             &mut events,
             flutter,
             &mut scheduler,
+            &volition_events,
         )? {
             continue;
         }
@@ -2537,6 +2666,11 @@ pub(super) fn run_flutter_event_loop(
             &mut events,
             iteration_now,
         )?;
+        apply_pending_lid_position(
+            &mut output_configuration,
+            &mut active_output_confirmation,
+            &mut events,
+        );
         expire_output_confirmation(
             iteration_now,
             &mut active_output_confirmation,
@@ -2618,26 +2752,32 @@ pub(super) fn run_flutter_event_loop(
                 &mut raster_frames,
             )?;
 
-            schedule_next_flutter_frame(
-                runtime,
-                &scheduler,
-                topology,
-                ready_output_apply.is_some(),
-                frame_limit,
-                raster_frames,
-                &mut delivered_vsyncs,
-                &mut frame_scheduler,
-                &mut events,
-            )?;
+            // The output timeline is driven by its own dispatch deadline.
+            // An unrelated Wayland, input, or acquire-fence wake cannot
+            // produce a tick, and frame readiness remains latched until one.
+            if frame_scheduler.output_tick_due(Instant::now()) {
+                schedule_next_flutter_frame(
+                    runtime,
+                    &scheduler,
+                    topology,
+                    ready_output_apply.is_some(),
+                    frame_limit,
+                    raster_frames,
+                    &mut delivered_vsyncs,
+                    &mut frame_scheduler,
+                    &mut events,
+                )?;
 
-            dispatch_output_ticks(
-                runtime,
-                &mut scheduler,
-                swapchain,
-                scanouts,
-                &mut events,
-                &frame_scheduler,
-            )?;
+                dispatch_output_ticks(
+                    renderer,
+                    runtime,
+                    &mut scheduler,
+                    swapchain,
+                    scanouts,
+                    &mut events,
+                    &frame_scheduler,
+                )?;
+            }
 
             // Freeze a tagged output batch as soon as its page-flip completion
             // makes it visible, before another frame can replace it.
@@ -2726,7 +2866,7 @@ pub(super) fn run_flutter_event_loop(
             &mut active_output_confirmation,
             &mut pending_output_success,
             &mut retired_output_flips,
-            &volition_event_sender,
+            &volition_events,
             deadline,
         )? {
             continue;
@@ -2741,6 +2881,7 @@ pub(super) fn run_flutter_event_loop(
                 &output_configuration,
                 scanouts,
                 &mut outputs_disconnected,
+                &mut policy_journal,
                 flutter,
                 &mut events,
                 event_loop,
@@ -2769,7 +2910,7 @@ pub(super) fn run_flutter_event_loop(
                         &mut scheduler,
                         &mut frame_scheduler,
                         &mut retired_output_flips,
-                        &volition_event_sender,
+                        &volition_events,
                     )?;
                     continue;
                 }
@@ -2794,7 +2935,7 @@ pub(super) fn run_flutter_event_loop(
             &mut scheduler,
             &mut frame_scheduler,
             &mut retired_output_flips,
-            &volition_event_sender,
+            &volition_events,
         )? {
             continue;
         }
@@ -2832,6 +2973,7 @@ pub(super) fn run_flutter_event_loop(
             continue;
         }
         synchronize_flutter_scene_and_input(
+            &output_control,
             runtime,
             background_services_due,
             &mut frame_scheduler,
@@ -2936,9 +3078,23 @@ pub(super) fn run_flutter_event_loop(
 #[cfg(test)]
 mod tests {
     use super::{
-        RuntimeState, output_control_publication_became_dirty, output_control_publication_deferred,
+        RuntimeState, gamma_topology_changed, gamma_work_pending,
+        output_control_publication_became_dirty, output_control_publication_deferred,
         output_transaction_waiting,
     };
+
+    #[test]
+    fn gamma_gate_runs_at_initialization_and_only_for_new_work() {
+        assert!(gamma_topology_changed::<u8>(None, [].into_iter()));
+        assert!(!gamma_topology_changed(Some(&[1, 2]), [1, 2].into_iter()));
+        assert!(gamma_topology_changed(Some(&[1, 2]), [2, 1].into_iter()));
+        assert!(gamma_topology_changed(Some(&[1, 2]), [1, 3].into_iter()));
+        assert!(!gamma_work_pending(false, false, false, false));
+        assert!(gamma_work_pending(false, true, false, false));
+        assert!(gamma_work_pending(false, false, true, false));
+        assert!(gamma_work_pending(false, false, false, true));
+        assert!(gamma_work_pending(true, false, false, false));
+    }
 
     #[test]
     fn resident_geometry_rollback_stops_frame_production_while_targets_drain() {

@@ -56,10 +56,18 @@ pub(super) struct AudioDeviceState {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum SystemControlEvent {
-    AudioLevel { level: f64, request_serial: u32 },
+    AudioLevel {
+        level: f64,
+        muted: bool,
+        limit_reached: bool,
+        request_serial: u32,
+    },
     AudioStreams(Vec<AudioStreamState>),
     AudioDevices(Vec<AudioDeviceState>),
-    BrightnessLevel { monitor_id: i64, level: f64 },
+    BrightnessLevel {
+        monitor_id: i64,
+        level: f64,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -284,6 +292,7 @@ pub(super) enum SleepTransition {
 #[derive(Default)]
 struct SleepMonitorShared {
     transitions: Mutex<VecDeque<SleepTransition>>,
+    transitions_pending: AtomicBool,
     delay_inhibitor: Mutex<Option<OwnedFd>>,
     power_key_inhibitor: Mutex<Option<OwnedFd>>,
     stop: AtomicBool,
@@ -301,13 +310,23 @@ impl SleepMonitorShared {
             transitions.pop_front();
         }
         transitions.push_back(transition);
+        self.transitions_pending.store(true, Ordering::Release);
     }
 
     fn take_transition(&self) -> Option<SleepTransition> {
-        self.transitions
+        if !self.transitions_pending.load(Ordering::Acquire) {
+            return None;
+        }
+        let mut transitions = self
+            .transitions
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .pop_front()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let transition = transitions.pop_front();
+        // Serialize clearing with producers so no queued transition loses its
+        // readiness flag. Existing service deadlines still bound wake latency.
+        self.transitions_pending
+            .store(!transitions.is_empty(), Ordering::Release);
+        transition
     }
 
     fn install_delay_inhibitor(&self, inhibitor: OwnedFd) {
@@ -681,3 +700,53 @@ use audio::run_audio_worker;
 use brightness::run_brightness_worker;
 #[cfg(feature = "flutter")]
 use session::{run_session_worker, run_sleep_monitor};
+
+#[cfg(all(test, feature = "flutter"))]
+mod sleep_readiness_tests {
+    use super::*;
+
+    #[test]
+    fn idle_sleep_check_does_not_lock_the_queue() {
+        let monitor = SleepMonitorShared::default();
+        let queue = monitor.transitions.lock().unwrap();
+        assert_eq!(monitor.take_transition(), None);
+        drop(queue);
+    }
+
+    #[test]
+    fn readiness_stays_set_until_all_transitions_are_consumed() {
+        let monitor = SleepMonitorShared::default();
+        monitor.publish(SleepTransition::Preparing);
+        monitor.publish(SleepTransition::Resumed);
+        assert_eq!(monitor.take_transition(), Some(SleepTransition::Preparing));
+        assert!(monitor.transitions_pending.load(Ordering::Acquire));
+        assert_eq!(monitor.take_transition(), Some(SleepTransition::Resumed));
+        assert!(!monitor.transitions_pending.load(Ordering::Acquire));
+        monitor.publish(SleepTransition::Preparing);
+        assert_eq!(monitor.take_transition(), Some(SleepTransition::Preparing));
+        assert_eq!(monitor.take_transition(), None);
+    }
+
+    #[test]
+    fn producer_and_consumer_do_not_lose_readiness() {
+        let monitor = SleepMonitorShared::default();
+        let barrier = std::sync::Barrier::new(2);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                for _ in 0..1000 {
+                    barrier.wait();
+                    monitor.publish(SleepTransition::Resumed);
+                    barrier.wait();
+                }
+            });
+            for _ in 0..1000 {
+                monitor.publish(SleepTransition::Preparing);
+                barrier.wait();
+                assert_eq!(monitor.take_transition(), Some(SleepTransition::Preparing));
+                barrier.wait();
+                assert_eq!(monitor.take_transition(), Some(SleepTransition::Resumed));
+                assert_eq!(monitor.take_transition(), None);
+            }
+        });
+    }
+}

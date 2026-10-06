@@ -8,6 +8,19 @@ boundaries may change before 1.0.
 
 ### Added
 
+- Denial can now compose its Flutter shell from typed built-in and external
+  plugins. The optional `denial-plugin-manager` package provides the graphical
+  manager, CLI, version-matched compiler kit, validated Apply/recovery flow,
+  and Git-based installation without publishing Denial SDKs on pub.dev.
+- After a Denial update, your plugins now come back on their own. Denial keeps
+  them and their settings, rebuilds them for the new release in the
+  background while its standard desktop runs, and switches back at a quiet
+  moment without a logout. One notification follows the rebuild; if it cannot
+  finish, it explains why and offers Try again, Check for updates, and Open
+  Plugins, and it waits for a network connection when downloads are needed.
+- Plugins now discovers the public `denialwm/denial-plugins` collection by
+  default. Its first entry is the independently installable Windows-style
+  Taskbar; catalog discovery never installs or enables a plugin automatically.
 - Mouse & touchpad settings can now tune the scrolling layout's continuous
   three-finger swipe speed independently from two-finger content scrolling.
 - Workspace transitions can now move horizontally or vertically, and
@@ -36,6 +49,10 @@ boundaries may change before 1.0.
 
 ### Changed
 
+- The reference desktop, top bar, launcher, and clock are first-party plugins
+  built against the extracted `denial_sdk` and `denial_flutter_sdk` contracts.
+  Release validation now builds and verifies the separate Plugin Manager for
+  Pacman, APT, DNF, Alpine direct downloads, and Nix.
 - Denial environment variables now prefer the consistent `DENIAL_*` prefix
   while accepting every existing `DENIA_*` spelling as a compatibility alias.
 - Clipboard history now provides searchable text, image and file cards, drag-to-drop actions, privacy states, and accessible controls.

@@ -6,25 +6,16 @@ ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 
 CACHE_ROOT="${XDG_CACHE_HOME:-${HOME:?HOME is required}/.cache}"
 BUILD_ROOT="${DENIAL_PC_BUILD_ROOT:-$CACHE_ROOT/denial/pc-build}"
-RUST_TARGET="${DENIAL_PC_RUST_TARGET:-$BUILD_ROOT/rust}"
-BINARY="${DENIAL_PC_BINARY:-$RUST_TARGET/release/deniald}"
-CONTROL_BINARY="${DENIAL_PC_CONTROL_BINARY:-$RUST_TARGET/release/denialctl}"
-PORTAL_BINARY="${DENIAL_PC_PORTAL_BINARY:-$RUST_TARGET/release/denial-portal}"
 PACKAGE_ROOT="${DENIAL_PC_PACKAGE_ROOT:-$BUILD_ROOT/packages}"
 MAKEPKG_ROOT="${DENIAL_PC_MAKEPKG_ROOT:-$BUILD_ROOT/makepkg}"
 PACKAGE_INPUT_ROOT="${DENIAL_PC_PACKAGE_INPUT_ROOT:-$BUILD_ROOT/package-input}"
-BUNDLE="${DENIAL_PC_BUNDLE:-$PACKAGE_INPUT_ROOT/bundle}"
-BUNDLE_ASSEMBLY="${DENIAL_PC_BUNDLE_ASSEMBLY:-$PACKAGE_INPUT_ROOT/flutter-release}"
-SETTINGS_BUNDLE="${DENIAL_PC_SETTINGS_BUNDLE:-$ROOT/settings_app/build/linux/x64/release/bundle}"
-PACKAGE_RELEASE="${DENIAL_PACKAGE_RELEASE:-1}"
+STAGE_ROOT="${DENIAL_PACKAGE_STAGE_ROOT:-$PACKAGE_INPUT_ROOT/native}"
 PACKAGE_PACKAGER="${DENIAL_PACKAGE_PACKAGER:-Doctor Logix <doctor.logix@gmail.com>}"
 REBUILD_ENGINE_PACKAGE="${DENIAL_REBUILD_ENGINE_PACKAGE:-0}"
-RELEASE_TAG="${DENIAL_RELEASE_TAG:-}"
-REQUESTED_PACKAGE_VERSION="${DENIAL_PACKAGE_VERSION:-}"
-REQUESTED_BUILD_IDENTITY="${DENIAL_BUILD_IDENTITY:-}"
-RUNTIME_VERSION_FILE="${DENIAL_PACKAGE_RUNTIME_VERSION_FILE:-}"
+
 ENGINE_PACKAGE_DIR="$ROOT/packaging/arch/flutter-engine"
 DENIAL_PACKAGE_DIR="$ROOT/packaging/arch"
+PLUGIN_MANAGER_PACKAGE_DIR="$ROOT/packaging/arch/plugin-manager"
 
 for required_command in bsdtar find makepkg mktemp rm; do
   command -v "$required_command" >/dev/null 2>&1 \
@@ -40,131 +31,36 @@ done
     exit 1
   }
 
-if [[ -n "$RELEASE_TAG" ]]; then
-  [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
-    || {
-      printf \
-        'package-denial-arch: release tag must have the form vMAJOR.MINOR.PATCH\n' \
-        >&2
-      exit 1
-    }
-  [[ "$(git -C "$ROOT" rev-parse "${RELEASE_TAG}^{commit}")" \
-    == "$(git -C "$ROOT" rev-parse HEAD)" ]] \
-    || {
-      printf 'package-denial-arch: %s does not resolve to HEAD\n' \
-        "$RELEASE_TAG" >&2
-      exit 1
-    }
-  [[ -z "$(git -C "$ROOT" status --porcelain --untracked-files=normal)" ]] \
-    || {
-      printf 'package-denial-arch: release checkout is dirty\n' >&2
-      exit 1
-    }
-  package_version="${RELEASE_TAG#v}"
-  if [[ -n "$REQUESTED_PACKAGE_VERSION" \
-    && "$REQUESTED_PACKAGE_VERSION" != "$package_version" ]]; then
-    printf \
-      'package-denial-arch: requested package version %s does not match tag version %s\n' \
-      "$REQUESTED_PACKAGE_VERSION" "$package_version" >&2
-    exit 1
-  fi
-  [[ "$PACKAGE_RELEASE" == 1 ]] \
-    || {
-      printf \
-        'package-denial-arch: a version-tag release must use package release 1\n' \
-        >&2
-      exit 1
-    }
-else
-  latest_release_tag=''
-  while IFS= read -r candidate; do
-    if [[ "$candidate" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-      latest_release_tag="$candidate"
-      break
-    fi
-  done < <(
-    git -C "$ROOT" tag \
-      --merged HEAD \
-      --list 'v*' \
-      --sort=-v:refname
-  )
-  if [[ -n "$latest_release_tag" ]]; then
-    development_base="${latest_release_tag#v}"
-    revision_count="$(
-      git -C "$ROOT" rev-list --count "${latest_release_tag}..HEAD"
-    )"
-  else
-    development_base='0.0.0'
-    revision_count="$(git -C "$ROOT" rev-list --count HEAD)"
-  fi
-  revision="$(git -C "$ROOT" rev-parse --short=8 HEAD)"
-  package_version="$development_base.r$revision_count.g$revision"
-  if [[ -n "$(git -C "$ROOT" status --porcelain --untracked-files=normal)" ]]; then
-    package_version="$package_version.dirty"
-  fi
+if [[ "${DENIAL_PROMOTION_MODE:-0}" == 1 \
+  && "${DENIAL_PACKAGE_SKIP_STAGE:-0}" != 1 ]]; then
+  printf 'package-denial-arch: promotion requires DENIAL_PACKAGE_SKIP_STAGE=1\n' >&2
+  exit 125
 fi
 
-build_identity="${REQUESTED_BUILD_IDENTITY:-$package_version}"
+# Build and stage once. Every package format must consume these same bytes,
+# including the Flutter-tool snapshot whose compilation is not reproducible.
+if [[ "${DENIAL_PACKAGE_SKIP_STAGE:-0}" != 1 ]]; then
+  "$ROOT/tools/stage-denial-runtime"
+fi
+[[ -f "$STAGE_ROOT/metadata.json" ]] \
+  || { printf 'package-denial-arch: missing staged metadata\n' >&2; exit 1; }
+mapfile -t native_metadata < <(
+  "$ROOT/tools/read-denial-native-metadata" "$STAGE_ROOT/metadata.json"
+)
+((${#native_metadata[@]} == 7)) \
+  || { printf 'package-denial-arch: invalid staged metadata\n' >&2; exit 1; }
+package_version="${native_metadata[0]}"
+PACKAGE_RELEASE="${native_metadata[1]}"
+export SOURCE_DATE_EPOCH="${native_metadata[3]}"
 
-DENIAL_BUILD_VERSION="$build_identity" \
-DENIAL_PC_BUNDLE="$BUNDLE" \
-DENIAL_PC_BUNDLE_ASSEMBLY="$BUNDLE_ASSEMBLY" \
-  "$ROOT/tools/denial-pc" build
-
-[[ -x "$BINARY" ]] \
-  || {
-    printf 'package-denial-arch: missing compositor: %s\n' "$BINARY" >&2
-    exit 1
-  }
-[[ -x "$CONTROL_BINARY" ]] \
-  || {
-    printf 'package-denial-arch: missing control client: %s\n' \
-      "$CONTROL_BINARY" >&2
-    exit 1
-  }
-[[ -x "$PORTAL_BINARY" ]] \
-  || {
-    printf 'package-denial-arch: missing portal backend: %s\n' \
-      "$PORTAL_BINARY" >&2
-    exit 1
-  }
-[[ -f "$BUNDLE/data/icudtl.dat" \
-  && -f "$BUNDLE/lib/libapp.so" \
-  && -f "$BUNDLE/lib/libflutter_engine.so" ]] \
-  || {
-    printf 'package-denial-arch: incomplete Flutter bundle: %s\n' "$BUNDLE" >&2
-    exit 1
-  }
-[[ -x "$SETTINGS_BUNDLE/denial-settings" \
-  && -f "$SETTINGS_BUNDLE/data/flutter_assets/AssetManifest.bin" \
-  && -f "$SETTINGS_BUNDLE/lib/libapp.so" \
-  && -f "$SETTINGS_BUNDLE/lib/libflutter_linux_gtk.so" ]] \
-  || {
-    printf 'package-denial-arch: incomplete Settings bundle: %s\n' \
-      "$SETTINGS_BUNDLE" >&2
-    exit 1
-  }
-
+# Every source lives in this checkout. makepkg keeps a file:// source it
+# already copied, so a stale copy would fail validation after an edit.
+rm -rf -- "$MAKEPKG_ROOT/sources"
 mkdir -p -- "$PACKAGE_ROOT" "$MAKEPKG_ROOT" "$MAKEPKG_ROOT/sources"
 
-if [[ -z "$RUNTIME_VERSION_FILE" && -n "$RELEASE_TAG" ]]; then
-  RUNTIME_VERSION_FILE="$PACKAGE_INPUT_ROOT/release-version"
-  install -d -m 0755 "$(dirname -- "$RUNTIME_VERSION_FILE")"
-  printf '%s\n' "$package_version" >"$RUNTIME_VERSION_FILE"
-fi
-
 export DENIAL_PACKAGE_SOURCE_ROOT="$ROOT"
-export DENIAL_PACKAGE_BINARY="$BINARY"
-export DENIAL_PACKAGE_CONTROL_BINARY="$CONTROL_BINARY"
-export DENIAL_PACKAGE_PORTAL_BINARY="$PORTAL_BINARY"
-export DENIAL_PACKAGE_BUNDLE="$BUNDLE"
-export DENIAL_PACKAGE_SETTINGS_BUNDLE="$SETTINGS_BUNDLE"
-export DENIAL_PACKAGE_ENGINE_SOURCE="$BUNDLE/lib/libflutter_engine.so"
 export DENIAL_PACKAGE_VERSION="$package_version"
 export DENIAL_PACKAGE_RELEASE="$PACKAGE_RELEASE"
-if [[ -n "$RUNTIME_VERSION_FILE" ]]; then
-  export DENIAL_PACKAGE_RUNTIME_VERSION_FILE="$RUNTIME_VERSION_FILE"
-fi
 export PKGDEST="$PACKAGE_ROOT"
 export BUILDDIR="$MAKEPKG_ROOT"
 export SRCDEST="$MAKEPKG_ROOT/sources"
@@ -206,7 +102,7 @@ validate_engine_package() {
       return 1
     }
   bsdtar -xOf "$package" .PKGINFO \
-    | grep -Fqx 'provides = denial-flutter-engine-abi=3.44.7.denial1' \
+    | grep -Fqx 'provides = denial-flutter-engine-abi=3.47.5.denial1' \
     || {
       printf 'package-denial-arch: engine package has the wrong ABI capability\n' >&2
       return 1
@@ -362,8 +258,46 @@ validate_denial_package() (
     }
 )
 
+validate_plugin_manager_package() (
+  local package="$1"
+  local validation_root
+
+  [[ -f "$package" ]] || {
+    printf 'package-denial-arch: Plugin Manager package is missing: %s\n' \
+      "$package" >&2
+    return 1
+  }
+  validation_root="$(mktemp -d "$MAKEPKG_ROOT/validate-plugin-manager.XXXXXX")"
+  trap 'rm -rf --one-file-system -- "$validation_root"' EXIT
+  bsdtar -xpf "$package" -C "$validation_root"
+  for executable in denial-plugin-manager denial-plugins; do
+    [[ -x "$validation_root/usr/bin/$executable" ]] || {
+      printf 'package-denial-arch: Plugin Manager executable is missing: %s\n' \
+        "$executable" >&2
+      return 1
+    }
+  done
+  [[ -f "$validation_root/usr/lib/denial/plugin-build-kit/kit.json" ]] || {
+    printf 'package-denial-arch: Plugin Manager build kit is missing\n' >&2
+    return 1
+  }
+  [[ ! -e "$validation_root/usr/lib/denial/plugin-build-kit/flutter/bin/cache/dart-sdk" ]] || {
+    printf 'package-denial-arch: Plugin Manager embeds the Dart SDK\n' >&2
+    return 1
+  }
+  grep -Fqx 'depend = dart' "$validation_root/.PKGINFO" || {
+    printf 'package-denial-arch: Plugin Manager does not require dart\n' >&2
+    return 1
+  }
+  grep -Fqx "depend = denial=$package_version-$PACKAGE_RELEASE" \
+    "$validation_root/.PKGINFO" || {
+    printf 'package-denial-arch: Plugin Manager does not require matching Denial\n' >&2
+    return 1
+  }
+)
+
 if [[ ! -f "$engine_package" || "$REBUILD_ENGINE_PACKAGE" == 1 ]]; then
-  makepkg \
+  DENIAL_PACKAGE_PAYLOAD_ROOT="$STAGE_ROOT/denial-flutter-engine" makepkg \
     --dir "$ENGINE_PACKAGE_DIR" \
     --force \
     --cleanbuild \
@@ -378,7 +312,7 @@ fi
 # The exact engine dependency is the package built immediately above, not a
 # package installed into the developer's live Pacman root. Validate both
 # package metadata records after the build and install them together in Stage 1.
-makepkg \
+DENIAL_PACKAGE_PAYLOAD_ROOT="$STAGE_ROOT/denial" makepkg \
   --dir "$DENIAL_PACKAGE_DIR" \
   --force \
   --cleanbuild \
@@ -387,8 +321,20 @@ makepkg \
   --noconfirm
 
 denial_package="$(makepkg --dir "$DENIAL_PACKAGE_DIR" --packagelist)"
+DENIAL_PACKAGE_PAYLOAD_ROOT="$STAGE_ROOT/denial-plugin-manager" makepkg \
+  --dir "$PLUGIN_MANAGER_PACKAGE_DIR" \
+  --force \
+  --cleanbuild \
+  --clean \
+  --nodeps \
+  --noconfirm
+plugin_manager_package="$(
+  makepkg --dir "$PLUGIN_MANAGER_PACKAGE_DIR" --packagelist
+)"
 validate_denial_package "$denial_package"
+validate_plugin_manager_package "$plugin_manager_package"
 
 printf '\nArch packages ready:\n'
 printf '%s\n' "$engine_package"
 printf '%s\n' "$denial_package"
+printf '%s\n' "$plugin_manager_package"

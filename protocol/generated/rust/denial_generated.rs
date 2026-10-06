@@ -1249,10 +1249,10 @@ impl flatbuffers::SimpleToVerifyInSlice for SettingsResponseKind {}
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 pub const ENUM_MIN_SHORTCUT_ACTION_KIND: u8 = 0;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MAX_SHORTCUT_ACTION_KIND: u8 = 53;
+pub const ENUM_MAX_SHORTCUT_ACTION_KIND: u8 = 58;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 #[allow(non_camel_case_types)]
-pub const ENUM_VALUES_SHORTCUT_ACTION_KIND: [ShortcutActionKind; 54] = [
+pub const ENUM_VALUES_SHORTCUT_ACTION_KIND: [ShortcutActionKind; 59] = [
   ShortcutActionKind::Shutdown,
   ShortcutActionKind::OpenApplications,
   ShortcutActionKind::OpenOverview,
@@ -1307,6 +1307,11 @@ pub const ENUM_VALUES_SHORTCUT_ACTION_KIND: [ShortcutActionKind; 54] = [
   ShortcutActionKind::MoveToWorkspace8,
   ShortcutActionKind::MoveToWorkspace9,
   ShortcutActionKind::ToggleWindowAlwaysOnTop,
+  ShortcutActionKind::ResizeGrowWidth,
+  ShortcutActionKind::ResizeShrinkWidth,
+  ShortcutActionKind::ResizeGrowHeight,
+  ShortcutActionKind::ResizeShrinkHeight,
+  ShortcutActionKind::ResetWindowHeight,
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -1368,9 +1373,14 @@ impl ShortcutActionKind {
   pub const MoveToWorkspace8: Self = Self(51);
   pub const MoveToWorkspace9: Self = Self(52);
   pub const ToggleWindowAlwaysOnTop: Self = Self(53);
+  pub const ResizeGrowWidth: Self = Self(54);
+  pub const ResizeShrinkWidth: Self = Self(55);
+  pub const ResizeGrowHeight: Self = Self(56);
+  pub const ResizeShrinkHeight: Self = Self(57);
+  pub const ResetWindowHeight: Self = Self(58);
 
   pub const ENUM_MIN: u8 = 0;
-  pub const ENUM_MAX: u8 = 53;
+  pub const ENUM_MAX: u8 = 58;
   pub const ENUM_VALUES: &'static [Self] = &[
     Self::Shutdown,
     Self::OpenApplications,
@@ -1426,6 +1436,11 @@ impl ShortcutActionKind {
     Self::MoveToWorkspace8,
     Self::MoveToWorkspace9,
     Self::ToggleWindowAlwaysOnTop,
+    Self::ResizeGrowWidth,
+    Self::ResizeShrinkWidth,
+    Self::ResizeGrowHeight,
+    Self::ResizeShrinkHeight,
+    Self::ResetWindowHeight,
   ];
   /// Returns the variant's name or "" if unknown.
   pub fn variant_name(self) -> Option<&'static str> {
@@ -1484,6 +1499,11 @@ impl ShortcutActionKind {
       Self::MoveToWorkspace8 => Some("MoveToWorkspace8"),
       Self::MoveToWorkspace9 => Some("MoveToWorkspace9"),
       Self::ToggleWindowAlwaysOnTop => Some("ToggleWindowAlwaysOnTop"),
+      Self::ResizeGrowWidth => Some("ResizeGrowWidth"),
+      Self::ResizeShrinkWidth => Some("ResizeShrinkWidth"),
+      Self::ResizeGrowHeight => Some("ResizeGrowHeight"),
+      Self::ResizeShrinkHeight => Some("ResizeShrinkHeight"),
+      Self::ResetWindowHeight => Some("ResetWindowHeight"),
       _ => None,
     }
   }
@@ -2460,14 +2480,15 @@ impl flatbuffers::SimpleToVerifyInSlice for CursorStateKind {}
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 pub const ENUM_MIN_SHORTCUT_TARGET: u8 = 0;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MAX_SHORTCUT_TARGET: u8 = 3;
+pub const ENUM_MAX_SHORTCUT_TARGET: u8 = 4;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 #[allow(non_camel_case_types)]
-pub const ENUM_VALUES_SHORTCUT_TARGET: [ShortcutTarget; 4] = [
+pub const ENUM_VALUES_SHORTCUT_TARGET: [ShortcutTarget; 5] = [
   ShortcutTarget::NONE,
   ShortcutTarget::ShortcutDenialActionTarget,
   ShortcutTarget::ShortcutSpawnTarget,
   ShortcutTarget::ShortcutSpawnShTarget,
+  ShortcutTarget::ShortcutPluginActionTarget,
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -2479,14 +2500,16 @@ impl ShortcutTarget {
   pub const ShortcutDenialActionTarget: Self = Self(1);
   pub const ShortcutSpawnTarget: Self = Self(2);
   pub const ShortcutSpawnShTarget: Self = Self(3);
+  pub const ShortcutPluginActionTarget: Self = Self(4);
 
   pub const ENUM_MIN: u8 = 0;
-  pub const ENUM_MAX: u8 = 3;
+  pub const ENUM_MAX: u8 = 4;
   pub const ENUM_VALUES: &'static [Self] = &[
     Self::NONE,
     Self::ShortcutDenialActionTarget,
     Self::ShortcutSpawnTarget,
     Self::ShortcutSpawnShTarget,
+    Self::ShortcutPluginActionTarget,
   ];
   /// Returns the variant's name or "" if unknown.
   pub fn variant_name(self) -> Option<&'static str> {
@@ -2495,6 +2518,7 @@ impl ShortcutTarget {
       Self::ShortcutDenialActionTarget => Some("ShortcutDenialActionTarget"),
       Self::ShortcutSpawnTarget => Some("ShortcutSpawnTarget"),
       Self::ShortcutSpawnShTarget => Some("ShortcutSpawnShTarget"),
+      Self::ShortcutPluginActionTarget => Some("ShortcutPluginActionTarget"),
       _ => None,
     }
   }
@@ -2555,10 +2579,10 @@ pub struct ShortcutTargetUnionTableOffset {}
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 pub const ENUM_MIN_PAYLOAD: u8 = 0;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MAX_PAYLOAD: u8 = 19;
+pub const ENUM_MAX_PAYLOAD: u8 = 21;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 #[allow(non_camel_case_types)]
-pub const ENUM_VALUES_PAYLOAD: [Payload; 20] = [
+pub const ENUM_VALUES_PAYLOAD: [Payload; 22] = [
   Payload::NONE,
   Payload::InputLayout,
   Payload::WindowSnapshot,
@@ -2579,6 +2603,8 @@ pub const ENUM_VALUES_PAYLOAD: [Payload; 20] = [
   Payload::XEmbedTrayCommand,
   Payload::ThemeState,
   Payload::CursorState,
+  Payload::PluginActionCatalog,
+  Payload::PluginActionInvocation,
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -2606,9 +2632,11 @@ impl Payload {
   pub const XEmbedTrayCommand: Self = Self(17);
   pub const ThemeState: Self = Self(18);
   pub const CursorState: Self = Self(19);
+  pub const PluginActionCatalog: Self = Self(20);
+  pub const PluginActionInvocation: Self = Self(21);
 
   pub const ENUM_MIN: u8 = 0;
-  pub const ENUM_MAX: u8 = 19;
+  pub const ENUM_MAX: u8 = 21;
   pub const ENUM_VALUES: &'static [Self] = &[
     Self::NONE,
     Self::InputLayout,
@@ -2630,6 +2658,8 @@ impl Payload {
     Self::XEmbedTrayCommand,
     Self::ThemeState,
     Self::CursorState,
+    Self::PluginActionCatalog,
+    Self::PluginActionInvocation,
   ];
   /// Returns the variant's name or "" if unknown.
   pub fn variant_name(self) -> Option<&'static str> {
@@ -2654,6 +2684,8 @@ impl Payload {
       Self::XEmbedTrayCommand => Some("XEmbedTrayCommand"),
       Self::ThemeState => Some("ThemeState"),
       Self::CursorState => Some("CursorState"),
+      Self::PluginActionCatalog => Some("PluginActionCatalog"),
+      Self::PluginActionInvocation => Some("PluginActionInvocation"),
       _ => None,
     }
   }
@@ -3631,6 +3663,7 @@ impl<'a> SurfaceLayer<'a> {
   pub const VT_COMPOSITION_ORDER: flatbuffers::VOffsetT = 38;
   pub const VT_OPACITY: flatbuffers::VOffsetT = 40;
   pub const VT_OPAQUE: flatbuffers::VOffsetT = 42;
+  pub const VT_WINDOW_GEOMETRY: flatbuffers::VOffsetT = 44;
 
   #[inline]
   pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -3639,7 +3672,7 @@ impl<'a> SurfaceLayer<'a> {
   #[allow(unused_mut)]
   pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
     _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
-    args: &'args SurfaceLayerArgs
+    args: &'args SurfaceLayerArgs<'args>
   ) -> flatbuffers::WIPOffset<SurfaceLayer<'bldr>> {
     let mut builder = SurfaceLayerBuilder::new(_fbb);
     builder.add_texture_source_height(args.texture_source_height);
@@ -3654,6 +3687,7 @@ impl<'a> SurfaceLayer<'a> {
     builder.add_popup_root_surface_id(args.popup_root_surface_id);
     builder.add_parent_surface_id(args.parent_surface_id);
     builder.add_surface_id(args.surface_id);
+    if let Some(x) = args.window_geometry { builder.add_window_geometry(x); }
     builder.add_opacity(args.opacity);
     builder.add_composition_order(args.composition_order);
     builder.add_scale_120(args.scale_120);
@@ -3806,6 +3840,13 @@ impl<'a> SurfaceLayer<'a> {
     // which contains a valid value in this slot
     unsafe { self._tab.get::<bool>(SurfaceLayer::VT_OPAQUE, Some(false)).unwrap()}
   }
+  #[inline]
+  pub fn window_geometry(&self) -> Option<&'a WireRect> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<WireRect>(SurfaceLayer::VT_WINDOW_GEOMETRY, None)}
+  }
 }
 
 impl flatbuffers::Verifiable for SurfaceLayer<'_> {
@@ -3835,11 +3876,12 @@ impl flatbuffers::Verifiable for SurfaceLayer<'_> {
      .visit_field::<u32>("composition_order", Self::VT_COMPOSITION_ORDER, false)?
      .visit_field::<f32>("opacity", Self::VT_OPACITY, false)?
      .visit_field::<bool>("opaque", Self::VT_OPAQUE, false)?
+     .visit_field::<WireRect>("window_geometry", Self::VT_WINDOW_GEOMETRY, false)?
      .finish();
     Ok(())
   }
 }
-pub struct SurfaceLayerArgs {
+pub struct SurfaceLayerArgs<'a> {
     pub surface_id: u64,
     pub parent_surface_id: u64,
     pub popup_root_surface_id: u64,
@@ -3860,8 +3902,9 @@ pub struct SurfaceLayerArgs {
     pub composition_order: u32,
     pub opacity: f32,
     pub opaque: bool,
+    pub window_geometry: Option<&'a WireRect>,
 }
-impl<'a> Default for SurfaceLayerArgs {
+impl<'a> Default for SurfaceLayerArgs<'a> {
   #[inline]
   fn default() -> Self {
     SurfaceLayerArgs {
@@ -3885,6 +3928,7 @@ impl<'a> Default for SurfaceLayerArgs {
       composition_order: 0,
       opacity: 1.0,
       opaque: false,
+      window_geometry: None,
     }
   }
 }
@@ -3975,6 +4019,10 @@ impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> SurfaceLayerBuilder<'a, 'b, A> 
     self.fbb_.push_slot::<bool>(SurfaceLayer::VT_OPAQUE, opaque, false);
   }
   #[inline]
+  pub fn add_window_geometry(&mut self, window_geometry: &WireRect) {
+    self.fbb_.push_slot_always::<&WireRect>(SurfaceLayer::VT_WINDOW_GEOMETRY, window_geometry);
+  }
+  #[inline]
   pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> SurfaceLayerBuilder<'a, 'b, A> {
     let start = _fbb.start_table();
     SurfaceLayerBuilder {
@@ -4012,6 +4060,7 @@ impl core::fmt::Debug for SurfaceLayer<'_> {
       ds.field("composition_order", &self.composition_order());
       ds.field("opacity", &self.opacity());
       ds.field("opaque", &self.opaque());
+      ds.field("window_geometry", &self.window_geometry());
       ds.finish()
   }
 }
@@ -4827,6 +4876,8 @@ impl<'a> flatbuffers::Follow<'a> for WindowSnapshot<'a> {
 impl<'a> WindowSnapshot<'a> {
   pub const VT_WINDOWS: flatbuffers::VOffsetT = 4;
   pub const VT_RESTORED_WINDOW_IDS: flatbuffers::VOffsetT = 6;
+  pub const VT_DELTA: flatbuffers::VOffsetT = 8;
+  pub const VT_WINDOW_ORDER: flatbuffers::VOffsetT = 10;
 
   #[inline]
   pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -4838,8 +4889,10 @@ impl<'a> WindowSnapshot<'a> {
     args: &'args WindowSnapshotArgs<'args>
   ) -> flatbuffers::WIPOffset<WindowSnapshot<'bldr>> {
     let mut builder = WindowSnapshotBuilder::new(_fbb);
+    if let Some(x) = args.window_order { builder.add_window_order(x); }
     if let Some(x) = args.restored_window_ids { builder.add_restored_window_ids(x); }
     if let Some(x) = args.windows { builder.add_windows(x); }
+    builder.add_delta(args.delta);
     builder.finish()
   }
 
@@ -4858,6 +4911,20 @@ impl<'a> WindowSnapshot<'a> {
     // which contains a valid value in this slot
     unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u64>>>(WindowSnapshot::VT_RESTORED_WINDOW_IDS, None)}
   }
+  #[inline]
+  pub fn delta(&self) -> bool {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<bool>(WindowSnapshot::VT_DELTA, Some(false)).unwrap()}
+  }
+  #[inline]
+  pub fn window_order(&self) -> Option<flatbuffers::Vector<'a, u64>> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u64>>>(WindowSnapshot::VT_WINDOW_ORDER, None)}
+  }
 }
 
 impl flatbuffers::Verifiable for WindowSnapshot<'_> {
@@ -4869,6 +4936,8 @@ impl flatbuffers::Verifiable for WindowSnapshot<'_> {
     v.visit_table(pos)?
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<Window>>>>("windows", Self::VT_WINDOWS, false)?
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u64>>>("restored_window_ids", Self::VT_RESTORED_WINDOW_IDS, false)?
+     .visit_field::<bool>("delta", Self::VT_DELTA, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u64>>>("window_order", Self::VT_WINDOW_ORDER, false)?
      .finish();
     Ok(())
   }
@@ -4876,6 +4945,8 @@ impl flatbuffers::Verifiable for WindowSnapshot<'_> {
 pub struct WindowSnapshotArgs<'a> {
     pub windows: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<Window<'a>>>>>,
     pub restored_window_ids: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u64>>>,
+    pub delta: bool,
+    pub window_order: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u64>>>,
 }
 impl<'a> Default for WindowSnapshotArgs<'a> {
   #[inline]
@@ -4883,6 +4954,8 @@ impl<'a> Default for WindowSnapshotArgs<'a> {
     WindowSnapshotArgs {
       windows: None,
       restored_window_ids: None,
+      delta: false,
+      window_order: None,
     }
   }
 }
@@ -4899,6 +4972,14 @@ impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> WindowSnapshotBuilder<'a, 'b, A
   #[inline]
   pub fn add_restored_window_ids(&mut self, restored_window_ids: flatbuffers::WIPOffset<flatbuffers::Vector<'b , u64>>) {
     self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(WindowSnapshot::VT_RESTORED_WINDOW_IDS, restored_window_ids);
+  }
+  #[inline]
+  pub fn add_delta(&mut self, delta: bool) {
+    self.fbb_.push_slot::<bool>(WindowSnapshot::VT_DELTA, delta, false);
+  }
+  #[inline]
+  pub fn add_window_order(&mut self, window_order: flatbuffers::WIPOffset<flatbuffers::Vector<'b , u64>>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(WindowSnapshot::VT_WINDOW_ORDER, window_order);
   }
   #[inline]
   pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> WindowSnapshotBuilder<'a, 'b, A> {
@@ -4920,6 +5001,8 @@ impl core::fmt::Debug for WindowSnapshot<'_> {
     let mut ds = f.debug_struct("WindowSnapshot");
       ds.field("windows", &self.windows());
       ds.field("restored_window_ids", &self.restored_window_ids());
+      ds.field("delta", &self.delta());
+      ds.field("window_order", &self.window_order());
       ds.finish()
   }
 }
@@ -5451,6 +5534,7 @@ impl<'a> WindowRequest<'a> {
   pub const VT_WORKSPACE_ID: flatbuffers::VOffsetT = 22;
   pub const VT_SYSTEM_BAR_THICKNESS: flatbuffers::VOffsetT = 24;
   pub const VT_MAXIMIZE_PADDING: flatbuffers::VOffsetT = 26;
+  pub const VT_WINDOW_DELTAS: flatbuffers::VOffsetT = 28;
 
   #[inline]
   pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -5472,6 +5556,7 @@ impl<'a> WindowRequest<'a> {
     if let Some(x) = args.title { builder.add_title(x); }
     if let Some(x) = args.app_id { builder.add_app_id(x); }
     if let Some(x) = args.geometry { builder.add_geometry(x); }
+    builder.add_window_deltas(args.window_deltas);
     builder.add_system_bar_side(args.system_bar_side);
     builder.add_kind(args.kind);
     builder.finish()
@@ -5562,6 +5647,13 @@ impl<'a> WindowRequest<'a> {
     // which contains a valid value in this slot
     unsafe { self._tab.get::<f64>(WindowRequest::VT_MAXIMIZE_PADDING, Some(-1.0)).unwrap()}
   }
+  #[inline]
+  pub fn window_deltas(&self) -> bool {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<bool>(WindowRequest::VT_WINDOW_DELTAS, Some(false)).unwrap()}
+  }
 }
 
 impl flatbuffers::Verifiable for WindowRequest<'_> {
@@ -5583,6 +5675,7 @@ impl flatbuffers::Verifiable for WindowRequest<'_> {
      .visit_field::<u32>("workspace_id", Self::VT_WORKSPACE_ID, false)?
      .visit_field::<f64>("system_bar_thickness", Self::VT_SYSTEM_BAR_THICKNESS, false)?
      .visit_field::<f64>("maximize_padding", Self::VT_MAXIMIZE_PADDING, false)?
+     .visit_field::<bool>("window_deltas", Self::VT_WINDOW_DELTAS, false)?
      .finish();
     Ok(())
   }
@@ -5600,6 +5693,7 @@ pub struct WindowRequestArgs<'a> {
     pub workspace_id: u32,
     pub system_bar_thickness: f64,
     pub maximize_padding: f64,
+    pub window_deltas: bool,
 }
 impl<'a> Default for WindowRequestArgs<'a> {
   #[inline]
@@ -5617,6 +5711,7 @@ impl<'a> Default for WindowRequestArgs<'a> {
       workspace_id: 1,
       system_bar_thickness: -1.0,
       maximize_padding: -1.0,
+      window_deltas: false,
     }
   }
 }
@@ -5675,6 +5770,10 @@ impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> WindowRequestBuilder<'a, 'b, A>
     self.fbb_.push_slot::<f64>(WindowRequest::VT_MAXIMIZE_PADDING, maximize_padding, -1.0);
   }
   #[inline]
+  pub fn add_window_deltas(&mut self, window_deltas: bool) {
+    self.fbb_.push_slot::<bool>(WindowRequest::VT_WINDOW_DELTAS, window_deltas, false);
+  }
+  #[inline]
   pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> WindowRequestBuilder<'a, 'b, A> {
     let start = _fbb.start_table();
     WindowRequestBuilder {
@@ -5704,6 +5803,7 @@ impl core::fmt::Debug for WindowRequest<'_> {
       ds.field("workspace_id", &self.workspace_id());
       ds.field("system_bar_thickness", &self.system_bar_thickness());
       ds.field("maximize_padding", &self.maximize_padding());
+      ds.field("window_deltas", &self.window_deltas());
       ds.finish()
   }
 }
@@ -6286,6 +6386,8 @@ impl<'a> CursorState<'a> {
   pub const VT_SHAPE: flatbuffers::VOffsetT = 8;
   pub const VT_HOTSPOT: flatbuffers::VOffsetT = 10;
   pub const VT_SURFACES: flatbuffers::VOffsetT = 12;
+  pub const VT_DRAG_ACTIVE: flatbuffers::VOffsetT = 14;
+  pub const VT_DRAG_SURFACES: flatbuffers::VOffsetT = 16;
 
   #[inline]
   pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -6298,9 +6400,11 @@ impl<'a> CursorState<'a> {
   ) -> flatbuffers::WIPOffset<CursorState<'bldr>> {
     let mut builder = CursorStateBuilder::new(_fbb);
     builder.add_epoch(args.epoch);
+    if let Some(x) = args.drag_surfaces { builder.add_drag_surfaces(x); }
     if let Some(x) = args.surfaces { builder.add_surfaces(x); }
     if let Some(x) = args.hotspot { builder.add_hotspot(x); }
     if let Some(x) = args.shape { builder.add_shape(x); }
+    builder.add_drag_active(args.drag_active);
     builder.add_kind(args.kind);
     builder.finish()
   }
@@ -6341,6 +6445,20 @@ impl<'a> CursorState<'a> {
     // which contains a valid value in this slot
     unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<SurfaceLayer>>>>(CursorState::VT_SURFACES, None)}
   }
+  #[inline]
+  pub fn drag_active(&self) -> bool {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<bool>(CursorState::VT_DRAG_ACTIVE, Some(false)).unwrap()}
+  }
+  #[inline]
+  pub fn drag_surfaces(&self) -> Option<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<SurfaceLayer<'a>>>> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<SurfaceLayer>>>>(CursorState::VT_DRAG_SURFACES, None)}
+  }
 }
 
 impl flatbuffers::Verifiable for CursorState<'_> {
@@ -6355,6 +6473,8 @@ impl flatbuffers::Verifiable for CursorState<'_> {
      .visit_field::<flatbuffers::ForwardsUOffset<&str>>("shape", Self::VT_SHAPE, false)?
      .visit_field::<WirePoint>("hotspot", Self::VT_HOTSPOT, false)?
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<SurfaceLayer>>>>("surfaces", Self::VT_SURFACES, false)?
+     .visit_field::<bool>("drag_active", Self::VT_DRAG_ACTIVE, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<SurfaceLayer>>>>("drag_surfaces", Self::VT_DRAG_SURFACES, false)?
      .finish();
     Ok(())
   }
@@ -6365,6 +6485,8 @@ pub struct CursorStateArgs<'a> {
     pub shape: Option<flatbuffers::WIPOffset<&'a str>>,
     pub hotspot: Option<&'a WirePoint>,
     pub surfaces: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<SurfaceLayer<'a>>>>>,
+    pub drag_active: bool,
+    pub drag_surfaces: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<SurfaceLayer<'a>>>>>,
 }
 impl<'a> Default for CursorStateArgs<'a> {
   #[inline]
@@ -6375,6 +6497,8 @@ impl<'a> Default for CursorStateArgs<'a> {
       shape: None,
       hotspot: None,
       surfaces: None,
+      drag_active: false,
+      drag_surfaces: None,
     }
   }
 }
@@ -6405,6 +6529,14 @@ impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> CursorStateBuilder<'a, 'b, A> {
     self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(CursorState::VT_SURFACES, surfaces);
   }
   #[inline]
+  pub fn add_drag_active(&mut self, drag_active: bool) {
+    self.fbb_.push_slot::<bool>(CursorState::VT_DRAG_ACTIVE, drag_active, false);
+  }
+  #[inline]
+  pub fn add_drag_surfaces(&mut self, drag_surfaces: flatbuffers::WIPOffset<flatbuffers::Vector<'b , flatbuffers::ForwardsUOffset<SurfaceLayer<'b >>>>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(CursorState::VT_DRAG_SURFACES, drag_surfaces);
+  }
+  #[inline]
   pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> CursorStateBuilder<'a, 'b, A> {
     let start = _fbb.start_table();
     CursorStateBuilder {
@@ -6427,6 +6559,8 @@ impl core::fmt::Debug for CursorState<'_> {
       ds.field("shape", &self.shape());
       ds.field("hotspot", &self.hotspot());
       ds.field("surfaces", &self.surfaces());
+      ds.field("drag_active", &self.drag_active());
+      ds.field("drag_surfaces", &self.drag_surfaces());
       ds.finish()
   }
 }
@@ -7284,6 +7418,103 @@ impl core::fmt::Debug for ShortcutDenialActionTarget<'_> {
       ds.finish()
   }
 }
+pub enum ShortcutPluginActionTargetOffset {}
+#[derive(Copy, Clone, PartialEq)]
+
+pub struct ShortcutPluginActionTarget<'a> {
+  pub _tab: flatbuffers::Table<'a>,
+}
+
+impl<'a> flatbuffers::Follow<'a> for ShortcutPluginActionTarget<'a> {
+  type Inner = ShortcutPluginActionTarget<'a>;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
+  }
+}
+
+impl<'a> ShortcutPluginActionTarget<'a> {
+  pub const VT_ID: flatbuffers::VOffsetT = 4;
+
+  #[inline]
+  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    ShortcutPluginActionTarget { _tab: table }
+  }
+  #[allow(unused_mut)]
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
+    _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+    args: &'args ShortcutPluginActionTargetArgs<'args>
+  ) -> flatbuffers::WIPOffset<ShortcutPluginActionTarget<'bldr>> {
+    let mut builder = ShortcutPluginActionTargetBuilder::new(_fbb);
+    if let Some(x) = args.id { builder.add_id(x); }
+    builder.finish()
+  }
+
+
+  #[inline]
+  pub fn id(&self) -> Option<&'a str> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(ShortcutPluginActionTarget::VT_ID, None)}
+  }
+}
+
+impl flatbuffers::Verifiable for ShortcutPluginActionTarget<'_> {
+  #[inline]
+  fn run_verifier(
+    v: &mut flatbuffers::Verifier, pos: usize
+  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+    use self::flatbuffers::Verifiable;
+    v.visit_table(pos)?
+     .visit_field::<flatbuffers::ForwardsUOffset<&str>>("id", Self::VT_ID, false)?
+     .finish();
+    Ok(())
+  }
+}
+pub struct ShortcutPluginActionTargetArgs<'a> {
+    pub id: Option<flatbuffers::WIPOffset<&'a str>>,
+}
+impl<'a> Default for ShortcutPluginActionTargetArgs<'a> {
+  #[inline]
+  fn default() -> Self {
+    ShortcutPluginActionTargetArgs {
+      id: None,
+    }
+  }
+}
+
+pub struct ShortcutPluginActionTargetBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+  fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+  start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+}
+impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> ShortcutPluginActionTargetBuilder<'a, 'b, A> {
+  #[inline]
+  pub fn add_id(&mut self, id: flatbuffers::WIPOffset<&'b  str>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(ShortcutPluginActionTarget::VT_ID, id);
+  }
+  #[inline]
+  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> ShortcutPluginActionTargetBuilder<'a, 'b, A> {
+    let start = _fbb.start_table();
+    ShortcutPluginActionTargetBuilder {
+      fbb_: _fbb,
+      start_: start,
+    }
+  }
+  #[inline]
+  pub fn finish(self) -> flatbuffers::WIPOffset<ShortcutPluginActionTarget<'a>> {
+    let o = self.fbb_.end_table(self.start_);
+    flatbuffers::WIPOffset::new(o.value())
+  }
+}
+
+impl core::fmt::Debug for ShortcutPluginActionTarget<'_> {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    let mut ds = f.debug_struct("ShortcutPluginActionTarget");
+      ds.field("id", &self.id());
+      ds.finish()
+  }
+}
 pub enum ShortcutSpawnTargetOffset {}
 #[derive(Copy, Clone, PartialEq)]
 
@@ -7598,6 +7829,21 @@ impl<'a> ShortcutBinding<'a> {
     }
   }
 
+  #[inline]
+  #[allow(non_snake_case)]
+  pub fn target_as_shortcut_plugin_action_target(&self) -> Option<ShortcutPluginActionTarget<'a>> {
+    if self.target_type() == ShortcutTarget::ShortcutPluginActionTarget {
+      self.target().map(|t| {
+       // Safety:
+       // Created from a valid Table for this object
+       // Which contains a valid union in this slot
+       unsafe { ShortcutPluginActionTarget::init_from_table(t) }
+     })
+    } else {
+      None
+    }
+  }
+
 }
 
 impl flatbuffers::Verifiable for ShortcutBinding<'_> {
@@ -7613,6 +7859,7 @@ impl flatbuffers::Verifiable for ShortcutBinding<'_> {
           ShortcutTarget::ShortcutDenialActionTarget => v.verify_union_variant::<flatbuffers::ForwardsUOffset<ShortcutDenialActionTarget>>("ShortcutTarget::ShortcutDenialActionTarget", pos),
           ShortcutTarget::ShortcutSpawnTarget => v.verify_union_variant::<flatbuffers::ForwardsUOffset<ShortcutSpawnTarget>>("ShortcutTarget::ShortcutSpawnTarget", pos),
           ShortcutTarget::ShortcutSpawnShTarget => v.verify_union_variant::<flatbuffers::ForwardsUOffset<ShortcutSpawnShTarget>>("ShortcutTarget::ShortcutSpawnShTarget", pos),
+          ShortcutTarget::ShortcutPluginActionTarget => v.verify_union_variant::<flatbuffers::ForwardsUOffset<ShortcutPluginActionTarget>>("ShortcutTarget::ShortcutPluginActionTarget", pos),
           _ => Ok(()),
         }
      })?
@@ -7690,6 +7937,13 @@ impl core::fmt::Debug for ShortcutBinding<'_> {
         },
         ShortcutTarget::ShortcutSpawnShTarget => {
           if let Some(x) = self.target_as_shortcut_spawn_sh_target() {
+            ds.field("target", &x)
+          } else {
+            ds.field("target", &"InvalidFlatbuffer: Union discriminant does not match value.")
+          }
+        },
+        ShortcutTarget::ShortcutPluginActionTarget => {
+          if let Some(x) = self.target_as_shortcut_plugin_action_target() {
             ds.field("target", &x)
           } else {
             ds.field("target", &"InvalidFlatbuffer: Union discriminant does not match value.")
@@ -7870,6 +8124,8 @@ impl<'a> ShortcutConfiguration<'a> {
   pub const VT_SHORTCUTS: flatbuffers::VOffsetT = 4;
   pub const VT_SUPPORTED_ACTIONS: flatbuffers::VOffsetT = 6;
   pub const VT_SUPPORTED_INPUTS: flatbuffers::VOffsetT = 8;
+  pub const VT_PLUGIN_ACTIONS_JSON: flatbuffers::VOffsetT = 10;
+  pub const VT_ACTION_GENERATION: flatbuffers::VOffsetT = 12;
 
   #[inline]
   pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -7881,6 +8137,8 @@ impl<'a> ShortcutConfiguration<'a> {
     args: &'args ShortcutConfigurationArgs<'args>
   ) -> flatbuffers::WIPOffset<ShortcutConfiguration<'bldr>> {
     let mut builder = ShortcutConfigurationBuilder::new(_fbb);
+    builder.add_action_generation(args.action_generation);
+    if let Some(x) = args.plugin_actions_json { builder.add_plugin_actions_json(x); }
     if let Some(x) = args.supported_inputs { builder.add_supported_inputs(x); }
     if let Some(x) = args.supported_actions { builder.add_supported_actions(x); }
     if let Some(x) = args.shortcuts { builder.add_shortcuts(x); }
@@ -7909,6 +8167,20 @@ impl<'a> ShortcutConfiguration<'a> {
     // which contains a valid value in this slot
     unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<ShortcutInput>>>>(ShortcutConfiguration::VT_SUPPORTED_INPUTS, None)}
   }
+  #[inline]
+  pub fn plugin_actions_json(&self) -> Option<&'a str> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(ShortcutConfiguration::VT_PLUGIN_ACTIONS_JSON, None)}
+  }
+  #[inline]
+  pub fn action_generation(&self) -> u64 {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<u64>(ShortcutConfiguration::VT_ACTION_GENERATION, Some(0)).unwrap()}
+  }
 }
 
 impl flatbuffers::Verifiable for ShortcutConfiguration<'_> {
@@ -7921,6 +8193,8 @@ impl flatbuffers::Verifiable for ShortcutConfiguration<'_> {
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<ShortcutBinding>>>>("shortcuts", Self::VT_SHORTCUTS, false)?
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, ShortcutActionKind>>>("supported_actions", Self::VT_SUPPORTED_ACTIONS, false)?
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, flatbuffers::ForwardsUOffset<ShortcutInput>>>>("supported_inputs", Self::VT_SUPPORTED_INPUTS, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<&str>>("plugin_actions_json", Self::VT_PLUGIN_ACTIONS_JSON, false)?
+     .visit_field::<u64>("action_generation", Self::VT_ACTION_GENERATION, false)?
      .finish();
     Ok(())
   }
@@ -7929,6 +8203,8 @@ pub struct ShortcutConfigurationArgs<'a> {
     pub shortcuts: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<ShortcutBinding<'a>>>>>,
     pub supported_actions: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, ShortcutActionKind>>>,
     pub supported_inputs: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<ShortcutInput<'a>>>>>,
+    pub plugin_actions_json: Option<flatbuffers::WIPOffset<&'a str>>,
+    pub action_generation: u64,
 }
 impl<'a> Default for ShortcutConfigurationArgs<'a> {
   #[inline]
@@ -7937,6 +8213,8 @@ impl<'a> Default for ShortcutConfigurationArgs<'a> {
       shortcuts: None,
       supported_actions: None,
       supported_inputs: None,
+      plugin_actions_json: None,
+      action_generation: 0,
     }
   }
 }
@@ -7959,6 +8237,14 @@ impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> ShortcutConfigurationBuilder<'a
     self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(ShortcutConfiguration::VT_SUPPORTED_INPUTS, supported_inputs);
   }
   #[inline]
+  pub fn add_plugin_actions_json(&mut self, plugin_actions_json: flatbuffers::WIPOffset<&'b  str>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(ShortcutConfiguration::VT_PLUGIN_ACTIONS_JSON, plugin_actions_json);
+  }
+  #[inline]
+  pub fn add_action_generation(&mut self, action_generation: u64) {
+    self.fbb_.push_slot::<u64>(ShortcutConfiguration::VT_ACTION_GENERATION, action_generation, 0);
+  }
+  #[inline]
   pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> ShortcutConfigurationBuilder<'a, 'b, A> {
     let start = _fbb.start_table();
     ShortcutConfigurationBuilder {
@@ -7979,6 +8265,8 @@ impl core::fmt::Debug for ShortcutConfiguration<'_> {
       ds.field("shortcuts", &self.shortcuts());
       ds.field("supported_actions", &self.supported_actions());
       ds.field("supported_inputs", &self.supported_inputs());
+      ds.field("plugin_actions_json", &self.plugin_actions_json());
+      ds.field("action_generation", &self.action_generation());
       ds.finish()
   }
 }
@@ -10593,6 +10881,251 @@ impl core::fmt::Debug for ThemeState<'_> {
       ds.finish()
   }
 }
+pub enum PluginActionCatalogOffset {}
+#[derive(Copy, Clone, PartialEq)]
+
+pub struct PluginActionCatalog<'a> {
+  pub _tab: flatbuffers::Table<'a>,
+}
+
+impl<'a> flatbuffers::Follow<'a> for PluginActionCatalog<'a> {
+  type Inner = PluginActionCatalog<'a>;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
+  }
+}
+
+impl<'a> PluginActionCatalog<'a> {
+  pub const VT_GENERATION: flatbuffers::VOffsetT = 4;
+  pub const VT_ACTIONS_JSON: flatbuffers::VOffsetT = 6;
+
+  #[inline]
+  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    PluginActionCatalog { _tab: table }
+  }
+  #[allow(unused_mut)]
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
+    _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+    args: &'args PluginActionCatalogArgs<'args>
+  ) -> flatbuffers::WIPOffset<PluginActionCatalog<'bldr>> {
+    let mut builder = PluginActionCatalogBuilder::new(_fbb);
+    builder.add_generation(args.generation);
+    if let Some(x) = args.actions_json { builder.add_actions_json(x); }
+    builder.finish()
+  }
+
+
+  #[inline]
+  pub fn generation(&self) -> u64 {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<u64>(PluginActionCatalog::VT_GENERATION, Some(0)).unwrap()}
+  }
+  #[inline]
+  pub fn actions_json(&self) -> Option<&'a str> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(PluginActionCatalog::VT_ACTIONS_JSON, None)}
+  }
+}
+
+impl flatbuffers::Verifiable for PluginActionCatalog<'_> {
+  #[inline]
+  fn run_verifier(
+    v: &mut flatbuffers::Verifier, pos: usize
+  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+    use self::flatbuffers::Verifiable;
+    v.visit_table(pos)?
+     .visit_field::<u64>("generation", Self::VT_GENERATION, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<&str>>("actions_json", Self::VT_ACTIONS_JSON, false)?
+     .finish();
+    Ok(())
+  }
+}
+pub struct PluginActionCatalogArgs<'a> {
+    pub generation: u64,
+    pub actions_json: Option<flatbuffers::WIPOffset<&'a str>>,
+}
+impl<'a> Default for PluginActionCatalogArgs<'a> {
+  #[inline]
+  fn default() -> Self {
+    PluginActionCatalogArgs {
+      generation: 0,
+      actions_json: None,
+    }
+  }
+}
+
+pub struct PluginActionCatalogBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+  fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+  start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+}
+impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> PluginActionCatalogBuilder<'a, 'b, A> {
+  #[inline]
+  pub fn add_generation(&mut self, generation: u64) {
+    self.fbb_.push_slot::<u64>(PluginActionCatalog::VT_GENERATION, generation, 0);
+  }
+  #[inline]
+  pub fn add_actions_json(&mut self, actions_json: flatbuffers::WIPOffset<&'b  str>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(PluginActionCatalog::VT_ACTIONS_JSON, actions_json);
+  }
+  #[inline]
+  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> PluginActionCatalogBuilder<'a, 'b, A> {
+    let start = _fbb.start_table();
+    PluginActionCatalogBuilder {
+      fbb_: _fbb,
+      start_: start,
+    }
+  }
+  #[inline]
+  pub fn finish(self) -> flatbuffers::WIPOffset<PluginActionCatalog<'a>> {
+    let o = self.fbb_.end_table(self.start_);
+    flatbuffers::WIPOffset::new(o.value())
+  }
+}
+
+impl core::fmt::Debug for PluginActionCatalog<'_> {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    let mut ds = f.debug_struct("PluginActionCatalog");
+      ds.field("generation", &self.generation());
+      ds.field("actions_json", &self.actions_json());
+      ds.finish()
+  }
+}
+pub enum PluginActionInvocationOffset {}
+#[derive(Copy, Clone, PartialEq)]
+
+pub struct PluginActionInvocation<'a> {
+  pub _tab: flatbuffers::Table<'a>,
+}
+
+impl<'a> flatbuffers::Follow<'a> for PluginActionInvocation<'a> {
+  type Inner = PluginActionInvocation<'a>;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
+  }
+}
+
+impl<'a> PluginActionInvocation<'a> {
+  pub const VT_GENERATION: flatbuffers::VOffsetT = 4;
+  pub const VT_ID: flatbuffers::VOffsetT = 6;
+  pub const VT_MONITOR_ID: flatbuffers::VOffsetT = 8;
+
+  #[inline]
+  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    PluginActionInvocation { _tab: table }
+  }
+  #[allow(unused_mut)]
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
+    _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+    args: &'args PluginActionInvocationArgs<'args>
+  ) -> flatbuffers::WIPOffset<PluginActionInvocation<'bldr>> {
+    let mut builder = PluginActionInvocationBuilder::new(_fbb);
+    builder.add_monitor_id(args.monitor_id);
+    builder.add_generation(args.generation);
+    if let Some(x) = args.id { builder.add_id(x); }
+    builder.finish()
+  }
+
+
+  #[inline]
+  pub fn generation(&self) -> u64 {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<u64>(PluginActionInvocation::VT_GENERATION, Some(0)).unwrap()}
+  }
+  #[inline]
+  pub fn id(&self) -> Option<&'a str> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(PluginActionInvocation::VT_ID, None)}
+  }
+  #[inline]
+  pub fn monitor_id(&self) -> i64 {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<i64>(PluginActionInvocation::VT_MONITOR_ID, Some(-1)).unwrap()}
+  }
+}
+
+impl flatbuffers::Verifiable for PluginActionInvocation<'_> {
+  #[inline]
+  fn run_verifier(
+    v: &mut flatbuffers::Verifier, pos: usize
+  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+    use self::flatbuffers::Verifiable;
+    v.visit_table(pos)?
+     .visit_field::<u64>("generation", Self::VT_GENERATION, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<&str>>("id", Self::VT_ID, false)?
+     .visit_field::<i64>("monitor_id", Self::VT_MONITOR_ID, false)?
+     .finish();
+    Ok(())
+  }
+}
+pub struct PluginActionInvocationArgs<'a> {
+    pub generation: u64,
+    pub id: Option<flatbuffers::WIPOffset<&'a str>>,
+    pub monitor_id: i64,
+}
+impl<'a> Default for PluginActionInvocationArgs<'a> {
+  #[inline]
+  fn default() -> Self {
+    PluginActionInvocationArgs {
+      generation: 0,
+      id: None,
+      monitor_id: -1,
+    }
+  }
+}
+
+pub struct PluginActionInvocationBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+  fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+  start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+}
+impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> PluginActionInvocationBuilder<'a, 'b, A> {
+  #[inline]
+  pub fn add_generation(&mut self, generation: u64) {
+    self.fbb_.push_slot::<u64>(PluginActionInvocation::VT_GENERATION, generation, 0);
+  }
+  #[inline]
+  pub fn add_id(&mut self, id: flatbuffers::WIPOffset<&'b  str>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(PluginActionInvocation::VT_ID, id);
+  }
+  #[inline]
+  pub fn add_monitor_id(&mut self, monitor_id: i64) {
+    self.fbb_.push_slot::<i64>(PluginActionInvocation::VT_MONITOR_ID, monitor_id, -1);
+  }
+  #[inline]
+  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> PluginActionInvocationBuilder<'a, 'b, A> {
+    let start = _fbb.start_table();
+    PluginActionInvocationBuilder {
+      fbb_: _fbb,
+      start_: start,
+    }
+  }
+  #[inline]
+  pub fn finish(self) -> flatbuffers::WIPOffset<PluginActionInvocation<'a>> {
+    let o = self.fbb_.end_table(self.start_);
+    flatbuffers::WIPOffset::new(o.value())
+  }
+}
+
+impl core::fmt::Debug for PluginActionInvocation<'_> {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    let mut ds = f.debug_struct("PluginActionInvocation");
+      ds.field("generation", &self.generation());
+      ds.field("id", &self.id());
+      ds.field("monitor_id", &self.monitor_id());
+      ds.finish()
+  }
+}
 pub enum EnvelopeOffset {}
 #[derive(Copy, Clone, PartialEq)]
 
@@ -10954,6 +11487,36 @@ impl<'a> Envelope<'a> {
     }
   }
 
+  #[inline]
+  #[allow(non_snake_case)]
+  pub fn payload_as_plugin_action_catalog(&self) -> Option<PluginActionCatalog<'a>> {
+    if self.payload_type() == Payload::PluginActionCatalog {
+      self.payload().map(|t| {
+       // Safety:
+       // Created from a valid Table for this object
+       // Which contains a valid union in this slot
+       unsafe { PluginActionCatalog::init_from_table(t) }
+     })
+    } else {
+      None
+    }
+  }
+
+  #[inline]
+  #[allow(non_snake_case)]
+  pub fn payload_as_plugin_action_invocation(&self) -> Option<PluginActionInvocation<'a>> {
+    if self.payload_type() == Payload::PluginActionInvocation {
+      self.payload().map(|t| {
+       // Safety:
+       // Created from a valid Table for this object
+       // Which contains a valid union in this slot
+       unsafe { PluginActionInvocation::init_from_table(t) }
+     })
+    } else {
+      None
+    }
+  }
+
 }
 
 impl flatbuffers::Verifiable for Envelope<'_> {
@@ -10987,6 +11550,8 @@ impl flatbuffers::Verifiable for Envelope<'_> {
           Payload::XEmbedTrayCommand => v.verify_union_variant::<flatbuffers::ForwardsUOffset<XEmbedTrayCommand>>("Payload::XEmbedTrayCommand", pos),
           Payload::ThemeState => v.verify_union_variant::<flatbuffers::ForwardsUOffset<ThemeState>>("Payload::ThemeState", pos),
           Payload::CursorState => v.verify_union_variant::<flatbuffers::ForwardsUOffset<CursorState>>("Payload::CursorState", pos),
+          Payload::PluginActionCatalog => v.verify_union_variant::<flatbuffers::ForwardsUOffset<PluginActionCatalog>>("Payload::PluginActionCatalog", pos),
+          Payload::PluginActionInvocation => v.verify_union_variant::<flatbuffers::ForwardsUOffset<PluginActionInvocation>>("Payload::PluginActionInvocation", pos),
           _ => Ok(()),
         }
      })?
@@ -11190,6 +11755,20 @@ impl core::fmt::Debug for Envelope<'_> {
         },
         Payload::CursorState => {
           if let Some(x) = self.payload_as_cursor_state() {
+            ds.field("payload", &x)
+          } else {
+            ds.field("payload", &"InvalidFlatbuffer: Union discriminant does not match value.")
+          }
+        },
+        Payload::PluginActionCatalog => {
+          if let Some(x) = self.payload_as_plugin_action_catalog() {
+            ds.field("payload", &x)
+          } else {
+            ds.field("payload", &"InvalidFlatbuffer: Union discriminant does not match value.")
+          }
+        },
+        Payload::PluginActionInvocation => {
+          if let Some(x) = self.payload_as_plugin_action_invocation() {
             ds.field("payload", &x)
           } else {
             ds.field("payload", &"InvalidFlatbuffer: Union discriminant does not match value.")

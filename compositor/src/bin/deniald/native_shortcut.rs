@@ -13,9 +13,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
+use super::keyboard_resize::KeyboardResize;
 use super::window_layout::LayoutDirection;
 
-const SHORTCUT_SCHEMA_VERSION: u64 = 9;
+const SHORTCUT_SCHEMA_VERSION: u64 = 11;
 const OLDEST_SHORTCUT_SCHEMA_VERSION: u64 = 1;
 const MAX_SHORTCUT_FILE_BYTES: usize = 128 * 1024;
 pub(super) const MAX_SHORTCUTS: usize = 256;
@@ -81,6 +82,13 @@ const SHORTCUT_V6_ADDITIONS: &[(&str, ShortcutAction)] = &[
 const SHORTCUT_V9_ADDITIONS: &[(&str, ShortcutAction)] = &[
     ("FourFingerSwipeDown", ShortcutAction::PreviousWorkspace),
     ("FourFingerSwipeUp", ShortcutAction::NextWorkspace),
+];
+
+const SHORTCUT_V10_ADDITIONS: &[(&str, ShortcutAction)] = &[
+    ("Super+Minus", ShortcutAction::ResizeShrinkWidth),
+    ("Super+Equal", ShortcutAction::ResizeGrowWidth),
+    ("Super+Shift+Minus", ShortcutAction::ResizeShrinkHeight),
+    ("Super+Shift+Equal", ShortcutAction::ResizeGrowHeight),
 ];
 
 const KEY_ESCAPE: u32 = 1;
@@ -184,6 +192,11 @@ pub(super) enum ShortcutAction {
     OpenDashboard,
     OpenOverview,
     ToggleVerticalMaximize,
+    ResizeGrowWidth,
+    ResizeShrinkWidth,
+    ResizeGrowHeight,
+    ResizeShrinkHeight,
+    ResetWindowHeight,
     WindowSwitcher,
     OpenClipboard,
     CaptureRegion,
@@ -236,7 +249,7 @@ pub(super) enum ShortcutAction {
 }
 
 impl ShortcutAction {
-    pub(super) const ALL: [Self; 54] = [
+    pub(super) const ALL: [Self; 59] = [
         Self::OpenApplications,
         Self::OpenDashboard,
         Self::OpenSettings,
@@ -248,6 +261,11 @@ impl ShortcutAction {
         Self::MinimizeWindow,
         Self::MinimizeAllWindows,
         Self::ToggleVerticalMaximize,
+        Self::ResizeGrowWidth,
+        Self::ResizeShrinkWidth,
+        Self::ResizeGrowHeight,
+        Self::ResizeShrinkHeight,
+        Self::ResetWindowHeight,
         Self::ToggleMaximize,
         Self::ToggleFullscreen,
         Self::ToggleWindowAlwaysOnTop,
@@ -338,6 +356,9 @@ pub(super) enum ShortcutValidation {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 pub(super) enum ShortcutTarget {
+    PluginAction {
+        id: String,
+    },
     DenialAction {
         action: ShortcutAction,
     },
@@ -358,6 +379,13 @@ pub(super) enum ShortcutTarget {
 impl ShortcutTarget {
     fn validate(&self) -> Result<(), ShortcutError> {
         match self {
+            Self::PluginAction { id } => {
+                if crate::plugin_actions::valid_id(id) {
+                    Ok(())
+                } else {
+                    Err(ShortcutError::Document("invalid plugin action ID".into()))
+                }
+            }
             Self::DenialAction { .. } => Ok(()),
             Self::Spawn {
                 command,
@@ -387,6 +415,10 @@ impl ShortcutTarget {
                     | ShortcutAction::VolumeDown
                     | ShortcutAction::BrightnessUp
                     | ShortcutAction::BrightnessDown
+                    | ShortcutAction::ResizeGrowWidth
+                    | ShortcutAction::ResizeShrinkWidth
+                    | ShortcutAction::ResizeGrowHeight
+                    | ShortcutAction::ResizeShrinkHeight
                     | ShortcutAction::FocusLeft
                     | ShortcutAction::FocusRight
                     | ShortcutAction::FocusUp
@@ -850,6 +882,7 @@ fn migrate_shortcut_file(file: &mut ShortcutFile) -> Result<Option<usize>, Short
         6 => &[SHORTCUT_V9_ADDITIONS],
         7 => &[SHORTCUT_V9_ADDITIONS],
         8 => &[SHORTCUT_V9_ADDITIONS],
+        9 | 10 => &[],
         version => {
             return Err(ShortcutError::Document(format!(
                 "shortcut version {version} is not supported; expected {OLDEST_SHORTCUT_SCHEMA_VERSION}..={SHORTCUT_SCHEMA_VERSION}"
@@ -865,6 +898,15 @@ fn migrate_shortcut_file(file: &mut ShortcutFile) -> Result<Option<usize>, Short
         return Err(ShortcutError::Document(format!(
             "shortcut count exceeds {MAX_SHORTCUTS}"
         )));
+    }
+
+    // Version 10 already applied earlier migrations. Preserve every user
+    // deletion and remapping while transferring only launcher action ownership.
+    if file.version == 10 {
+        let changed = migrate_launcher_targets(file);
+        file.version = SHORTCUT_SCHEMA_VERSION;
+        file.revision = file.revision.saturating_add(1);
+        return Ok(Some(changed));
     }
 
     // SUPER+Arrow is the directional vocabulary. Relocate only Denial's exact
@@ -890,8 +932,8 @@ fn migrate_shortcut_file(file: &mut ShortcutFile) -> Result<Option<usize>, Short
     for binding in &file.shortcuts {
         configured.insert(parse_shortcut(&binding.shortcut)?);
     }
-    for additions in additions {
-        for &(shortcut, action) in *additions {
+    for additions in additions.iter().copied().chain([SHORTCUT_V10_ADDITIONS]) {
+        for &(shortcut, action) in additions {
             let trigger = parse_shortcut(shortcut)?;
             if configured.contains(&trigger) || file.shortcuts.len() == MAX_SHORTCUTS {
                 continue;
@@ -899,14 +941,38 @@ fn migrate_shortcut_file(file: &mut ShortcutFile) -> Result<Option<usize>, Short
             configured.insert(trigger.clone());
             file.shortcuts.push(ShortcutBinding {
                 shortcut: trigger.canonical,
-                target: ShortcutTarget::DenialAction { action },
+                target: if action == ShortcutAction::OpenApplications {
+                    ShortcutTarget::PluginAction {
+                        id: crate::plugin_actions::LEGACY_LAUNCHER_ACTION.into(),
+                    }
+                } else {
+                    ShortcutTarget::DenialAction { action }
+                },
             });
             changed += 1;
         }
     }
+    changed += migrate_launcher_targets(file);
     file.version = SHORTCUT_SCHEMA_VERSION;
     file.revision = file.revision.saturating_add(1);
     Ok(Some(changed))
+}
+
+fn migrate_launcher_targets(file: &mut ShortcutFile) -> usize {
+    let mut changed = 0;
+    for binding in &mut file.shortcuts {
+        if binding.target
+            == (ShortcutTarget::DenialAction {
+                action: ShortcutAction::OpenApplications,
+            })
+        {
+            binding.target = ShortcutTarget::PluginAction {
+                id: crate::plugin_actions::LEGACY_LAUNCHER_ACTION.into(),
+            };
+            changed += 1;
+        }
+    }
+    changed
 }
 
 fn migrate_default_shortcut(
@@ -1142,9 +1208,16 @@ fn default_shortcut_file() -> ShortcutFile {
             .chain(SHORTCUT_V5_ADDITIONS.iter().copied())
             .chain(SHORTCUT_V6_ADDITIONS.iter().copied())
             .chain(SHORTCUT_V9_ADDITIONS.iter().copied())
+            .chain(SHORTCUT_V10_ADDITIONS.iter().copied())
             .map(|(shortcut, action)| ShortcutBinding {
                 shortcut: shortcut.to_owned(),
-                target: ShortcutTarget::DenialAction { action },
+                target: if action == ShortcutAction::OpenApplications {
+                    ShortcutTarget::PluginAction {
+                        id: crate::plugin_actions::LEGACY_LAUNCHER_ACTION.into(),
+                    }
+                } else {
+                    ShortcutTarget::DenialAction { action }
+                },
             })
             .collect(),
     }
@@ -1687,9 +1760,11 @@ pub(super) enum ShortcutDisposition {
     RequestVtSwitch(i32),
     RequestShutdown,
     RequestApplications,
+    PluginAction(String),
     RequestDashboard,
     RequestOverview,
     RequestToggleVerticalMaximize,
+    RequestResize(KeyboardResize),
     RequestWindowSwitcherNext,
     RequestWindowSwitcherPrevious,
     RequestWindowSwitcherEnd {
@@ -1728,6 +1803,31 @@ pub(super) enum ShortcutDisposition {
     SpawnSh(String),
 }
 
+impl ShortcutDisposition {
+    pub(super) fn repeats_with_timer(&self) -> bool {
+        self.repeats_system_control()
+            || matches!(
+                self,
+                Self::RequestResize(
+                    KeyboardResize::GrowWidth
+                        | KeyboardResize::ShrinkWidth
+                        | KeyboardResize::GrowHeight
+                        | KeyboardResize::ShrinkHeight
+                )
+            )
+    }
+
+    pub(super) fn repeats_system_control(&self) -> bool {
+        matches!(
+            self,
+            Self::RequestVolumeUp
+                | Self::RequestVolumeDown
+                | Self::RequestBrightnessUp
+                | Self::RequestBrightnessDown
+        )
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 enum WindowSwitcherRelease {
     Modifier(Modifier),
@@ -1741,6 +1841,7 @@ enum WindowSwitcherRelease {
 #[derive(Clone, Debug)]
 pub(super) struct ShortcutEngine {
     bindings: Vec<CompiledShortcut>,
+    available_plugin_actions: HashSet<String>,
     ctrl_keys: u8,
     alt_keys: u8,
     shift_keys: u8,
@@ -1761,6 +1862,7 @@ impl ShortcutEngine {
     fn from_file(file: &ShortcutFile) -> Result<Self, ShortcutError> {
         Ok(Self {
             bindings: compile_shortcuts(file)?,
+            available_plugin_actions: HashSet::new(),
             ctrl_keys: 0,
             alt_keys: 0,
             shift_keys: 0,
@@ -1770,6 +1872,22 @@ impl ShortcutEngine {
             captured_keys: HashMap::new(),
             captured_vt_keys: HashSet::new(),
         })
+    }
+
+    pub(super) fn set_plugin_actions(&mut self, catalog: &crate::plugin_actions::ActionCatalog) {
+        self.available_plugin_actions = catalog.actions.iter().map(|a| a.id.clone()).collect();
+    }
+
+    fn target_available(&self, target: &ShortcutTarget) -> bool {
+        match target {
+            ShortcutTarget::PluginAction { id } => self.available_plugin_actions.contains(id),
+            ShortcutTarget::DenialAction {
+                action: ShortcutAction::OpenApplications,
+            } => self
+                .available_plugin_actions
+                .contains(crate::plugin_actions::LEGACY_LAUNCHER_ACTION),
+            _ => true,
+        }
     }
 
     fn active_modifiers(&self) -> u8 {
@@ -1812,6 +1930,7 @@ impl ShortcutEngine {
             .find(|binding| {
                 binding.trigger.modifiers == 0
                     && binding.trigger.key == TriggerKey::Gesture(gesture)
+                    && self.target_available(&binding.target)
             })
             .map(|binding| binding.target.clone());
         if matches!(
@@ -1878,15 +1997,17 @@ impl ShortcutEngine {
         let modifiers = self.active_modifiers();
         self.bindings.iter().find_map(|binding| {
             (binding.trigger.modifiers == modifiers
-                && binding.trigger.key == TriggerKey::Evdev(evdev_keycode))
+                && binding.trigger.key == TriggerKey::Evdev(evdev_keycode)
+                && self.target_available(&binding.target))
             .then(|| (binding.target.clone(), binding.trigger.modifiers))
         })
     }
 
     fn modifier_tap_target(&self, modifier: Modifier) -> Option<ShortcutTarget> {
         self.bindings.iter().find_map(|binding| {
-            (binding.trigger.key == TriggerKey::ModifierTap(modifier))
-                .then(|| binding.target.clone())
+            (binding.trigger.key == TriggerKey::ModifierTap(modifier)
+                && self.target_available(&binding.target))
+            .then(|| binding.target.clone())
         })
     }
 
@@ -2100,6 +2221,11 @@ impl From<ShortcutAction> for ShortcutDisposition {
             ShortcutAction::OpenDashboard => Self::RequestDashboard,
             ShortcutAction::OpenOverview => Self::RequestOverview,
             ShortcutAction::ToggleVerticalMaximize => Self::RequestToggleVerticalMaximize,
+            ShortcutAction::ResizeGrowWidth => Self::RequestResize(KeyboardResize::GrowWidth),
+            ShortcutAction::ResizeShrinkWidth => Self::RequestResize(KeyboardResize::ShrinkWidth),
+            ShortcutAction::ResizeGrowHeight => Self::RequestResize(KeyboardResize::GrowHeight),
+            ShortcutAction::ResizeShrinkHeight => Self::RequestResize(KeyboardResize::ShrinkHeight),
+            ShortcutAction::ResetWindowHeight => Self::RequestResize(KeyboardResize::ResetHeight),
             ShortcutAction::WindowSwitcher => Self::RequestWindowSwitcherNext,
             ShortcutAction::OpenClipboard => Self::RequestClipboard,
             ShortcutAction::CaptureRegion => Self::RequestScreenshotRegion,
@@ -2156,6 +2282,7 @@ impl From<ShortcutAction> for ShortcutDisposition {
 impl From<ShortcutTarget> for ShortcutDisposition {
     fn from(target: ShortcutTarget) -> Self {
         match target {
+            ShortcutTarget::PluginAction { id } => Self::PluginAction(id),
             ShortcutTarget::DenialAction { action } => action.into(),
             ShortcutTarget::Spawn {
                 command,
@@ -2174,6 +2301,152 @@ pub(super) type NativeEscapeShortcut = ShortcutEngine;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn v11_migrates_only_launcher_targets_preserving_user_deletions() {
+        let mut file = ShortcutFile {
+            version: 10,
+            revision: 25,
+            shortcuts: vec![ShortcutBinding {
+                shortcut: "Super+A".into(),
+                target: ShortcutTarget::DenialAction {
+                    action: ShortcutAction::OpenApplications,
+                },
+            }],
+        };
+        assert_eq!(migrate_shortcut_file(&mut file).unwrap(), Some(1));
+        assert_eq!(file.revision, 26);
+        assert_eq!(file.shortcuts.len(), 1);
+        assert_eq!(file.shortcuts[0].shortcut, "Super+A");
+        assert_eq!(
+            file.shortcuts[0].target,
+            ShortcutTarget::PluginAction {
+                id: crate::plugin_actions::LEGACY_LAUNCHER_ACTION.into(),
+            }
+        );
+        assert_eq!(migrate_shortcut_file(&mut file).unwrap(), None);
+        file.version = 10;
+        file.shortcuts.clear();
+        migrate_shortcut_file(&mut file).unwrap();
+        assert!(file.shortcuts.is_empty());
+    }
+
+    #[test]
+    fn plugin_actions_follow_catalog_for_keys_taps_and_gestures() {
+        let id = "third_party.anyAction";
+        let file = ShortcutFile {
+            version: SHORTCUT_SCHEMA_VERSION,
+            revision: 1,
+            shortcuts: ["A", "Super", "FourFingerSwipeUp"]
+                .into_iter()
+                .map(|shortcut| ShortcutBinding {
+                    shortcut: shortcut.into(),
+                    target: ShortcutTarget::PluginAction { id: id.into() },
+                })
+                .collect(),
+        };
+        let mut engine = ShortcutEngine::from_file(&file).unwrap();
+        let catalog = crate::plugin_actions::ActionCatalog::decode(5,
+            r#"[{"id":"third_party.anyAction","label":"Any action","description":"","provider":"Third party"}]"#).unwrap();
+        assert_eq!(engine.observe(30, true), ShortcutDisposition::Forward);
+        assert_eq!(engine.observe(30, false), ShortcutDisposition::Forward);
+        assert_eq!(
+            engine.observe_gesture(ShortcutGesture::FourFingerSwipeUp),
+            ShortcutDisposition::Forward
+        );
+        engine.set_plugin_actions(&catalog);
+        assert_eq!(
+            engine.observe(30, true),
+            ShortcutDisposition::PluginAction(id.into())
+        );
+        assert_eq!(engine.observe(30, true), ShortcutDisposition::Consume);
+        // Disabling a provider during a captured key still consumes its release.
+        engine.set_plugin_actions(&crate::plugin_actions::ActionCatalog::default());
+        assert_eq!(engine.observe(30, false), ShortcutDisposition::Consume);
+        engine.observe(KEY_LEFT_META, true);
+        assert_eq!(
+            engine.observe(KEY_LEFT_META, false),
+            ShortcutDisposition::Consume
+        );
+        engine.set_plugin_actions(&catalog);
+        engine.observe(KEY_LEFT_META, true);
+        assert_eq!(
+            engine.observe(KEY_LEFT_META, false),
+            ShortcutDisposition::PluginAction(id.into())
+        );
+        assert_eq!(
+            engine.observe_gesture(ShortcutGesture::FourFingerSwipeUp),
+            ShortcutDisposition::PluginAction(id.into())
+        );
+    }
+
+    #[test]
+    fn resize_defaults_repeat_and_capture_releases() {
+        for (keycode, shift, action) in [
+            (12, false, KeyboardResize::ShrinkWidth),
+            (13, false, KeyboardResize::GrowWidth),
+            (12, true, KeyboardResize::ShrinkHeight),
+            (13, true, KeyboardResize::GrowHeight),
+        ] {
+            let mut engine = ShortcutEngine::from_file(&default_shortcut_file()).unwrap();
+            engine.observe(KEY_LEFT_META, true);
+            if shift {
+                engine.observe(KEY_LEFT_SHIFT, true);
+            }
+            let expected = ShortcutDisposition::RequestResize(action);
+            assert_eq!(engine.observe(keycode, true), expected);
+            assert_eq!(engine.observe(keycode, true), expected);
+            assert!(expected.repeats_with_timer());
+            assert_eq!(engine.observe(keycode, false), ShortcutDisposition::Consume);
+        }
+        assert!(
+            !ShortcutDisposition::RequestResize(KeyboardResize::ResetHeight).repeats_with_timer()
+        );
+    }
+
+    #[test]
+    fn v10_migration_preserves_custom_bindings_and_runs_only_once() {
+        let custom = ShortcutBinding {
+            shortcut: "Super+Minus".to_owned(),
+            target: ShortcutTarget::SpawnSh {
+                command: "custom".to_owned(),
+            },
+        };
+        let mut file = ShortcutFile {
+            version: 9,
+            revision: 12,
+            shortcuts: vec![custom.clone()],
+        };
+        assert_eq!(migrate_shortcut_file(&mut file).unwrap(), Some(3));
+        assert_eq!(file.revision, 13);
+        assert_eq!(file.shortcuts[0], custom);
+        assert_eq!(file.shortcuts.len(), 4);
+        assert!(compile_shortcuts(&file).is_ok());
+        file.shortcuts.pop();
+        assert_eq!(migrate_shortcut_file(&mut file).unwrap(), None);
+        assert_eq!(file.shortcuts.len(), 3);
+    }
+
+    #[test]
+    fn level_shortcuts_repeat_while_the_key_remains_pressed() {
+        for (keycode, expected) in [
+            (KEY_VOLUME_UP, ShortcutDisposition::RequestVolumeUp),
+            (KEY_VOLUME_DOWN, ShortcutDisposition::RequestVolumeDown),
+            (KEY_BRIGHTNESS_UP, ShortcutDisposition::RequestBrightnessUp),
+            (
+                KEY_BRIGHTNESS_DOWN,
+                ShortcutDisposition::RequestBrightnessDown,
+            ),
+        ] {
+            let mut engine = ShortcutEngine::from_file(&default_shortcut_file()).unwrap();
+
+            assert_eq!(engine.observe(keycode, true), expected.clone());
+            let repeated = engine.observe(keycode, true);
+            assert_eq!(repeated, expected);
+            assert!(repeated.repeats_system_control());
+            assert_eq!(engine.observe(keycode, false), ShortcutDisposition::Consume);
+        }
+    }
 
     #[test]
     fn ctrl_alt_function_keys_request_vt_switch_and_capture_their_lifecycle() {
@@ -2244,6 +2517,7 @@ mod tests {
                     + SHORTCUT_V5_ADDITIONS.len()
                     + SHORTCUT_V6_ADDITIONS.len()
                     + SHORTCUT_V9_ADDITIONS.len()
+                    + SHORTCUT_V10_ADDITIONS.len()
             )
         );
         assert_eq!(file.version, SHORTCUT_SCHEMA_VERSION);
@@ -2319,10 +2593,13 @@ mod tests {
 
         assert_eq!(remove_retired_shortcut_actions(&mut document), 1);
         let mut file = serde_json::from_value::<ShortcutFile>(document).unwrap();
-        assert_eq!(migrate_shortcut_file(&mut file).unwrap(), Some(2));
+        assert_eq!(
+            migrate_shortcut_file(&mut file).unwrap(),
+            Some(2 + SHORTCUT_V10_ADDITIONS.len())
+        );
         assert_eq!(file.version, SHORTCUT_SCHEMA_VERSION);
         assert_eq!(file.revision, 13);
-        assert_eq!(file.shortcuts.len(), 3);
+        assert_eq!(file.shortcuts.len(), 3 + SHORTCUT_V10_ADDITIONS.len());
         assert_eq!(file.shortcuts[0].shortcut, "Super+Alt+Right");
     }
 
@@ -2339,7 +2616,10 @@ mod tests {
             }],
         };
 
-        assert_eq!(migrate_shortcut_file(&mut file).unwrap(), Some(3));
+        assert_eq!(
+            migrate_shortcut_file(&mut file).unwrap(),
+            Some(3 + SHORTCUT_V10_ADDITIONS.len())
+        );
         assert_eq!(file.version, SHORTCUT_SCHEMA_VERSION);
         assert_eq!(file.revision, 12);
         assert!(file.shortcuts.iter().any(|binding| {
@@ -2381,7 +2661,10 @@ mod tests {
             ],
         };
 
-        assert_eq!(migrate_shortcut_file(&mut file).unwrap(), Some(3));
+        assert_eq!(
+            migrate_shortcut_file(&mut file).unwrap(),
+            Some(3 + SHORTCUT_V10_ADDITIONS.len())
+        );
         assert_eq!(file.version, SHORTCUT_SCHEMA_VERSION);
         assert_eq!(file.revision, 15);
         assert!(matches!(

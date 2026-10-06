@@ -154,6 +154,16 @@ impl WaylandFrontend {
     }
 
     #[cfg(feature = "flutter")]
+    pub(super) fn surface_expects_sample(&self, id: u64) -> bool {
+        // Cursor and newly published surfaces have no desktop visibility
+        // entry yet. Preserve their conservative lifetime contract. Once
+        // known, a covered child must not wait for a sample that cannot occur.
+        !self.input_visibility_known
+            || !self.scene_surface_windows.contains_key(&id)
+            || self.sampled_surface_ids.contains(&id)
+    }
+
+    #[cfg(feature = "flutter")]
     pub(super) fn clear_visible_windows(&mut self) {
         for record in self.window_registry.values_mut() {
             record.visible = false;

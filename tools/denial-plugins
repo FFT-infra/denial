@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+BUILD_ROOT="${DENIAL_PC_BUILD_ROOT:-${XDG_CACHE_HOME:-$HOME/.cache}/denial/pc-build}"
+exec "$BUILD_ROOT/plugin-manager/denial-plugins" "$@"
