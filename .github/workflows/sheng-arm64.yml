@@ -3,7 +3,9 @@ name: Sheng ARM64 candidates
 on:
   workflow_dispatch:
   push:
-    branches: [dev-sheng-build]
+    branches:
+      - dev-sheng-build
+      - main-sheng-build
 
 permissions:
   contents: read
