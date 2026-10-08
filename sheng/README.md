@@ -1,7 +1,9 @@
 # sheng ARM64 candidate builds
 
-This directory is the build and packaging adapter for the `dev-sheng-build` branch
-of `FFT-infra/denial`, following upstream `dev` at the exact revision in
+This directory is the build and packaging adapter for the `dev-sheng-build` and
+`main-sheng-build` branches
+of `FFT-infra/denial`, following the upstream branch named in
+`source.lock.json` at the exact revision in
 `source.lock.json`. It leaves Denial's compositor, SDK, Flutter source lock,
 and existing upstream tools unchanged. It does not install on a device, activate
 a plugin, restart a graphical session, create a release, or sign packages.

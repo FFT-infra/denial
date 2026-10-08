@@ -3,7 +3,9 @@ name: Sheng ARM64 candidates
 on:
   workflow_dispatch:
   push:
-    branches: [dev-sheng-build]
+    branches:
+      - dev-sheng-build
+      - main-sheng-build
 
 permissions:
   contents: read
@@ -101,7 +103,7 @@ jobs:
       - name: Upload verified ARM64 candidates
         uses: actions/upload-artifact@v7
         with:
-          name: denial-sheng-fc44-aarch64-${{ github.sha }}
+          name: denial-sheng-aarch64-${{ github.sha }}
           path: ${{ env.SHENG_WORK }}/artifacts/
           if-no-files-found: error
           retention-days: 14
