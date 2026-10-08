@@ -92,9 +92,9 @@ class _ManagerPageState extends State<ManagerPage> {
                   onRefresh: controller.refresh,
                   onPreferences: controller.busy ? null : preferences,
                   applyLabel: controller.applyLabel,
-                  onApply: !controller.needsApply || !controller.canApply
+                  onApply: !controller.canSubmitApply
                       ? null
-                      : () => controller.submit(['apply']),
+                      : () => controller.submit(controller.applyOperation),
                 );
                 final page = controller.loading
                     ? DenialContentPane(

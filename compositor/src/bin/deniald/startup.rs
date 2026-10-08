@@ -76,6 +76,24 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
     }
 
     let runtime_limit = options.runtime_limit();
+    // calloop's signal source masks only the thread that creates it. Create it
+    // before settings, libseat, RTKit, graphics drivers, or any Denial worker
+    // can spawn threads so every descendant inherits the mask. A single thread
+    // without it receives process-directed control signals with their default
+    // action, and `denial-pc refresh` would then terminate the session.
+    let signal_source = if runtime_limit != RuntimeLimit::TestOnly {
+        Some(Signals::new(&[
+            Signal::SIGINT,
+            Signal::SIGTERM,
+            #[cfg(feature = "flutter")]
+            Signal::SIGUSR1,
+            #[cfg(feature = "flutter")]
+            Signal::SIGUSR2,
+        ])?)
+    } else {
+        None
+    };
+
     let preserve_predecessor = preserves_predecessor_kms_state(
         runtime_limit,
         denial_core::environment::flag("DENIAL_NO_PREDECESSOR"),
@@ -96,23 +114,6 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
         );
         settings.replace_invalid_keyboard_with_default();
     }
-
-    // calloop's signal source masks only the thread that creates it. Create it
-    // before libseat, RTKit, graphics drivers, or any Denial worker can spawn
-    // threads so every descendant inherits the mask and process-directed
-    // control signals cannot retain their default terminating behavior.
-    let signal_source = if runtime_limit != RuntimeLimit::TestOnly {
-        Some(Signals::new(&[
-            Signal::SIGINT,
-            Signal::SIGTERM,
-            #[cfg(feature = "flutter")]
-            Signal::SIGUSR1,
-            #[cfg(feature = "flutter")]
-            Signal::SIGUSR2,
-        ])?)
-    } else {
-        None
-    };
 
     #[cfg(feature = "flutter")]
     let portal_ipc_server = if options.flutter_bundle.is_some() && options.wayland {
@@ -798,6 +799,29 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
                 runtime.start_startup_application(arguments, "dev.denial.Welcome.desktop")
         {
             warn!(%error, "could not start Welcome");
+        }
+        // Denial was updated under a confirmed plugin composition. The plugin
+        // manager rebuilds it in the background, keeps the user informed and
+        // applies it at a quiet moment; the packaged shell runs meanwhile.
+        #[cfg(feature = "flutter")]
+        if runtime_limit == RuntimeLimit::UntilLogout
+            && wayland.is_some()
+            && flutter_launcher
+                .as_ref()
+                .is_some_and(FlutterLauncher::plugin_rebuild_needed)
+            && let Some(runtime) = flutter.as_mut()
+        {
+            if let Some(arguments) = plugin_bundle::resume_arguments() {
+                if let Err(error) =
+                    runtime.start_startup_application(arguments, "dev.denial.PluginManager.desktop")
+                {
+                    warn!(%error, "could not start the plugin rebuild after a Denial update");
+                }
+            } else {
+                info!(
+                    "plugins need a rebuild for this Denial version; the plugin manager is not installed"
+                );
+            }
         }
         if options.flutter_bundle.is_some() {
             #[cfg(feature = "flutter")]

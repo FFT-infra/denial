@@ -44,16 +44,29 @@ final class ManagerStore {
     temporary.renameSync(target.path);
   }
 
-  Future<T> exclusive<T>(Future<T> Function() action) async {
+  /// Runs [action] under the manager mutation lock. A background operation
+  /// that resumes after waiting may [wait] briefly for a short command, such
+  /// as one started from Plugins, to release the lock.
+  Future<T> exclusive<T>(
+    Future<T> Function() action, {
+    Duration wait = Duration.zero,
+  }) async {
     root.createSync(recursive: true);
     final lock = await file('manager.lock').open(mode: FileMode.append);
     try {
-      try {
-        await lock.lock(FileLock.exclusive);
-      } on FileSystemException {
-        throw const CompositionException(
-          'Another plugin manager operation is running. Wait for its job to finish.',
-        );
+      final deadline = DateTime.now().add(wait);
+      while (true) {
+        try {
+          await lock.lock(FileLock.exclusive);
+          break;
+        } on FileSystemException {
+          if (DateTime.now().isAfter(deadline)) {
+            throw const CompositionException(
+              'Another plugin manager operation is running. Wait for its job to finish.',
+            );
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 500));
+        }
       }
       return await action();
     } finally {
@@ -138,6 +151,12 @@ final class ManagerStore {
       ...updates,
       'updated': DateTime.now().toUtc().toIso8601String(),
     });
+  }
+
+  /// One job's status, including whether its worker exited unrecorded.
+  Map<String, Object?> job(String id) {
+    validateId(id);
+    return _jobStatus(read('jobs/$id.json'));
   }
 
   List<Map<String, Object?>> jobs() {

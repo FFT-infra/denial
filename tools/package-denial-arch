@@ -53,6 +53,9 @@ package_version="${native_metadata[0]}"
 PACKAGE_RELEASE="${native_metadata[1]}"
 export SOURCE_DATE_EPOCH="${native_metadata[3]}"
 
+# Every source lives in this checkout. makepkg keeps a file:// source it
+# already copied, so a stale copy would fail validation after an edit.
+rm -rf -- "$MAKEPKG_ROOT/sources"
 mkdir -p -- "$PACKAGE_ROOT" "$MAKEPKG_ROOT" "$MAKEPKG_ROOT/sources"
 
 export DENIAL_PACKAGE_SOURCE_ROOT="$ROOT"

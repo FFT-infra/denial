@@ -91,3 +91,41 @@ Allow Overriding System XKB Settings=False
 
 This does not disable Fcitx input methods. Denial does not write the setting
 because the same Fcitx configuration is shared with other desktop sessions.
+
+## Growing animated layers allocate GPU memory
+
+`Opacity`, `FadeTransition` and `AnimatedOpacity` usually render a partly
+transparent subtree into an offscreen layer. With Impeller on Mesa, that layer
+is a 4× multisampled target with a depth/stencil attachment and a resolve
+texture: about 36 bytes per pixel, or roughly 75 MB at 1920×1080 and 300 MB at
+3840×2160. The engine keeps unused targets for four frames, and Mesa keeps
+released buffers for about a second.
+
+Denial's engine reuses these targets while layers move and change size. It
+rounds layer sizes up to 64 pixels and may lend an unused target with up to
+twice the requested area. A layer that slides past a clip or the display edge
+is allocated at the full size its content and clips can show, so the slide
+reuses one target. The damage clip of a partial repaint does not size layers.
+
+A layer that keeps growing, because a fade is combined with a scale, a zoom, a
+growing clip or an animated layout rectangle, still allocates a new target at
+each larger size. Layers with a color filter, a backdrop alpha threshold, or an
+image filter other than a clamped blur keep their exact size and allocate
+whenever it changes.
+
+On 2026-10-03, before the engine reused resized targets, the workspace overview
+raised deniald's GPU memory on `.188` (1920×1080, Intel UHD) from about 240 MiB
+to 920 MiB while opening and 730 MiB while closing. Its workspace cards faded
+with `Opacity` while the zoom resized them; fading their colors instead removed
+the spike.
+
+An opacity of exactly 0 or 1 creates no layer. Shell content that fades and
+scales should use `ShellFadeScale`; see
+[Animate without per-frame GPU allocations](PLUGIN_DEVELOPMENT.md#animate-without-per-frame-gpu-allocations).
+Content that samples the scene behind it, such as glass, `ShellBackdropBlur`
+or a window surface, must fade each leaf instead, as the desktop's
+`DesktopPresentationOpacity` does for windows.
+
+To measure, read `drm-total-system0` from the DRM entry in
+`/proc/$(pgrep -n -x deniald)/fdinfo/`. The `i915:i915_gem_object_create`
+tracepoint attributes Intel allocations to the `io.flutter.rast` thread.

@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 
 import 'model.dart';
 import 'build_cache.dart';
+import 'rebuild.dart';
 import 'source.dart';
 import 'store.dart';
 
@@ -49,7 +50,16 @@ final class CompositionActivation {
     if (build['status'] != 'built' || plan['status'] != 'built') {
       throw const CompositionException('Build the candidate before activation');
     }
-    if (plan['selectionRevision'] != store.selection['revision']) {
+    if (plan['rebuildOf'] case final String base) {
+      // A rebuild may replace only the composition deniald is still waiting
+      // for. Restoring the packaged shell or applying another composition
+      // meanwhile is the user's newer decision.
+      if (!waitsForRebuildOf(store, await status(), base)) {
+        throw const CompositionException(
+          'Denial no longer waits for these plugins to be rebuilt',
+        );
+      }
+    } else if (plan['selectionRevision'] != store.selection['revision']) {
       throw const CompositionException(
         'Selection changed after this candidate was planned; plan again',
       );

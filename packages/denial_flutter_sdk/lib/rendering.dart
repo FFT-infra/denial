@@ -19,6 +19,7 @@ export 'src/widgets/shell_cursor.dart'
         ShellMouseCursors,
         shellCursorArtworkSource,
         shellCursorKindForPlatformShape;
+export 'src/widgets/shell_fade_scale.dart' show ShellFadeScale;
 export 'src/widgets/shell_wallpaper.dart'
     show
         ShellOutputWallpaper,

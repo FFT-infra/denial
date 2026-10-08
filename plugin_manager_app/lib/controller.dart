@@ -68,20 +68,46 @@ class ManagerController extends ChangeNotifier {
       connection.available &&
       compatibilityIssues.isEmpty;
 
+  /// Denial was updated and waits for the plugins it was running. Unsaved
+  /// switch changes take precedence: applying them also brings plugins back.
+  Map<String, Object?>? get pendingRebuild =>
+      configured && !draft.dirty ? pluginRebuild(state) : null;
+
+  /// Rebuilding restores a composition that already worked, so issues in a
+  /// different saved selection do not block it.
+  bool get canRebuild =>
+      !loading && !busy && configured && connection.available;
+
   bool get needsApply =>
-      configured && (draft.dirty || selectionNeedsApply(state));
+      configured &&
+      (draft.dirty || pendingRebuild != null || selectionNeedsApply(state));
+
+  bool get canSubmitApply =>
+      needsApply && (pendingRebuild != null ? canRebuild : canApply);
+
+  /// Plugins asked for it, so the shell switches as soon as it is built.
+  List<String> get applyOperation =>
+      pendingRebuild != null ? const ['rebuild', '--now'] : const ['apply'];
 
   String? get applyLabel => !needsApply
       ? null
+      : pendingRebuild != null
+      ? 'Rebuild plugins'
       : draft.dirty
       ? 'Apply changes'
       : 'Apply pending actions';
 
-  String get applyDescription => draft.dirty
-      ? selectionNeedsApply(state)
-            ? 'Apply your selection changes and pending updates to your desktop.'
-            : 'Apply your plugin selection changes to your desktop.'
-      : 'Your switches are unchanged. Pending plugin updates need to be applied to your desktop.';
+  String get applyDescription {
+    if (pendingRebuild case final rebuild?) {
+      return '${rebuildIntroduction(rebuild)} Rebuild your plugins to bring '
+          'them back, with all their settings. No need to log out.';
+    }
+    return draft.dirty
+        ? selectionNeedsApply(state)
+              ? 'Apply your selection changes and pending updates to your desktop.'
+              : 'Apply your plugin selection changes to your desktop.'
+        : 'Your switches are unchanged. Pending plugin updates need to be applied to your desktop.';
+  }
 
   void _schedulePoll() {
     _timer?.cancel();
@@ -133,6 +159,7 @@ class ManagerController extends ChangeNotifier {
 
   Future<void> submit(List<String> operation) async {
     if (busy) return;
+    if (operation.first == 'rebuild' && !canRebuild) return;
     if ({'apply', 'update'}.contains(operation.first)) {
       if (!canApply) return;
       if (draft.dirty) {
@@ -203,6 +230,35 @@ class ManagerController extends ChangeNotifier {
     if (source['path'] != null) ...['--path', source['path']! as String],
     if (source['ref'] != null) ...['--ref', source['ref']! as String],
   ];
+
+  /// The running rebuild waits for a pause before replacing the shell. While
+  /// the user watches it here, they are rarely idle, so offer to switch now.
+  bool get rebuildWaitsForPause => jobs.any(
+    (job) =>
+        job['operation'] == 'rebuild' &&
+        job['phase'] == 'running' &&
+        (job['progress'] as Map?)?['label'] == 'Switching when you pause',
+  );
+
+  bool _switchRequested = false;
+  bool get switchRequested => _switchRequested && rebuildWaitsForPause;
+
+  Future<void> switchNow() async {
+    if (!rebuildWaitsForPause || _switchRequested) return;
+    _switchRequested = true;
+    notifyListeners();
+    try {
+      await backend.invoke(['rebuild-now']);
+    } catch (failure) {
+      _switchRequested = false;
+      error = '$failure';
+    }
+    if (!_disposed) {
+      notifyListeners();
+      await refresh(reloadCatalog: false);
+    }
+  }
+
   void dismissError() {
     error = null;
     connection.dismiss();

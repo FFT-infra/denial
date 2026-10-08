@@ -353,6 +353,8 @@ class ApplyBar extends StatelessWidget {
         : controller.configured
         ? controller.draft.dirty
               ? 'Your selection has changed'
+              : controller.pendingRebuild != null
+              ? 'Your plugins are paused'
               : 'Pending actions are ready'
         : 'Preparing plugin support';
     return Padding(
@@ -430,11 +432,18 @@ class ApplyBar extends StatelessWidget {
                   onPressed: busy ? null : controller.discardDraft,
                   child: const Text('Discard'),
                 ),
-              if (controller.needsApply)
-                FilledButton.icon(
-                  onPressed: !controller.canApply
+              if (controller.rebuildWaitsForPause)
+                FilledButton(
+                  onPressed: controller.switchRequested
                       ? null
-                      : () => controller.submit(['apply']),
+                      : controller.switchNow,
+                  child: const Text('Switch now'),
+                )
+              else if (controller.needsApply)
+                FilledButton.icon(
+                  onPressed: !controller.canSubmitApply
+                      ? null
+                      : () => controller.submit(controller.applyOperation),
                   icon: const Icon(Icons.arrow_forward_rounded, size: 18),
                   iconAlignment: IconAlignment.end,
                   label: Text(controller.applyLabel!),

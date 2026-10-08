@@ -3,14 +3,14 @@
 use smithay::backend::input::ButtonState;
 use smithay::desktop::Window;
 use smithay::input::Seat;
+#[cfg(feature = "xwayland")]
+use smithay::input::pointer::PointerHandle;
 use smithay::input::pointer::{
     AxisFrame, ButtonEvent, GestureHoldBeginEvent, GestureHoldEndEvent, GesturePinchBeginEvent,
     GesturePinchEndEvent, GesturePinchUpdateEvent, GestureSwipeBeginEvent, GestureSwipeEndEvent,
     GestureSwipeUpdateEvent, GrabStartData, MotionEvent, PointerGrab, PointerInnerHandle,
     RelativeMotionEvent,
 };
-#[cfg(feature = "xwayland")]
-use smithay::input::pointer::PointerHandle;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_server::Resource;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;

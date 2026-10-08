@@ -455,6 +455,56 @@ compiled Flutter shell. Do not introduce runtime plugin scanning, reflection,
 dynamic Dart modules, or a registry that decides which plugins to enable.
 Ordinary dispatch to already selected handlers is fine.
 
+## Animate without per-frame GPU allocations
+
+A partly transparent `Opacity`, `FadeTransition` or `AnimatedOpacity` usually
+renders its subtree into an offscreen layer. Denial reuses that layer while it
+slides or changes size slightly, but a layer that keeps growing allocates new
+GPU memory at each larger size, about 36 bytes per pixel, or 18 MB for a
+640×800 panel. See
+[the known issue](KNOWN_ISSUES.md#growing-animated-layers-allocate-gpu-memory)
+for the details.
+
+- **Fading in place or sliding is fine.** `Transform.translate` keeps the size,
+  and an opacity of exactly 0 or 1 creates no layer.
+- **To fade and scale, use `ShellFadeScale`** from
+  `package:denial_flutter_sdk/rendering.dart` instead of combining `Opacity` or
+  `FadeTransition` with `Transform.scale`, `ScaleTransition` or `AnimatedScale`.
+  It renders the content once at its own size and scales the finished image,
+  so one layer serves the whole animation:
+
+  ```dart
+  AnimatedBuilder(
+    animation: reveal,
+    child: const MyPanelContent(),
+    builder: (context, child) => ShellFadeScale(
+      opacity: reveal.value,
+      scale: 0.95 + 0.05 * reveal.value,
+      child: child!,
+    ),
+  );
+  ```
+
+- **When layout changes the size, fade the paint.** For content in a resizing
+  rectangle or a growing clip, multiply the alpha of its colors instead of
+  wrapping it in `Opacity`:
+
+  ```dart
+  DecoratedBox(
+    decoration: BoxDecoration(
+      color: colors.surfaceContainer.withValues(alpha: 0.42 * t),
+      border: Border.all(
+        color: colors.hairline.withValues(alpha: colors.hairline.a * t),
+      ),
+    ),
+  );
+  ```
+
+- **Keep glass out of fades and `ShellFadeScale`.** Inside such a layer,
+  `ShellBackdropBlur`, other backdrop filters and window surfaces sample the
+  layer instead of the scene behind it. A plain `Transform.scale` or
+  translation keeps them live; fade those leaves individually.
+
 ## Access lower-level platform capabilities
 
 The SDK is the only Denial platform API. Do not depend on `denial_dart_shell`,

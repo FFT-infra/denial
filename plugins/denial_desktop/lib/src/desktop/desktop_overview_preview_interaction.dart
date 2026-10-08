@@ -5,6 +5,8 @@ import 'package:denial_flutter_sdk/motion.dart';
 import 'package:denial_flutter_sdk/shell_theme.dart';
 import 'package:denial_flutter_sdk/rendering.dart';
 
+import '../widgets/desktop_visibility_transition.dart';
+
 /// Publishes whether a window has finished moving into overview.
 ///
 /// The position animation owns this signal so preview emphasis follows its
@@ -168,18 +170,20 @@ class _DesktopOverviewPreviewInteractionState
                 children: [
                   widget.child,
                   IgnorePointer(
-                    child: AnimatedContainer(
-                      duration: Motion.tile,
-                      curve: Motion.standard,
-                      decoration: BoxDecoration(
-                        border: Border.all(
-                          color: context.shellTheme.accent.withValues(
-                            alpha: widget.selected ? 1.0 : 0.0,
+                    child: DesktopVisibilityFade(
+                      child: AnimatedContainer(
+                        duration: Motion.tile,
+                        curve: Motion.standard,
+                        decoration: BoxDecoration(
+                          border: Border.all(
+                            color: context.shellTheme.accent.withValues(
+                              alpha: widget.selected ? 1.0 : 0.0,
+                            ),
+                            width: widget.selected ? 2.0 : 0.0,
                           ),
-                          width: widget.selected ? 2.0 : 0.0,
-                        ),
-                        borderRadius: BorderRadius.circular(
-                          context.shellTheme.windowRadius,
+                          borderRadius: BorderRadius.circular(
+                            context.shellTheme.windowRadius,
+                          ),
                         ),
                       ),
                     ),

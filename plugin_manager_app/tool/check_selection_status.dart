@@ -94,6 +94,40 @@ void main() {
       'plugin_bundle': '/new',
     },
   }, false);
+  // After a Denial update deniald runs the packaged shell without an error
+  // and waits for the composition it had confirmed.
+  final updated = <String, Object?>{
+    ...applied,
+    'native': {
+      'active_mode': 'official_optimized',
+      'plugin_healthy': false,
+      'error': '',
+      'plugin_rebuild': {
+        'reason': 'source',
+        'bundle': '/new',
+        'version': '0.3.0',
+      },
+    },
+  };
+  if (pluginRebuild(updated)?['bundle'] != '/new' ||
+      compositionStartupError(updated) != null ||
+      rebuildIntroduction(pluginRebuild(updated)!) !=
+          'Denial 0.3.0 is installed.' ||
+      rebuildIntroduction({'version': 'development'}) !=
+          'Denial was updated.') {
+    throw StateError('An update waits for a rebuild and is not a failure');
+  }
+  stdout.writeln('PASS An update waits for a rebuild and is not a failure');
+  if (pluginRebuild(applied) != null ||
+      pluginRebuild({
+            'native': {
+              'available': false,
+              'plugin_rebuild': {'bundle': '/new'},
+            },
+          }) !=
+          null) {
+    throw StateError('Only an available session reports a rebuild');
+  }
   if (compositionStartupError(applied) != null ||
       compositionStartupError({
             'native': {'available': false, 'error': 'offline'},

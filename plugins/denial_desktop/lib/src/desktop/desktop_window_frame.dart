@@ -103,12 +103,14 @@ class DesktopClosingWindowFrame extends StatelessWidget {
         clipBehavior: Clip.none,
         children: [
           if (drawsServerFrame)
-            IgnorePointer(
-              child: CustomPaint(
-                painter: DesktopWindowShadowPainter(
-                  windowId: closing.window.objectId,
-                  radius: radius,
-                  shadowColor: context.shellColors.shadow,
+            DesktopVisibilityFade(
+              child: IgnorePointer(
+                child: CustomPaint(
+                  painter: DesktopWindowShadowPainter(
+                    windowId: closing.window.objectId,
+                    radius: radius,
+                    shadowColor: context.shellColors.shadow,
+                  ),
                 ),
               ),
             ),
@@ -360,7 +362,7 @@ class DesktopWindowFrame extends ConsumerWidget {
                   duration: minimizeEffectDuration,
                   curve: minimizeCurve,
                   scale: minimized ? 0.84 : 1.0,
-                  child: AnimatedOpacity(
+                  child: AnimatedDesktopPresentationOpacity(
                     duration: minimizeEffectDuration,
                     curve: minimizeCurve,
                     opacity: desktopWindowPresentationOpacity(

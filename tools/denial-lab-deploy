@@ -379,6 +379,9 @@ else
         chmod -R a-w -- "$artifact"
     else
         chmod u+w -- "$artifact"
+        # The fingerprints are read-only like the rest of the artifact.
+        rm -f -- "$artifact/SOURCE_FINGERPRINT" \
+            "$artifact/SETTINGS_SOURCE_FINGERPRINT"
         printf '%s\n' "$source_fingerprint" >"$artifact/SOURCE_FINGERPRINT"
         printf '%s\n' "$settings_source_fingerprint" >"$artifact/SETTINGS_SOURCE_FINGERPRINT"
         chmod a-w -- "$artifact/SOURCE_FINGERPRINT" \

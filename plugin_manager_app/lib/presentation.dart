@@ -15,6 +15,7 @@ String operationTitle(String? operation) => switch (operation) {
   'add' || 'enable' => 'Enable plugin',
   'remove' => 'Disable plugin',
   'update' => 'Update plugins',
+  'rebuild' => 'Rebuild plugins',
   'restore' => 'Restore default desktop',
   'revert' => 'Undo last change',
   'prepare' => 'Set up plugins',

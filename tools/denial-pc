@@ -1,6 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# SDDM passes the session's exit code through sddm-helper. Code 1 means an
+# authentication failure there, which suppresses greeter restart even after a
+# successful login. Install this boundary before any startup checks can fail.
+case "${1:-}" in
+    session | engine-test-session)
+        DENIAL_SESSION_PID=''
+        finish_development_session() {
+            local status="$1"
+            if [[ "$status" == 1 ]]; then
+                printf 'denial-pc: session exited with status 1; reporting session failure (2) to the display manager\n' >&2
+                status=2
+            fi
+            exit "$status"
+        }
+        terminate_development_session() {
+            trap '' HUP INT TERM
+            if [[ -n "$DENIAL_SESSION_PID" ]]; then
+                kill -TERM "$DENIAL_SESSION_PID" 2>/dev/null || true
+                wait "$DENIAL_SESSION_PID" 2>/dev/null || true
+            fi
+            exit 143
+        }
+        trap 'finish_development_session "$?"' EXIT
+        trap terminate_development_session HUP INT TERM
+        ;;
+esac
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=lib/denial-architecture.sh
@@ -488,7 +515,8 @@ install_pinned_engine() {
 
 require_pinned_engine() {
     require_file "$ENGINE"
-    local expected label
+    local mismatch_policy="${1:-fail}"
+    local expected actual label
     if [[ -n "$SESSION_ENGINE_SHA256" ]]; then
         expected="$SESSION_ENGINE_SHA256"
         label="staged engine test"
@@ -498,8 +526,21 @@ require_pinned_engine() {
     fi
     [[ "$expected" =~ ^[0-9a-f]{64}$ ]] \
         || die "invalid expected SHA-256 for $label"
-    [[ "$(file_sha256 "$ENGINE")" == "$expected" ]] \
-        || die "bundle engine does not match the $label"
+    actual="$(file_sha256 "$ENGINE")"
+    [[ "$actual" != "$expected" ]] || return 0
+
+    # A development login may still work with an older bundle. Keep build and
+    # isolated engine-test verification strict, but record a normal session's
+    # mismatch before attempting to load its engine and AOT data.
+    if [[ "$mismatch_policy" == warn && -z "$SESSION_ENGINE_SHA256" ]]; then
+        local warning="denial-pc: WARNING: loading a mismatched bundle; bundle=$BUNDLE engine=$ENGINE expected_sha256=$expected actual_sha256=$actual; attempting startup"
+        printf '%s\n' "$warning" >&2
+        printf '%s\n' "$warning" \
+            | systemd-cat --identifier=deniald --priority=warning \
+            || printf 'denial-pc: WARNING: could not write engine mismatch to the journal\n' >&2
+    else
+        die "bundle engine does not match the $label"
+    fi
 }
 
 select_engine_test_root() {
@@ -914,11 +955,26 @@ find_denial_pid() {
     printf '%s\n' "$found"
 }
 
+# A process-directed signal goes to any thread that does not block it. deniald
+# reads its control signals from a signalfd, so a single unmasked thread would
+# take the default action and terminate the session.
+require_signal_masked() {
+    local pid="$1" signal="$2" name="$3" status mask blocked
+    for status in "/proc/$pid/task/"*/status; do
+        mask="$(awk '/^SigBlk:/ { print $2 }' "$status" 2>/dev/null)" || continue
+        [[ $mask =~ ^[0-9a-fA-F]{16}$ ]] || continue
+        blocked=$(( 16#${mask:12} >> (signal - 1) & 1 ))
+        ((blocked)) \
+            || die "deniald process $pid has a thread that does not block $name (${status%/status}); sending it would end the session. Restart Denial into a fixed build first"
+    done
+}
+
 require_bundle_refresh_support() {
     local pid="$1"
     "/proc/$pid/exe" --help 2>/dev/null \
         | grep -Fq "Control: SIGUSR1 safely refreshes the embedded Flutter bundle in process." \
         || die "running deniald process $pid predates safe in-process bundle refresh support; restart Denial once before using refresh"
+    require_signal_masked "$pid" 10 SIGUSR1
 }
 
 refresh_bundle() {
@@ -1107,7 +1163,9 @@ resolve_drm_device() {
 
 run_compositor() {
     require_file "$BINARY"
-    require_pinned_engine
+    command -v systemd-cat >/dev/null 2>&1 \
+        || die "systemd-cat is required to retain compositor diagnostics"
+    require_pinned_engine warn
     require_file "$BUNDLE/data/icudtl.dat"
     require_file "$BUNDLE/lib/libapp.so"
     require_file "$SETTINGS_BINARY"
@@ -1141,19 +1199,28 @@ run_compositor() {
     export DENIAL_SHELL_PROFILE="$shell_profile"
     export DENIA_SHELL_PROFILE="$shell_profile"
     export DENIAL_SETTINGS_BINARY="$SETTINGS_BINARY"
+    # After a Denial update deniald rebuilds the user's plugins with the
+    # locally built Plugin Manager backend, when there is one.
+    if [[ -z "${DENIAL_PLUGINS_BINARY:-}" \
+        && -x "$BUILD_ROOT/plugin-manager/denial-plugins" ]]; then
+        export DENIAL_PLUGINS_BINARY="$BUILD_ROOT/plugin-manager/denial-plugins"
+    fi
     export RUST_BACKTRACE=1
     export RUST_LOG="${DENIAL_RUST_LOG-${DENIA_RUST_LOG-deniald=info,smithay=warn}}"
 
-    command -v systemd-cat >/dev/null 2>&1 \
-        || die "systemd-cat is required to retain compositor diagnostics"
-    exec systemd-cat --identifier=deniald "$BINARY" \
+    systemd-cat --identifier=deniald "$BINARY" \
         --device "$drm_device" \
         --output-config "$OUTPUT_CONFIG" \
         --wayland \
         "${xwayland_arguments[@]}" \
         "${polkit_arguments[@]}" \
         --flutter-bundle "$BUNDLE" \
-        --flutter-renderer impeller
+        --flutter-renderer impeller <&0 &
+    DENIAL_SESSION_PID=$!
+    local status=0
+    wait "$DENIAL_SESSION_PID" || status=$?
+    DENIAL_SESSION_PID=''
+    exit "$status"
 }
 
 run_session() {
@@ -1232,6 +1299,7 @@ request_kms_reconfigure() {
         || die "expected exactly one deniald process for this user, found: ${pid:-none}"
     grep -aFq "live KMS reconfiguration requested" "/proc/$pid/exe" \
         || die "the running deniald predates live KMS re-evaluation; reboot into the rebuilt session first"
+    require_signal_masked "$pid" 12 SIGUSR2
     kill -USR2 "$pid"
     printf 'Requested live KMS re-evaluation from deniald PID %s\n' "$pid"
 }

@@ -132,6 +132,44 @@ void copySourceTree(
   }
 }
 
+/// Whether the saved [selection] asks for the composition that [plan] was
+/// built from. Built-in sources move with every installed release, so their
+/// names are the intent; Git and local roots must keep their source. Resolved
+/// Git revisions are plan state, never selection intent.
+bool sameComposition(
+  Map<String, Object?> selection,
+  Map<String, Object?> plan,
+) {
+  Map<String, Object?> map(Object? value) =>
+      value is Map ? value.cast<String, Object?>() : const {};
+  final saved = map(selection['roots']);
+  final built = map(plan['roots']);
+  if (saved.length != built.length) return false;
+  for (final entry in saved.entries) {
+    if (!built.containsKey(entry.key)) return false;
+    final wanted = map(map(entry.value)['source']);
+    final used = map(map(built[entry.key])['source']);
+    if (wanted['kind'] == 'builtin' && used['kind'] == 'builtin') continue;
+    if (contentKey(wanted) != contentKey(used)) return false;
+  }
+  return contentKey(map(selection['selections'])) ==
+          contentKey(map(plan['selections'])) &&
+      contentKey(map(selection['ordering'])) ==
+          contentKey(map(plan['ordering']));
+}
+
+/// A plan must still describe what it is built and activated for. A rebuild
+/// restores a confirmed composition, so a later selection edit does not
+/// invalidate it; activation checks that deniald still waits for it instead.
+void requireCurrentPlan(ManagerStore store, Map<String, Object?> plan) {
+  if (plan['rebuildOf'] is String) return;
+  if (plan['selectionRevision'] != store.selection['revision']) {
+    throw const CompositionException(
+      'Selection changed since this plan; plan again',
+    );
+  }
+}
+
 final class WorkspacePlanner {
   WorkspacePlanner({
     required this.store,
@@ -144,15 +182,28 @@ final class WorkspacePlanner {
 
   /// [runtimeRoot] is the exact installed source template, or an explicitly
   /// chosen development checkout. A plan records its bytes and commit identity.
+  ///
+  /// [rebuildOf] plans the composition of that earlier candidate, rather than
+  /// the saved selection, for the installed release: its roots, provider
+  /// choices, Pub lock and Git revisions. It never fetches newer revisions.
   Future<Map<String, Object?>> plan({
     required String runtimeRoot,
     required String flutter,
     required String candidateId,
     bool update = false,
+    String? rebuildOf,
     String? sdkRoot,
     void Function(String)? progress,
   }) async {
     ManagerStore.validateId(candidateId);
+    if (rebuildOf != null) {
+      ManagerStore.validateId(rebuildOf);
+      if (update) {
+        throw const CompositionException(
+          'A rebuild restores the confirmed plugin revisions; update separately',
+        );
+      }
+    }
     final candidate = Directory(
       p.join(store.root.path, 'candidates', candidateId),
     );
@@ -161,9 +212,22 @@ final class WorkspacePlanner {
         'Candidate already exists; plans are never edited in place',
       );
     }
-    candidate.createSync(recursive: true);
     final selection = store.selection;
-    final roots = selection['roots']! as Map<String, Object?>;
+    final base = rebuildOf == null
+        ? null
+        : store.read('candidates/$rebuildOf/plan.json');
+    if (base != null && base['roots'] is! Map) {
+      throw const CompositionException(
+        'The plugins that were running can no longer be rebuilt. Open Plugins and apply your selection again.',
+      );
+    }
+    candidate.createSync(recursive: true);
+    // What to compose: the saved selection, or the confirmed composition that
+    // a Denial update left behind.
+    final intent = base ?? selection;
+    final roots = intent['roots']! as Map<String, Object?>;
+    final selections = intent['selections'] as Map<String, Object?>? ?? {};
+    final ordering = intent['ordering'] as Map<String, Object?>? ?? {};
     final builtins = {
       for (final entry in await AvailablePlugins(
         store,
@@ -173,7 +237,9 @@ final class WorkspacePlanner {
           entry['source']! as Map<String, Object?>,
         ),
     };
-    final previousPlan = store.read('last-plan.json');
+    final previousPlan = rebuildOf == null
+        ? store.read('last-plan.json')
+        : {'id': rebuildOf};
     final previousMetadata = previousPlan['id'] is String
         ? store.read('candidates/${previousPlan['id']}/plan.json')
         : <String, Object?>{};
@@ -218,6 +284,7 @@ final class WorkspacePlanner {
             '${entry.key} is not provided by this installed runtime; remove it or choose another plugin',
           );
         }
+        // A rebuild restores the built-in by name, from the installed release.
         // Built-in names are stable selection intent. Their sources always
         // come from the configured release, including after a kit upgrade.
         source = installed;
@@ -355,10 +422,8 @@ final class WorkspacePlanner {
     }
     final composition = CompositionPlan.resolve(
       discovery,
-      selections: (selection['selections']! as Map<String, Object?>).map(
-        (k, v) => MapEntry(k, v! as String),
-      ),
-      ordering: (selection['ordering']! as Map<String, Object?>).map(
+      selections: selections.map((k, v) => MapEntry(k, v! as String)),
+      ordering: ordering.map(
         (k, v) => MapEntry(k, (v! as List).cast<String>()),
       ),
       requiredContracts: [shellApplication],
@@ -389,10 +454,15 @@ Future<void> main() async {
                 )
                 ?.group(1),
       'id': candidateId,
-      'selectionRevision': selection['revision'],
+      // A rebuild of what the user already saved is not pending work. A
+      // different saved selection stays pending for Apply.
+      'selectionRevision': base == null || sameComposition(selection, base)
+          ? selection['revision']
+          : null,
+      'rebuildOf': ?rebuildOf,
       'roots': resolvedRoots,
-      'selections': selection['selections'],
-      'ordering': selection['ordering'],
+      'selections': selections,
+      'ordering': ordering,
       'discovery': discovery.toJson(),
       'developmentSdk': sdkRoot != null,
       'sdkOverride': ?sdkRoot,
@@ -461,8 +531,8 @@ Future<void> main() async {
       'sourceIdentity': metadata['sourceIdentity'],
       'engineSourceLock': metadata['engineSourceLock'],
       'framework': (metadata['flutterVersion'] as Map)['frameworkRevision'],
-      'selections': selection['selections'],
-      'ordering': selection['ordering'],
+      'selections': selections,
+      'ordering': ordering,
     });
     store.write('candidates/$candidateId/plan.json', metadata);
     store.write('last-plan.json', {'id': candidateId});

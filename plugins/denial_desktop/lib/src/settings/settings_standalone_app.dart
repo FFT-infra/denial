@@ -84,7 +84,10 @@ class _DenialSettingsStandaloneContent extends ConsumerStatefulWidget {
 
 class _DenialSettingsStandaloneContentState
     extends ConsumerState<_DenialSettingsStandaloneContent> {
-  static const _activationChannel = MethodChannel('denial/settings_activation');
+  static const _activationChannel = MethodChannel(
+    'denial/settings_activation',
+    JSONMethodCodec(),
+  );
   final AssetBundle _packageAssets = _DenialShellPackageAssetBundle();
   Color? _lightMaterialThemeAccent;
   Color? _darkMaterialThemeAccent;

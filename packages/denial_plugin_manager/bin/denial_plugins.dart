@@ -20,6 +20,11 @@ final parser = ArgParser()
   ..addFlag('local', negatable: false)
   ..addFlag('builtin', negatable: false)
   ..addFlag('update', negatable: false)
+  ..addFlag(
+    'now',
+    negatable: false,
+    help: 'Rebuild: switch as soon as it is built, without waiting for a pause',
+  )
   ..addFlag('brief', negatable: false, help: 'Compact status for app polling')
   ..addFlag('help', negatable: false);
 
@@ -28,7 +33,7 @@ Future<void> main(List<String> arguments) async {
     final options = parser.parse(arguments);
     if (options.flag('help') || options.rest.isEmpty) {
       stdout.writeln(
-        'Denial Plugin Manager\n\nCommands: status, bootstrap, initialize, prepare, catalog, refresh-catalog, defaults, inspect SOURCE, add SOURCE, enable PACKAGE, remove PACKAGE, plan, build ID, activate ID, apply, update, revert, restore, discover WORKSPACE, submit COMMAND...\n${parser.usage}',
+        'Denial Plugin Manager\n\nCommands: status, bootstrap, initialize, prepare, catalog, refresh-catalog, defaults, inspect SOURCE, add SOURCE, enable PACKAGE, remove PACKAGE, plan, build ID, activate ID, apply, update, rebuild, rebuild-now, resume, revert, restore, discover WORKSPACE, submit COMMAND...\n${parser.usage}',
       );
       return;
     }
@@ -66,7 +71,7 @@ Future<void> main(List<String> arguments) async {
             forwarded.addAll(['--$option', options.option(option)!]);
           }
         }
-        for (final flag in ['local', 'builtin', 'update']) {
+        for (final flag in ['local', 'builtin', 'update', 'now']) {
           if (options.wasParsed(flag)) {
             forwarded.add(options.flag(flag) ? '--$flag' : '--no-$flag');
           }
@@ -241,6 +246,25 @@ Future<void> main(List<String> arguments) async {
                 },
           ];
         }
+      case ['rebuild']:
+        result = await rebuild(
+          store: store,
+          repositories: repositories,
+          activation: activation,
+          initialize: () async {
+            await initialize();
+            return settings;
+          },
+          now: options.flag('now'),
+        );
+      case ['resume']:
+        await resume(store, activation, kit);
+        return;
+      case ['rebuild-now']:
+        // Not a mutation: a waiting rebuild owns the switch and its checks.
+        store.root.createSync(recursive: true);
+        switchNowRequest(store).writeAsStringSync('');
+        result = {'requested': true};
       case ['discover', final workspace]:
         await store.exclusive(initialize);
         final flutter = setting('flutter')!;
@@ -402,5 +426,144 @@ Future<void> main(List<String> arguments) async {
   } catch (error) {
     stderr.writeln('denial-plugins: $error');
     exitCode = 1;
+  }
+}
+
+/// Rebuilds the composition deniald was running before Denial was updated
+/// (PLUGIN_MANAGER.md section 21). The manager lock is released while waiting
+/// for a quiet moment, so Plugins stays usable.
+Future<Map<String, Object?>> rebuild({
+  required ManagerStore store,
+  required SourceRepository repositories,
+  required CompositionActivation activation,
+  required Future<Map<String, Object?>> Function() initialize,
+  required bool now,
+}) async {
+  final built = await store.exclusive(() async {
+    // Only a request made while this rebuild waits may skip the wait.
+    final request = switchNowRequest(store);
+    if (request.existsSync()) request.deleteSync();
+    final settings = await initialize();
+    final target = RebuildTarget.fromNative(store, await activation.status());
+    if (target == null) return null;
+    final runtime = settings['runtime'] as String?;
+    final flutter = settings['flutter'] as String?;
+    final engineRoot = settings['engine-root'] as String?;
+    if (runtime == null || flutter == null || engineRoot == null) {
+      throw const CompositionException(
+        'Installed source and release compiler are incomplete',
+      );
+    }
+    requireMatchingBuildKit(runtime, target);
+    await activation.requireSupport();
+    final id = store.createJob('plan', {
+      'runtime': runtime,
+      'flutter': flutter,
+      'rebuildOf': target.candidate,
+    });
+    store.updateJob(id, {'phase': 'running', 'pid': pid});
+    try {
+      await WorkspacePlanner(store: store, repository: repositories).plan(
+        runtimeRoot: p.absolute(runtime),
+        flutter: p.absolute(flutter),
+        candidateId: id,
+        rebuildOf: target.candidate,
+        sdkRoot: Platform.environment['DENIAL_SDK_PATH'],
+        progress: (phase) {
+          stderr.writeln(phase);
+          store.updateJob(id, {'message': phase});
+        },
+      );
+      await CompositionBuilder(store).build(
+        id,
+        engineRoot: p.absolute(engineRoot),
+        engineTarget: settings['engine-target']! as String,
+        platform: settings['platform']! as String,
+        progress: stderr.writeln,
+      );
+      store.updateJob(id, {'phase': 'succeeded', 'candidate': id});
+    } catch (error) {
+      store.updateJob(id, {'phase': 'failed', 'error': '$error'});
+      rethrow;
+    }
+    return (candidate: id, base: target.candidate);
+  });
+  if (built == null) return {'rebuilt': false, 'switched': false};
+  final (:candidate, :base) = built;
+  final unchanged = {
+    'rebuilt': true,
+    'switched': false,
+    'candidate': candidate,
+  };
+  if (!now &&
+      !await waitForQuietMoment(
+        store,
+        activation.status,
+        base,
+        progress: stderr.writeln,
+      )) {
+    return unchanged;
+  }
+  return store.exclusive(() async {
+    final request = switchNowRequest(store);
+    if (request.existsSync()) request.deleteSync();
+    if (!waitsForRebuildOf(store, await activation.status(), base)) {
+      return unchanged;
+    }
+    stderr.writeln('Applying your desktop');
+    return {
+      ...unchanged,
+      'switched': true,
+      'native': await activation.activate(candidate),
+    };
+  }, wait: const Duration(minutes: 2));
+}
+
+/// Started by deniald after an update left its plugins behind. It submits the
+/// rebuild and keeps one notification about it until nothing is left to do.
+Future<void> resume(
+  ManagerStore store,
+  CompositionActivation activation,
+  BuildKit kit,
+) async {
+  store.root.createSync(recursive: true);
+  final lock = await store.file('resume.lock').open(mode: FileMode.append);
+  try {
+    try {
+      await lock.lock(FileLock.exclusive);
+    } on FileSystemException {
+      return; // Another resume already keeps the user informed.
+    }
+    final Notifier notifier;
+    try {
+      notifier = await DesktopNotifications.connect();
+    } catch (error) {
+      // Without notifications the rebuild still runs; Plugins shows it.
+      stderr.writeln('denial-plugins: notifications are unavailable: $error');
+      if (RebuildTarget.fromNative(store, await activation.status()) != null) {
+        await JobWorker(store).submit(['rebuild']);
+      }
+      return;
+    }
+    final plugins = desktopEntryCommand('dev.denial.PluginManager.desktop');
+    try {
+      await PluginResume(
+        store: store,
+        status: activation.status,
+        submit: JobWorker(store).submit,
+        notifier: notifier,
+        kitIdentity: kit.available ? kit.identity : null,
+        openPlugins: plugins == null
+            ? null
+            : (token) => launchDetached(plugins, activationToken: token),
+        openUrl: (url, token) =>
+            launchDetached(['xdg-open', url], activationToken: token),
+        online: networkConnected,
+      ).run();
+    } finally {
+      await notifier.dispose();
+    }
+  } finally {
+    await lock.close();
   }
 }

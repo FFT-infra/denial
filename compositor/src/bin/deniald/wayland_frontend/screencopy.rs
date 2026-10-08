@@ -2,9 +2,10 @@
 //! plus the legacy `zwlr-screencopy-unstable-v1` output protocol.
 //!
 //! Each physical output scans out its own native Flutter raster target.
-//! Requests are journaled by the Wayland dispatcher and fulfilled only after
-//! the target output presents. This both makes that output buffer safe to read
-//! and naturally paces screen recorders at the output refresh rate.
+//! Presented output buffers are snapshotted into capture-owned textures. GPU
+//! fences retire the short source read independently of client transfers, so
+//! capture backpressure cannot retain Flutter's display pool. Damage-aware
+//! streams wait for changed content; transfers and readback run on a worker.
 
 use std::collections::HashMap;
 use std::error::Error;
@@ -12,6 +13,7 @@ use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(feature = "flutter")]
 use std::sync::mpsc::{self, SyncSender, TrySendError};
+use std::sync::{Arc, Mutex};
 #[cfg(feature = "flutter")]
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -25,18 +27,29 @@ use smithay::backend::drm::DrmNode;
 #[cfg(feature = "flutter")]
 use smithay::backend::egl::EGLContext;
 use smithay::backend::renderer::element::{
-    Kind,
+    Id, Kind,
     surface::{WaylandSurfaceRenderElement, render_elements_from_surface_tree},
 };
 use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
+#[cfg(feature = "flutter")]
+use smithay::backend::renderer::sync::SyncPoint;
+use smithay::backend::renderer::utils::CommitCounter;
 use smithay::backend::renderer::utils::draw_render_elements;
 use smithay::backend::renderer::{
     Bind, Blit, Color32F, ExportMem, Frame, ImportDma, Offscreen, Renderer, TextureFilter,
 };
+#[cfg(feature = "flutter")]
+use smithay::backend::renderer::{Texture, element::Element};
 use smithay::desktop::Window;
 use smithay::output::{Output, WeakOutput};
 #[cfg(feature = "flutter")]
 use smithay::reexports::calloop::channel::{Event as ChannelEvent, Sender, channel};
+#[cfg(feature = "flutter")]
+use smithay::reexports::calloop::{
+    Interest, Mode, PostAction,
+    generic::Generic,
+    timer::{TimeoutAction, Timer},
+};
 use smithay::reexports::wayland_protocols_wlr::screencopy::v1::server::{
     zwlr_screencopy_frame_v1::{self, ZwlrScreencopyFrameV1},
     zwlr_screencopy_manager_v1::{self, ZwlrScreencopyManagerV1},
@@ -48,9 +61,9 @@ use smithay::reexports::wayland_server::protocol::{
 use smithay::reexports::wayland_server::{
     Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource, Weak,
 };
-use smithay::utils::{
-    Buffer as BufferCoords, Logical, Physical, Point, Rectangle, Size, Transform,
-};
+#[cfg(not(feature = "flutter"))]
+use smithay::utils::Point;
+use smithay::utils::{Buffer as BufferCoords, Logical, Physical, Rectangle, Size, Transform};
 use smithay::wayland::dmabuf::get_dmabuf;
 use smithay::wayland::foreign_toplevel_list::{
     ForeignToplevelHandle, ForeignToplevelListHandler, ForeignToplevelListState,
@@ -90,10 +103,56 @@ pub(crate) struct OutputCompositeSource {
     pub(crate) transform: Transform,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum CaptureTargetKind {
     Output(OutputId),
     Toplevel(u64),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct SurfaceCaptureStamp {
+    id: Id,
+    commit: CommitCounter,
+    geometry: Rectangle<i32, Physical>,
+    source: Rectangle<f64, BufferCoords>,
+    transform: Transform,
+    alpha: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum CaptureRevision {
+    Output(u64),
+    Toplevel(Vec<SurfaceCaptureStamp>),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct CaptureStamp {
+    target: CaptureTarget,
+    revision: CaptureRevision,
+}
+
+/// Legacy damage history belongs to the manager binding, while ext capture
+/// history belongs to its session. Failed/aborted frames never advance it.
+#[derive(Clone, Debug, Default)]
+pub(super) struct CaptureHistory(Arc<Mutex<HashMap<CaptureTargetKind, CaptureStamp>>>);
+
+impl CaptureHistory {
+    fn needs_capture(&self, stamp: &CaptureStamp) -> bool {
+        self.0.lock().unwrap().get(&stamp.target.kind) != Some(stamp)
+    }
+
+    fn completed(&self, stamp: CaptureStamp) {
+        let mut history = self.0.lock().unwrap();
+        if let Some(previous) = history.get(&stamp.target.kind)
+            && let (CaptureRevision::Output(old), CaptureRevision::Output(new)) =
+                (&previous.revision, &stamp.revision)
+            && old > new
+        {
+            // Independent GPU transfers can complete out of order.
+            return;
+        }
+        history.insert(stamp.target.kind, stamp);
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -107,7 +166,7 @@ struct CaptureTarget {
     output_size: Size<i32, Physical>,
     /// Orientation of the native Flutter output buffer.
     ///
-    /// The worker reads that per-output buffer directly. It uses this transform
+    /// The snapshot preserves the native buffer orientation. The worker uses this transform
     /// both to locate the upright `source` inside the native buffer and to
     /// render normal-oriented pixels into the capture client's buffer.
     transform: Transform,
@@ -148,12 +207,14 @@ struct ForeignToplevelCaptureData {
 pub(super) struct ScreencopyFrameData {
     target: Option<CaptureTarget>,
     used: AtomicBool,
+    history: CaptureHistory,
 }
 
 impl ScreencopyFrameData {
-    fn new(target: Option<CaptureTarget>) -> Self {
+    fn new(target: Option<CaptureTarget>, history: CaptureHistory) -> Self {
         Self {
             used: AtomicBool::new(target.is_none()),
+            history,
             target,
         }
     }
@@ -268,12 +329,13 @@ struct PendingScreencopy {
     frame: CaptureFrame,
     target: CaptureTarget,
     buffer: PendingBuffer,
+    history: Option<CaptureHistory>,
 }
 
 #[cfg(feature = "flutter")]
 #[derive(Debug)]
 enum CaptureDestination {
-    Shm,
+    Shm(WlBuffer),
     Dmabuf(Dmabuf),
 }
 
@@ -281,7 +343,9 @@ enum CaptureDestination {
 #[derive(Debug)]
 struct CaptureJob {
     token: u64,
-    source: Dmabuf,
+    cancelled: Arc<AtomicBool>,
+    source: GlesTexture,
+    source_ready: SyncPoint,
     source_size: Size<i32, Physical>,
     target: CaptureTarget,
     destination: CaptureDestination,
@@ -290,7 +354,7 @@ struct CaptureJob {
 #[cfg(feature = "flutter")]
 #[derive(Debug)]
 enum CapturePayload {
-    Shm(Vec<u8>),
+    Shm,
     Dmabuf,
 }
 
@@ -307,8 +371,52 @@ struct InFlightScreencopy {
     request: PendingScreencopy,
     presented: Duration,
     dmabuf: bool,
-    _source_lease: OutputBufferLease,
-    cancelled: bool,
+    stamp: CaptureStamp,
+    cancelled: Arc<AtomicBool>,
+}
+
+#[cfg(feature = "flutter")]
+enum CaptureSourceOwner {
+    Output {
+        output: OutputId,
+        _buffer: Dmabuf,
+        _lease: OutputBufferLease,
+    },
+    Toplevel {
+        _elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>>,
+    },
+}
+
+#[cfg(feature = "flutter")]
+struct CaptureSourceRead {
+    _texture: GlesTexture,
+    owner: CaptureSourceOwner,
+}
+
+/// The owner is kept even if a protocol request disappears. Only the fence,
+/// not client liveness or transfer completion, permits its release.
+#[cfg(feature = "flutter")]
+struct FenceOwned<T> {
+    ready: SyncPoint,
+    resource: T,
+}
+
+#[cfg(feature = "flutter")]
+fn reap_fence_owned<T>(resources: &mut HashMap<u64, FenceOwned<T>>) {
+    resources.retain(|_, resource| !resource.ready.is_reached());
+}
+
+#[cfg(feature = "flutter")]
+struct CaptureTransfer {
+    job: CaptureJob,
+    started: Instant,
+    copy: Option<FenceOwned<CaptureCopy>>,
+}
+
+#[cfg(feature = "flutter")]
+struct CaptureCopy {
+    readback: Option<GlesTexture>,
+    failure: Option<String>,
 }
 
 #[cfg(feature = "flutter")]
@@ -341,36 +449,94 @@ impl CaptureWorker {
                 if ready.send(Ok(())).is_err() {
                     return;
                 }
-                while let Ok(mut job) = receiver.recv() {
-                    let started = Instant::now();
-                    let result = match &mut job.destination {
-                        CaptureDestination::Shm => capture_to_memory(
-                            &mut renderer,
-                            &mut job.source,
-                            job.source_size,
-                            job.target,
-                        )
-                        .map(CapturePayload::Shm),
-                        CaptureDestination::Dmabuf(destination) => copy_to_dmabuf(
-                            &mut renderer,
-                            &mut job.source,
-                            job.source_size,
-                            job.target,
-                            &mut *destination,
-                        )
-                        .map(|()| CapturePayload::Dmabuf),
+                let mut transfers: Vec<CaptureTransfer> = Vec::new();
+                let mut disconnected = false;
+                loop {
+                    // Sleep when idle; with active GPU work, poll completion
+                    // without waiting for any individual transfer. A slow
+                    // client must not serialize the other capture streams.
+                    let next = if transfers.is_empty() && !disconnected {
+                        receiver
+                            .recv()
+                            .map_err(|_| mpsc::RecvTimeoutError::Disconnected)
+                    } else if !disconnected {
+                        receiver.recv_timeout(Duration::from_millis(1))
+                    } else {
+                        thread::sleep(Duration::from_millis(1));
+                        Err(mpsc::RecvTimeoutError::Timeout)
+                    };
+                    match next {
+                        Ok(job) => transfers.push(CaptureTransfer {
+                            job,
+                            started: Instant::now(),
+                            copy: None,
+                        }),
+                        Err(mpsc::RecvTimeoutError::Disconnected) => disconnected = true,
+                        Err(mpsc::RecvTimeoutError::Timeout) => {}
                     }
-                    .map_err(|error| error.to_string());
-                    if completions
-                        .send(CaptureCompletion {
-                            token: job.token,
-                            elapsed: started.elapsed(),
-                            result,
-                        })
-                        .is_err()
-                    {
+                    let mut index = 0;
+                    while index < transfers.len() {
+                        let transfer = &mut transfers[index];
+                        let result = if let Some(copy) = &mut transfer.copy {
+                            if !copy.ready.is_reached() {
+                                index += 1;
+                                continue;
+                            }
+                            if transfer.job.cancelled.load(Ordering::Acquire) {
+                                Err(io::Error::other("capture was aborted").into())
+                            } else if let Some(error) = copy.resource.failure.take() {
+                                Err(io::Error::other(error).into())
+                            } else {
+                                match (&transfer.job.destination, &mut copy.resource.readback) {
+                                    (CaptureDestination::Shm(buffer), Some(texture)) => {
+                                        read_capture_to_shm(
+                                            &mut renderer,
+                                            texture,
+                                            buffer,
+                                            transfer.job.target.size,
+                                        )
+                                        .map(|()| CapturePayload::Shm)
+                                    }
+                                    (CaptureDestination::Dmabuf(_), None) => {
+                                        Ok(CapturePayload::Dmabuf)
+                                    }
+                                    _ => {
+                                        Err(io::Error::other("invalid capture transfer state")
+                                            .into())
+                                    }
+                                }
+                            }
+                        } else if transfer.job.cancelled.load(Ordering::Acquire) {
+                            // No client GPU commands have been submitted. The
+                            // independent source read still owns the snapshot.
+                            Err(io::Error::other("capture was aborted").into())
+                        } else {
+                            if !transfer.job.source_ready.is_reached() {
+                                index += 1;
+                                continue;
+                            }
+                            match submit_capture_transfer(&mut renderer, &mut transfer.job) {
+                                Ok(copy) => {
+                                    transfer.copy = Some(copy);
+                                    index += 1;
+                                    continue;
+                                }
+                                Err(error) => Err(error),
+                            }
+                        };
+                        let transfer = transfers.swap_remove(index);
+                        let _ = completions.send(CaptureCompletion {
+                            token: transfer.job.token,
+                            elapsed: transfer.started.elapsed(),
+                            result: result.map_err(|error| error.to_string()),
+                        });
+                        // job retains the source texture and destination until
+                        // GPU completion, including when the frame was aborted.
+                    }
+                    if disconnected && transfers.is_empty() {
                         break;
                     }
+                    let _ = renderer.cleanup_texture_cache();
                 }
             })?;
         match initialized.recv() {
@@ -431,6 +597,11 @@ pub(super) struct ScreencopyManager {
     in_flight: HashMap<u64, InFlightScreencopy>,
     #[cfg(feature = "flutter")]
     next_token: u64,
+    #[cfg(feature = "flutter")]
+    source_reads: HashMap<u64, FenceOwned<CaptureSourceRead>>,
+    #[cfg(feature = "flutter")]
+    snapshots: HashMap<CaptureTargetKind, Vec<GlesTexture>>,
+    output_revisions: HashMap<OutputId, u64>,
 }
 
 impl ScreencopyManager {
@@ -454,6 +625,11 @@ impl ScreencopyManager {
             in_flight: HashMap::new(),
             #[cfg(feature = "flutter")]
             next_token: 1,
+            #[cfg(feature = "flutter")]
+            source_reads: HashMap::new(),
+            #[cfg(feature = "flutter")]
+            snapshots: HashMap::new(),
+            output_revisions: HashMap::new(),
         }
     }
 }
@@ -461,11 +637,16 @@ impl ScreencopyManager {
 #[cfg(feature = "flutter")]
 impl Drop for ScreencopyManager {
     fn drop(&mut self) {
-        // Source DMA-BUF leases must outlive every worker access. Join the
-        // renderer before Rust drops the in-flight request table and its RAII
-        // leases.
+        // Drain worker GPU work before releasing client resources. A snapshot
+        // rejected by the worker queue can still own an outstanding source
+        // read, so retire that fence as well before dropping its owner.
         if let Some(mut worker) = self.worker.take() {
             worker.shutdown();
+        }
+        for read in self.source_reads.values() {
+            while !read.ready.is_reached() {
+                let _ = read.ready.wait();
+            }
         }
     }
 }
@@ -680,70 +861,6 @@ fn copy_pixels_to_shm(
     Ok(())
 }
 
-fn capture_to_memory(
-    renderer: &mut GlesRenderer,
-    atlas: &mut Dmabuf,
-    atlas_size: Size<i32, Physical>,
-    target: CaptureTarget,
-) -> Result<Vec<u8>, Box<dyn Error>> {
-    let source = capture_source_rect(target, atlas_size)
-        .ok_or_else(|| io::Error::other("capture source is outside the atlas"))?;
-
-    if target.transform == Transform::Normal && source.size == target.size {
-        let source_framebuffer = renderer.bind(atlas)?;
-        let mapping = renderer.copy_framebuffer(
-            &source_framebuffer,
-            as_buffer_rect(source),
-            Fourcc::Xrgb8888,
-        )?;
-        let pixels = renderer.map_texture(&mapping)?;
-        return capture_pixels_to_vec(pixels, target.size);
-    }
-
-    let texture_size: Size<i32, BufferCoords> = (target.size.w, target.size.h).into();
-    let mut scaled = <GlesRenderer as Offscreen<GlesTexture>>::create_buffer(
-        renderer,
-        Fourcc::Xrgb8888,
-        texture_size,
-    )?;
-    let mut scaled_framebuffer = renderer.bind(&mut scaled)?;
-    let destination = Rectangle::new((0, 0).into(), target.size);
-    if target.transform == Transform::Normal {
-        let source_framebuffer = renderer.bind(atlas)?;
-        renderer
-            .blit(
-                &source_framebuffer,
-                &mut scaled_framebuffer,
-                source,
-                destination,
-                TextureFilter::Linear,
-            )?
-            .wait()?;
-    } else {
-        let texture = renderer.import_dmabuf(atlas, None)?;
-        let mut frame = renderer.render(&mut scaled_framebuffer, target.size, Transform::Normal)?;
-        frame.render_texture_from_to(
-            &texture,
-            as_buffer_rect(source).to_f64(),
-            destination,
-            &[destination],
-            &[destination],
-            target.transform,
-            1.0,
-            None,
-            &[],
-        )?;
-        frame.finish()?.wait()?;
-    }
-    let mapping = renderer.copy_framebuffer(
-        &scaled_framebuffer,
-        as_buffer_rect(destination),
-        Fourcc::Xrgb8888,
-    )?;
-    let pixels = renderer.map_texture(&mapping)?;
-    capture_pixels_to_vec(pixels, target.size)
-}
-
 fn capture_pixels_to_vec(
     pixels: &[u8],
     size: Size<i32, Physical>,
@@ -869,6 +986,117 @@ fn output_composite_source_transform(transform: Transform) -> Transform {
     transform
 }
 
+#[cfg(all(test, feature = "flutter"))]
+mod capture_lifetime_tests {
+    use super::*;
+    use smithay::backend::renderer::sync::{Fence, Interrupted};
+    use std::os::fd::OwnedFd;
+
+    #[derive(Debug)]
+    struct TestFence(Arc<AtomicBool>);
+
+    impl Fence for TestFence {
+        fn is_signaled(&self) -> bool {
+            self.0.load(Ordering::Acquire)
+        }
+
+        fn wait(&self) -> Result<(), Interrupted> {
+            panic!("capture retirement must never block the compositor")
+        }
+
+        fn is_exportable(&self) -> bool {
+            false
+        }
+
+        fn export(&self) -> Option<OwnedFd> {
+            None
+        }
+    }
+
+    #[test]
+    fn source_owner_retires_at_snapshot_fence_independently_of_client_transfer() {
+        let source_ready = Arc::new(AtomicBool::new(false));
+        let client_ready = Arc::new(AtomicBool::new(false));
+        let source_owner = Arc::new(());
+        let source_lifetime = Arc::downgrade(&source_owner);
+        let client_owner = Arc::new(());
+        let client_lifetime = Arc::downgrade(&client_owner);
+        let mut source_reads = HashMap::from([(
+            1,
+            FenceOwned {
+                ready: TestFence(source_ready.clone()).into(),
+                resource: source_owner,
+            },
+        )]);
+        let mut transfers = HashMap::from([(
+            2,
+            FenceOwned {
+                ready: TestFence(client_ready.clone()).into(),
+                resource: client_owner,
+            },
+        )]);
+
+        reap_fence_owned(&mut source_reads);
+        assert!(source_lifetime.upgrade().is_some());
+        source_ready.store(true, Ordering::Release);
+        reap_fence_owned(&mut source_reads);
+        reap_fence_owned(&mut transfers);
+        assert!(source_lifetime.upgrade().is_none());
+        assert!(client_lifetime.upgrade().is_some());
+
+        client_ready.store(true, Ordering::Release);
+        reap_fence_owned(&mut transfers);
+        assert!(client_lifetime.upgrade().is_none());
+    }
+
+    #[test]
+    fn capture_history_is_per_stream_and_successful_generation() {
+        let target = project_capture_region(
+            OutputId(7),
+            Rectangle::from_size((2560, 1440).into()),
+            (2560, 1440).into(),
+            (2560, 1440).into(),
+            None,
+            Transform::Normal,
+            false,
+        )
+        .unwrap();
+        let stamp = |generation| CaptureStamp {
+            target,
+            revision: CaptureRevision::Output(generation),
+        };
+        let history = CaptureHistory::default();
+        assert!(
+            history.needs_capture(&stamp(0)),
+            "first frame must capture even an idle output"
+        );
+        history.completed(stamp(0));
+        assert!(!history.needs_capture(&stamp(0)));
+        assert!(history.needs_capture(&stamp(1)));
+        assert!(
+            history.needs_capture(&stamp(1)),
+            "failed frames leave damage pending"
+        );
+
+        history.completed(stamp(2));
+        history.completed(stamp(1));
+        assert!(
+            !history.needs_capture(&stamp(2)),
+            "late completion must not rewind history"
+        );
+        assert!(
+            CaptureHistory::default().needs_capture(&stamp(2)),
+            "a new stream needs its own first frame"
+        );
+        let mut resized = stamp(2);
+        resized.target.size = (1280, 720).into();
+        assert!(
+            history.needs_capture(&resized),
+            "geometry changes invalidate the captured frame"
+        );
+    }
+}
+
 #[cfg(test)]
 mod capture_rotation_tests {
     use super::*;
@@ -938,53 +1166,95 @@ mod capture_rotation_tests {
     }
 }
 
-fn copy_to_dmabuf(
+#[cfg(feature = "flutter")]
+fn submit_capture_transfer(
     renderer: &mut GlesRenderer,
-    atlas: &mut Dmabuf,
-    atlas_size: Size<i32, Physical>,
-    target: CaptureTarget,
-    destination: &mut Dmabuf,
-) -> Result<(), Box<dyn Error>> {
-    let source = capture_source_rect(target, atlas_size)
-        .ok_or_else(|| io::Error::other("capture source is outside the atlas"))?;
-    if target.transform != Transform::Normal {
-        let texture = renderer.import_dmabuf(atlas, None)?;
-        let mut destination_framebuffer = renderer.bind(destination)?;
-        let destination_rect = Rectangle::new((0, 0).into(), target.size);
-        let mut frame =
-            renderer.render(&mut destination_framebuffer, target.size, Transform::Normal)?;
-        frame.render_texture_from_to(
-            &texture,
-            as_buffer_rect(source).to_f64(),
-            destination_rect,
-            &[destination_rect],
-            &[destination_rect],
-            target.transform,
-            1.0,
-            None,
-            &[],
-        )?;
-        frame.finish()?.wait()?;
-        return Ok(());
-    }
-    let source_framebuffer = renderer.bind(atlas)?;
-    let mut destination_framebuffer = renderer.bind(destination)?;
-    renderer
-        .blit(
+    job: &mut CaptureJob,
+) -> Result<FenceOwned<CaptureCopy>, Box<dyn Error>> {
+    let source = capture_source_rect(job.target, job.source_size)
+        .ok_or_else(|| io::Error::other("capture source is outside the snapshot"))?;
+    let mut readback = match &job.destination {
+        CaptureDestination::Shm(_) => {
+            Some(<GlesRenderer as Offscreen<GlesTexture>>::create_buffer(
+                renderer,
+                Fourcc::Xrgb8888,
+                (job.target.size.w, job.target.size.h).into(),
+            )?)
+        }
+        CaptureDestination::Dmabuf(_) => None,
+    };
+    let mut framebuffer = match (&mut job.destination, &mut readback) {
+        (CaptureDestination::Shm(_), Some(texture)) => renderer.bind(texture)?,
+        (CaptureDestination::Dmabuf(destination), None) => renderer.bind(destination)?,
+        _ => unreachable!("capture destination and readback texture disagree"),
+    };
+    let destination = Rectangle::from_size(job.target.size);
+    if job.target.transform == Transform::Normal {
+        let source_framebuffer = renderer.bind(&mut job.source)?;
+        let ready = renderer.blit(
             &source_framebuffer,
-            &mut destination_framebuffer,
+            &mut framebuffer,
             source,
-            Rectangle::new((0, 0).into(), target.size),
-            if source.size == target.size {
+            destination,
+            if source.size == job.target.size {
                 TextureFilter::Nearest
             } else {
                 TextureFilter::Linear
             },
-        )?
-        .wait()?;
-    Ok(())
+        )?;
+        drop(source_framebuffer);
+        drop(framebuffer);
+        return Ok(FenceOwned {
+            ready,
+            resource: CaptureCopy {
+                readback,
+                failure: None,
+            },
+        });
+    }
+    let mut frame = renderer.render(&mut framebuffer, job.target.size, Transform::Normal)?;
+    let failure = frame
+        .render_texture_from_to(
+            &job.source,
+            as_buffer_rect(source).to_f64(),
+            destination,
+            &[destination],
+            &[destination],
+            job.target.transform,
+            1.0,
+            None,
+            &[],
+        )
+        .err()
+        .map(|error| error.to_string());
+    let ready = frame.finish()?;
+    drop(framebuffer);
+    Ok(FenceOwned {
+        ready,
+        resource: CaptureCopy { readback, failure },
+    })
 }
 
+#[cfg(feature = "flutter")]
+fn read_capture_to_shm(
+    renderer: &mut GlesRenderer,
+    texture: &mut GlesTexture,
+    buffer: &WlBuffer,
+    size: Size<i32, Physical>,
+) -> Result<(), Box<dyn Error>> {
+    let framebuffer = renderer.bind(texture)?;
+    let mapping = renderer.copy_framebuffer(
+        &framebuffer,
+        Rectangle::from_size((size.w, size.h).into()),
+        Fourcc::Xrgb8888,
+    )?;
+    let pixels = renderer.map_texture(&mapping)?;
+    // Smithay locks the shm pool mapping for this access. The potentially
+    // expensive readback and row copies never run on the compositor thread.
+    copy_pixels_to_shm(buffer, pixels, size)
+}
+
+#[cfg(not(feature = "flutter"))]
 fn render_toplevel_capture(
     renderer: &mut GlesRenderer,
     window: &Window,
@@ -1287,6 +1557,7 @@ impl WaylandFrontend {
             },
             target,
             buffer,
+            history: with_damage.then(|| data.history.clone()),
         });
     }
 
@@ -1315,10 +1586,15 @@ impl WaylandFrontend {
             );
             return;
         }
+        session
+            .user_data()
+            .insert_if_missing(CaptureHistory::default);
+        let history = session.user_data().get::<CaptureHistory>().unwrap().clone();
         self.screencopy.pending.push(PendingScreencopy {
             frame: CaptureFrame::ImageCopy(frame),
             target,
             buffer,
+            history: Some(history),
         });
     }
 
@@ -1333,7 +1609,7 @@ impl WaylandFrontend {
         #[cfg(feature = "flutter")]
         for capture in self.screencopy.in_flight.values_mut() {
             if capture.request.frame.matches_legacy(&frame) {
-                capture.cancelled = true;
+                capture.cancelled.store(true, Ordering::Release);
             }
         }
     }
@@ -1349,7 +1625,7 @@ impl WaylandFrontend {
         #[cfg(feature = "flutter")]
         for capture in self.screencopy.in_flight.values_mut() {
             if capture.request.frame.matches_image_copy(frame) {
-                capture.cancelled = true;
+                capture.cancelled.store(true, Ordering::Release);
             }
         }
     }
@@ -1435,6 +1711,7 @@ impl WaylandFrontend {
         self.presentation.monotonic_now()
     }
 
+    #[cfg(not(feature = "flutter"))]
     pub(crate) fn process_toplevel_screencopies(
         &mut self,
         renderer: &mut GlesRenderer,
@@ -1512,25 +1789,184 @@ impl WaylandFrontend {
         Ok(())
     }
 
+    /// Publish the scene revision only after the matching page flip. A repair
+    /// repaint retains its revision, including after an unpresented dirty
+    /// generation was discarded by the output scheduler.
+    pub(crate) fn screencopy_output_presented(&mut self, output: OutputId, revision: u64) {
+        self.screencopy.output_revisions.insert(output, revision);
+    }
+
     #[cfg(feature = "flutter")]
-    pub(crate) fn process_screencopies(
+    fn capture_texture(
         &mut self,
-        output_buffer: &Dmabuf,
-        output: OutputId,
+        renderer: &mut GlesRenderer,
+        source: CaptureTargetKind,
+        size: Size<i32, Physical>,
+    ) -> Result<Option<GlesTexture>, Box<dyn Error>> {
+        let size: Size<i32, BufferCoords> = (size.w, size.h).into();
+        let pool = self.screencopy.snapshots.entry(source).or_default();
+        pool.retain_mut(|texture| texture.size() == size || !texture.is_unique_reference());
+        for texture in pool.iter_mut() {
+            if texture.is_unique_reference() {
+                return Ok(Some(texture.clone()));
+            }
+        }
+        if pool.len() >= MAX_IN_FLIGHT_SCREENCOPIES {
+            return Ok(None);
+        }
+        let texture = <GlesRenderer as Offscreen<GlesTexture>>::create_buffer(
+            renderer,
+            Fourcc::Xrgb8888,
+            size,
+        )?;
+        pool.push(texture.clone());
+        Ok(Some(texture))
+    }
+
+    #[cfg(feature = "flutter")]
+    pub(crate) fn reap_capture_source_reads(&mut self) {
+        reap_fence_owned(&mut self.screencopy.source_reads);
+    }
+
+    #[cfg(feature = "flutter")]
+    fn track_capture_source_read(
+        &mut self,
+        texture: GlesTexture,
+        ready: SyncPoint,
+        owner: CaptureSourceOwner,
+    ) {
+        if ready.is_reached() {
+            return;
+        }
+        let token = self.next_capture_token();
+        let fence = ready.export();
+        self.screencopy.source_reads.insert(
+            token,
+            FenceOwned {
+                ready,
+                resource: CaptureSourceRead {
+                    _texture: texture,
+                    owner,
+                },
+            },
+        );
+        if let Some(fence) = fence {
+            match self.loop_handle.insert_source(
+                Generic::new(fence, Interest::READ, Mode::Level),
+                move |_, _, state: &mut RuntimeState| {
+                    if let Some(frontend) = state.wayland.as_mut() {
+                        frontend.reap_capture_source_reads();
+                    }
+                    Ok(PostAction::Remove)
+                },
+            ) {
+                Ok(_) => return,
+                Err(error) => {
+                    warn!(%error, "could not watch capture source fence; polling instead")
+                }
+            }
+        }
+        if let Err(error) = self.loop_handle.insert_source(
+            Timer::from_duration(Duration::from_millis(1)),
+            move |_, _, state: &mut RuntimeState| {
+                if let Some(frontend) = state.wayland.as_mut() {
+                    frontend.reap_capture_source_reads();
+                    if frontend.screencopy.source_reads.contains_key(&token) {
+                        return TimeoutAction::ToDuration(Duration::from_millis(1));
+                    }
+                }
+                TimeoutAction::Drop
+            },
+        ) {
+            // The main dispatch also polls. Never drop an unsignaled owner
+            // just because registering a wakeup failed.
+            warn!(%error, "could not register capture source fence timer");
+        }
+    }
+
+    #[cfg(feature = "flutter")]
+    fn next_capture_token(&mut self) -> u64 {
+        let token = self.screencopy.next_token.max(1);
+        self.screencopy.next_token = token.checked_add(1).unwrap_or(1);
+        token
+    }
+
+    #[cfg(feature = "flutter")]
+    fn submit_screencopy(
+        &mut self,
+        request: PendingScreencopy,
+        stamp: CaptureStamp,
+        source: GlesTexture,
+        source_ready: SyncPoint,
+        source_size: Size<i32, Physical>,
         presented: Duration,
-        mut retain_source: impl FnMut() -> Result<OutputBufferLease, Box<dyn Error>>,
+    ) -> Option<PendingScreencopy> {
+        let token = self.next_capture_token();
+        let dmabuf = matches!(request.buffer, PendingBuffer::Dmabuf { .. });
+        let destination = match &request.buffer {
+            PendingBuffer::Shm(buffer) => CaptureDestination::Shm(buffer.clone()),
+            PendingBuffer::Dmabuf { dmabuf, .. } => CaptureDestination::Dmabuf(dmabuf.clone()),
+        };
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let job = CaptureJob {
+            token,
+            cancelled: cancelled.clone(),
+            source,
+            source_ready,
+            source_size,
+            target: request.target,
+            destination,
+        };
+        let Some(worker) = self.screencopy.worker.as_ref() else {
+            request.frame.release_buffer(&request.buffer);
+            request.frame.fail(CaptureFailureReason::Unknown);
+            return None;
+        };
+        match worker.try_submit(job) {
+            Ok(()) => {
+                self.screencopy.in_flight.insert(
+                    token,
+                    InFlightScreencopy {
+                        request,
+                        presented,
+                        dmabuf,
+                        stamp,
+                        cancelled,
+                    },
+                );
+                None
+            }
+            Err(TrySendError::Full(_)) => Some(request),
+            Err(TrySendError::Disconnected(_)) => {
+                request.frame.release_buffer(&request.buffer);
+                request.frame.fail(CaptureFailureReason::Unknown);
+                warn!("screencopy transfer worker stopped unexpectedly");
+                None
+            }
+        }
+    }
+
+    #[cfg(feature = "flutter")]
+    pub(crate) fn process_toplevel_screencopies(
+        &mut self,
+        renderer: &mut GlesRenderer,
     ) -> Result<(), Box<dyn Error>> {
-        let output_size: Size<i32, Physical> = (
-            i32::try_from(output_buffer.width())?,
-            i32::try_from(output_buffer.height())?,
-        )
-            .into();
+        self.reap_capture_source_reads();
+        let presented = self.screencopy_clock_now();
         let mut retained = Vec::with_capacity(self.screencopy.pending.len());
-        let mut queued = 0usize;
+        let mut copied = 0;
         for request in std::mem::take(&mut self.screencopy.pending) {
-            if request.target.output() != Some(output)
-                || queued >= MAX_COPIES_PER_PRESENTATION
+            let Some(toplevel) = request.target.toplevel() else {
+                retained.push(request);
+                continue;
+            };
+            if copied >= MAX_TOPLEVEL_COPIES_PER_DISPATCH
                 || self.screencopy.in_flight.len() >= MAX_IN_FLIGHT_SCREENCOPIES
+                || self
+                    .screencopy
+                    .in_flight
+                    .values()
+                    .any(|capture| capture.request.target.toplevel() == Some(toplevel))
             {
                 retained.push(request);
                 continue;
@@ -1543,58 +1979,216 @@ impl WaylandFrontend {
                 request.frame.fail(CaptureFailureReason::Unknown);
                 continue;
             }
-
-            // Flutter owns the visible software cursor, so it is already in
-            // the output target. Keep the request bit for diagnostics until a
-            // cursor-free Flutter layer can be captured independently.
-            let _overlay_cursor = request.target.overlay_cursor;
-            let dmabuf = matches!(request.buffer, PendingBuffer::Dmabuf { .. });
-            let destination = match &request.buffer {
-                PendingBuffer::Shm(_) => CaptureDestination::Shm,
-                PendingBuffer::Dmabuf { dmabuf, .. } => CaptureDestination::Dmabuf(dmabuf.clone()),
-            };
-            let source_lease = match retain_source() {
-                Ok(lease) => lease,
+            let result = (|| -> Result<_, Box<dyn Error>> {
+                let (window, scale) = self
+                    .surfaces_by_id
+                    .get(&toplevel)
+                    .and_then(|surface| self.window_for_root_surface(surface))
+                    .and_then(|window| {
+                        let output =
+                            self.output_for_geometry(self.window_geometry_target(&window))?;
+                        Some((window, output.output.current_scale().fractional_scale()))
+                    })
+                    .ok_or_else(|| {
+                        io::Error::other("toplevel capture source is no longer mapped")
+                    })?;
+                let bbox: Rectangle<i32, Physical> = window.bbox().to_physical_precise_round(scale);
+                if bbox.size != request.target.size {
+                    return Err(io::Error::other("toplevel capture geometry changed").into());
+                }
+                let surface = window
+                    .wl_surface()
+                    .ok_or_else(|| io::Error::other("toplevel has no surface"))?;
+                let elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+                    render_elements_from_surface_tree(
+                        renderer,
+                        &surface,
+                        (-bbox.loc.x, -bbox.loc.y),
+                        scale,
+                        1.0,
+                        Kind::Unspecified,
+                    );
+                let stamp = CaptureStamp {
+                    target: request.target,
+                    revision: CaptureRevision::Toplevel(
+                        elements
+                            .iter()
+                            .map(|element| SurfaceCaptureStamp {
+                                id: element.id().clone(),
+                                commit: element.current_commit(),
+                                geometry: element.geometry(scale.into()),
+                                source: element.src(),
+                                transform: element.transform(),
+                                alpha: element.alpha(),
+                            })
+                            .collect(),
+                    ),
+                };
+                if request
+                    .history
+                    .as_ref()
+                    .is_some_and(|history| !history.needs_capture(&stamp))
+                {
+                    return Ok(None);
+                }
+                let Some(mut texture) =
+                    self.capture_texture(renderer, request.target.kind, request.target.size)?
+                else {
+                    return Ok(None);
+                };
+                let mut framebuffer = renderer.bind(&mut texture)?;
+                let damage = Rectangle::from_size(request.target.size);
+                let mut frame =
+                    renderer.render(&mut framebuffer, request.target.size, Transform::Normal)?;
+                let drawn = frame
+                    .clear(Color32F::new(0.0, 0.0, 0.0, 1.0), &[damage])
+                    .and_then(|()| {
+                        draw_render_elements(&mut frame, scale, &elements, &[damage]).map(|_| ())
+                    });
+                let ready = frame.finish()?;
+                drop(framebuffer);
+                self.track_capture_source_read(
+                    texture.clone(),
+                    ready.clone(),
+                    CaptureSourceOwner::Toplevel {
+                        _elements: elements,
+                    },
+                );
+                drawn?;
+                Ok(Some((texture, ready, stamp)))
+            })();
+            match result {
+                Ok(Some((texture, ready, stamp))) => {
+                    let size = request.target.size;
+                    if let Some(request) =
+                        self.submit_screencopy(request, stamp, texture, ready, size, presented)
+                    {
+                        retained.push(request);
+                    }
+                    copied += 1;
+                }
+                Ok(None) => retained.push(request),
                 Err(error) => {
                     request.frame.release_buffer(&request.buffer);
                     request.frame.fail(CaptureFailureReason::Unknown);
-                    warn!(%error, ?output, "could not retain screencopy source buffer");
-                    continue;
+                    warn!(%error, toplevel, "foreign-toplevel capture failed");
                 }
-            };
-            let token = self.screencopy.next_token.max(1);
-            self.screencopy.next_token = token.checked_add(1).unwrap_or(1);
-            let job = CaptureJob {
-                token,
-                source: output_buffer.clone(),
-                source_size: output_size,
+            }
+        }
+        retained.append(&mut self.screencopy.pending);
+        self.screencopy.pending = retained;
+        if copied != 0 {
+            renderer.cleanup_texture_cache()?;
+            self.display_handle.flush_clients()?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "flutter")]
+    pub(crate) fn process_screencopies(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        output_buffer: &Dmabuf,
+        output: OutputId,
+        presented: Duration,
+        mut retain_source: impl FnMut() -> Result<OutputBufferLease, Box<dyn Error>>,
+    ) -> Result<(), Box<dyn Error>> {
+        self.reap_capture_source_reads();
+        // At most one short read of the display pool per output. A slow GPU
+        // defers capture instead of pinning a second display generation.
+        if self.screencopy.source_reads.values().any(|read| matches!(read.resource.owner, CaptureSourceOwner::Output { output: source, .. } if source == output)) {
+            return Ok(());
+        }
+        let output_size: Size<i32, Physical> = (
+            i32::try_from(output_buffer.width())?,
+            i32::try_from(output_buffer.height())?,
+        )
+            .into();
+        let revision =
+            CaptureRevision::Output(*self.screencopy.output_revisions.get(&output).unwrap_or(&0));
+        let mut snapshot: Option<(GlesTexture, SyncPoint)> = None;
+        let mut retained = Vec::with_capacity(self.screencopy.pending.len());
+        let mut queued = 0;
+        for request in std::mem::take(&mut self.screencopy.pending) {
+            let stamp = CaptureStamp {
                 target: request.target,
-                destination,
+                revision: revision.clone(),
             };
-            let Some(worker) = self.screencopy.worker.as_ref() else {
+            if request.target.output() != Some(output)
+                || queued >= MAX_COPIES_PER_PRESENTATION
+                || self.screencopy.in_flight.len() >= MAX_IN_FLIGHT_SCREENCOPIES
+                || request
+                    .history
+                    .as_ref()
+                    .is_some_and(|history| !history.needs_capture(&stamp))
+            {
+                retained.push(request);
+                continue;
+            }
+            if !request.frame.is_alive() {
                 request.frame.release_buffer(&request.buffer);
+                continue;
+            }
+            if !request.buffer.resource().is_alive() {
                 request.frame.fail(CaptureFailureReason::Unknown);
-                return Err("screencopy transfer worker is unavailable".into());
-            };
-            match worker.try_submit(job) {
-                Ok(()) => {
-                    self.screencopy.in_flight.insert(
-                        token,
-                        InFlightScreencopy {
-                            request,
-                            presented,
-                            dmabuf,
-                            _source_lease: source_lease,
-                            cancelled: false,
+                continue;
+            }
+            let result = (|| -> Result<_, Box<dyn Error>> {
+                if snapshot.is_none() {
+                    let Some(mut texture) = self.capture_texture(
+                        renderer,
+                        CaptureTargetKind::Output(output),
+                        output_size,
+                    )?
+                    else {
+                        return Ok(None);
+                    };
+                    let lease = retain_source()?;
+                    let mut source = output_buffer.clone();
+                    let source_framebuffer = renderer.bind(&mut source)?;
+                    let mut framebuffer = renderer.bind(&mut texture)?;
+                    let full = Rectangle::from_size(output_size);
+                    let ready = renderer.blit(
+                        &source_framebuffer,
+                        &mut framebuffer,
+                        full,
+                        full,
+                        TextureFilter::Nearest,
+                    )?;
+                    drop(framebuffer);
+                    drop(source_framebuffer);
+                    self.track_capture_source_read(
+                        texture.clone(),
+                        ready.clone(),
+                        CaptureSourceOwner::Output {
+                            output,
+                            _buffer: output_buffer.clone(),
+                            _lease: lease,
                         },
                     );
+                    snapshot = Some((texture, ready));
+                }
+                Ok(snapshot.clone())
+            })();
+            match result {
+                Ok(Some((texture, ready))) => {
+                    if let Some(request) = self.submit_screencopy(
+                        request,
+                        stamp,
+                        texture,
+                        ready,
+                        output_size,
+                        presented,
+                    ) {
+                        retained.push(request);
+                    }
                     queued += 1;
                 }
-                Err(TrySendError::Full(_)) => retained.push(request),
-                Err(TrySendError::Disconnected(_)) => {
+                Ok(None) => retained.push(request),
+                Err(error) => {
                     request.frame.release_buffer(&request.buffer);
                     request.frame.fail(CaptureFailureReason::Unknown);
-                    warn!(?output, "screencopy transfer worker stopped unexpectedly");
+                    warn!(%error, ?output, "could not snapshot screencopy source");
                 }
             }
         }
@@ -1613,16 +2207,14 @@ impl WaylandFrontend {
         let frame_alive = request.frame.is_alive();
         let buffer_alive = request.buffer.resource().is_alive();
         let target = request.target;
-        let result = if capture.cancelled {
+        let cancelled = capture.cancelled.load(Ordering::Acquire);
+        let result = if cancelled {
             Err("screencopy target was cancelled".to_owned())
         } else if !frame_alive || !buffer_alive {
             Err("screencopy client buffer disappeared".to_owned())
         } else {
             match (completion.result, &request.buffer) {
-                (Ok(CapturePayload::Shm(pixels)), PendingBuffer::Shm(buffer)) => {
-                    copy_pixels_to_shm(buffer, &pixels, request.target.size)
-                        .map_err(|error| error.to_string())
-                }
+                (Ok(CapturePayload::Shm), PendingBuffer::Shm(_)) => Ok(()),
                 (Ok(CapturePayload::Dmabuf), PendingBuffer::Dmabuf { .. }) => Ok(()),
                 (Ok(_), _) => Err("screencopy worker returned the wrong buffer kind".to_owned()),
                 (Err(error), _) => Err(error),
@@ -1633,6 +2225,9 @@ impl WaylandFrontend {
         if frame_alive {
             match result {
                 Ok(()) => {
+                    if let Some(history) = &request.history {
+                        history.completed(capture.stamp);
+                    }
                     request.frame.success(target, capture.presented);
                     debug!(
                         output = ?target.output(),
@@ -1645,7 +2240,7 @@ impl WaylandFrontend {
                 }
                 Err(error) => {
                     request.frame.fail(CaptureFailureReason::Unknown);
-                    if !capture.cancelled {
+                    if !cancelled {
                         warn!(
                             %error,
                             output = ?target.output(),
@@ -1665,6 +2260,11 @@ impl WaylandFrontend {
     }
 
     pub(super) fn fail_screencopies_for_output(&mut self, output: OutputId) {
+        self.screencopy.output_revisions.remove(&output);
+        #[cfg(feature = "flutter")]
+        self.screencopy
+            .snapshots
+            .remove(&CaptureTargetKind::Output(output));
         let mut failed = false;
         let mut retained = Vec::with_capacity(self.screencopy.pending.len());
         for request in std::mem::take(&mut self.screencopy.pending) {
@@ -1680,7 +2280,7 @@ impl WaylandFrontend {
         #[cfg(feature = "flutter")]
         for capture in self.screencopy.in_flight.values_mut() {
             if capture.request.target.output() == Some(output) {
-                capture.cancelled = true;
+                capture.cancelled.store(true, Ordering::Release);
                 failed = true;
             }
         }
@@ -1690,6 +2290,10 @@ impl WaylandFrontend {
     }
 
     fn fail_screencopies_for_toplevel(&mut self, toplevel: u64) {
+        #[cfg(feature = "flutter")]
+        self.screencopy
+            .snapshots
+            .remove(&CaptureTargetKind::Toplevel(toplevel));
         let mut failed = false;
         let mut retained = Vec::with_capacity(self.screencopy.pending.len());
         for request in std::mem::take(&mut self.screencopy.pending) {
@@ -1702,6 +2306,13 @@ impl WaylandFrontend {
             }
         }
         self.screencopy.pending = retained;
+        #[cfg(feature = "flutter")]
+        for capture in self.screencopy.in_flight.values_mut() {
+            if capture.request.target.toplevel() == Some(toplevel) {
+                capture.cancelled.store(true, Ordering::Release);
+                failed = true;
+            }
+        }
         if failed && let Err(error) = self.display_handle.flush_clients() {
             warn!(%error, toplevel, "failed to flush cancelled toplevel captures");
         }
@@ -1715,7 +2326,7 @@ impl WaylandFrontend {
         }
         #[cfg(feature = "flutter")]
         for capture in self.screencopy.in_flight.values_mut() {
-            capture.cancelled = true;
+            capture.cancelled.store(true, Ordering::Release);
         }
         if failed && let Err(error) = self.display_handle.flush_clients() {
             warn!(%error, "failed to flush cancelled screencopies");
@@ -1810,6 +2421,12 @@ impl ImageCopyCaptureHandler for RuntimeState {
 
     fn session_destroyed(&mut self, session: ImageCopySessionRef) {
         if let Some(frontend) = self.wayland.as_mut() {
+            #[cfg(feature = "flutter")]
+            if let Some(target) =
+                frontend.image_copy_target(&session.source(), session.draw_cursor())
+            {
+                frontend.screencopy.snapshots.remove(&target.kind);
+            }
             frontend
                 .screencopy
                 .image_copy_sessions
@@ -1828,17 +2445,17 @@ impl GlobalDispatch<ZwlrScreencopyManagerV1, ()> for RuntimeState {
         _global_data: &(),
         data_init: &mut DataInit<'_, Self>,
     ) {
-        data_init.init(resource, ());
+        data_init.init(resource, CaptureHistory::default());
     }
 }
 
-impl Dispatch<ZwlrScreencopyManagerV1, ()> for RuntimeState {
+impl Dispatch<ZwlrScreencopyManagerV1, CaptureHistory> for RuntimeState {
     fn request(
         state: &mut Self,
         _client: &Client,
         _resource: &ZwlrScreencopyManagerV1,
         request: zwlr_screencopy_manager_v1::Request,
-        _data: &(),
+        data: &CaptureHistory,
         _handle: &DisplayHandle,
         data_init: &mut DataInit<'_, Self>,
     ) {
@@ -1852,7 +2469,8 @@ impl Dispatch<ZwlrScreencopyManagerV1, ()> for RuntimeState {
                 output,
             } => {
                 let target = frontend.capture_target(&output, None, overlay_cursor != 0);
-                let resource = data_init.init(frame, ScreencopyFrameData::new(target));
+                let resource =
+                    data_init.init(frame, ScreencopyFrameData::new(target, data.clone()));
                 frontend.announce_screencopy_frame(&resource, target);
             }
             zwlr_screencopy_manager_v1::Request::CaptureOutputRegion {
@@ -1866,7 +2484,8 @@ impl Dispatch<ZwlrScreencopyManagerV1, ()> for RuntimeState {
             } => {
                 let region = Rectangle::new((x, y).into(), (width, height).into());
                 let target = frontend.capture_target(&output, Some(region), overlay_cursor != 0);
-                let resource = data_init.init(frame, ScreencopyFrameData::new(target));
+                let resource =
+                    data_init.init(frame, ScreencopyFrameData::new(target, data.clone()));
                 frontend.announce_screencopy_frame(&resource, target);
             }
             zwlr_screencopy_manager_v1::Request::Destroy => {}

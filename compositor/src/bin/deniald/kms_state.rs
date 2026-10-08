@@ -954,6 +954,10 @@ pub(super) struct FlutterLaunchConfiguration<'a> {
 
 #[cfg(feature = "flutter")]
 impl FlutterLauncher {
+    pub(super) fn plugin_rebuild_needed(&self) -> bool {
+        self.ui_development.plugin_rebuild_needed()
+    }
+
     pub(super) fn new(
         configuration: FlutterLaunchConfiguration<'_>,
         events: Sender<flutter_runtime::RuntimeEvent>,

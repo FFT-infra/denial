@@ -193,19 +193,19 @@ class _DesktopWorkspaceOverviewDeckState
                                     .shift(-origin)
                                     .translate(0.0, (1.0 - t) * 48.0),
                                 child: IgnorePointer(
-                                  child: Opacity(
-                                    opacity: t,
-                                    child: DecoratedBox(
-                                      decoration: BoxDecoration(
-                                        color: context
-                                            .shellColors
-                                            .surfaceContainer
-                                            .withValues(alpha: 0.42),
-                                        borderRadius: BorderRadius.circular(
-                                          context.shellTheme.panelRadius,
-                                        ),
-                                        border: Border.all(
-                                          color: context.shellColors.hairline,
+                                  child: DecoratedBox(
+                                    decoration: BoxDecoration(
+                                      color: context
+                                          .shellColors
+                                          .surfaceContainer
+                                          .withValues(alpha: 0.42 * t),
+                                      borderRadius: BorderRadius.circular(
+                                        context.shellTheme.panelRadius,
+                                      ),
+                                      border: Border.all(
+                                        color: _faded(
+                                          context.shellColors.hairline,
+                                          t,
                                         ),
                                       ),
                                     ),
@@ -261,19 +261,19 @@ class _DesktopWorkspaceOverviewDeckState
             width: rect.width,
             height: DesktopWorkspaceOverviewLayout.labelExtent,
             child: IgnorePointer(
-              child: Opacity(
-                opacity: progress,
-                child: Align(
-                  alignment: AlignmentDirectional.centerStart,
-                  child: Padding(
-                    padding: const EdgeInsetsDirectional.only(start: 4),
-                    child: Text(
-                      '${card.workspaceId}',
-                      style: theme.text.systemBarCaption.copyWith(
-                        color: active ? accent : colors.textSecondary,
-                        fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-                        decoration: TextDecoration.none,
+              child: Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: Padding(
+                  padding: const EdgeInsetsDirectional.only(start: 4),
+                  child: Text(
+                    '${card.workspaceId}',
+                    style: theme.text.systemBarCaption.copyWith(
+                      color: _faded(
+                        active ? accent : colors.textSecondary,
+                        progress,
                       ),
+                      fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+                      decoration: TextDecoration.none,
                     ),
                   ),
                 ),
@@ -282,22 +282,19 @@ class _DesktopWorkspaceOverviewDeckState
           ),
         Positioned.fromRect(
           rect: rect,
-          child: Opacity(
+          child: _WorkspaceOverviewCardSurface(
+            workspaceId: card.workspaceId,
+            active: active,
             opacity: progress,
-            child: _WorkspaceOverviewCardSurface(
-              workspaceId: card.workspaceId,
-              active: active,
-              radius: radius,
-              viewportRect: card.extendsBeyondViewport
-                  ? viewportRect.shift(-rect.topLeft)
-                  : null,
-              viewportRadius: theme.windowRadius * card.scale,
-              semanticLabel: context.l10n.settingsShortcutActionSwitchWorkspace(
-                card.workspaceId,
-              ),
-              onTap: () =>
-                  widget.onSelectWorkspace(monitorId, card.workspaceId),
+            radius: radius,
+            viewportRect: card.extendsBeyondViewport
+                ? viewportRect.shift(-rect.topLeft)
+                : null,
+            viewportRadius: theme.windowRadius * card.scale,
+            semanticLabel: context.l10n.settingsShortcutActionSwitchWorkspace(
+              card.workspaceId,
             ),
+            onTap: () => widget.onSelectWorkspace(monitorId, card.workspaceId),
           ),
         ),
       ],
@@ -411,14 +408,12 @@ class _DropSlotState extends State<_DropSlot> {
                 ),
                 duration: reduceMotion ? Duration.zero : Motion.tile,
                 curve: Motion.standard,
-                builder: (context, opacity, child) =>
-                    Opacity(opacity: opacity, child: child),
-                child: DecoratedBox(
+                builder: (context, opacity, _) => DecoratedBox(
                   decoration: BoxDecoration(
-                    color: accent.withValues(alpha: 0.16),
+                    color: accent.withValues(alpha: 0.16 * opacity),
                     borderRadius: BorderRadius.circular(widget.radius),
                     border: Border.all(
-                      color: accent.withValues(alpha: 0.72),
+                      color: accent.withValues(alpha: 0.72 * opacity),
                       width: 2.0,
                     ),
                   ),
@@ -436,6 +431,7 @@ class _WorkspaceOverviewCardSurface extends StatefulWidget {
   const _WorkspaceOverviewCardSurface({
     required this.workspaceId,
     required this.active,
+    required this.opacity,
     required this.radius,
     required this.viewportRect,
     required this.viewportRadius,
@@ -445,6 +441,10 @@ class _WorkspaceOverviewCardSurface extends StatefulWidget {
 
   final int workspaceId;
   final bool active;
+
+  /// The overview fade, applied to the card's paint. An [Opacity] here would
+  /// isolate the card in an offscreen layer that the zoom resizes every frame.
+  final double opacity;
   final double radius;
 
   /// The visible work area inside a scrolling strip, relative to the card.
@@ -467,7 +467,15 @@ class _WorkspaceOverviewCardSurfaceState
     final theme = context.shellTheme;
     final colors = context.shellColors;
     final viewportRect = widget.viewportRect;
-    final borderRadius = BorderRadius.circular(widget.radius);
+    final opacity = widget.opacity;
+    final decoration = BoxDecoration(
+      color: colors.surfaceContainer.withValues(alpha: _hovered ? 0.56 : 0.38),
+      borderRadius: BorderRadius.circular(widget.radius),
+      border: Border.all(
+        color: widget.active ? theme.accent : colors.hairline,
+        width: widget.active ? 2.0 : 1.0,
+      ),
+    );
     return Semantics(
       button: true,
       selected: widget.active,
@@ -479,18 +487,15 @@ class _WorkspaceOverviewCardSurfaceState
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: widget.onTap,
-          child: AnimatedContainer(
+          // Hover and selection ease as before; the fade is applied after
+          // that tween so it follows the zoom without lagging behind it.
+          child: TweenAnimationBuilder<Decoration>(
+            tween: DecorationTween(begin: decoration, end: decoration),
             duration: Motion.tile,
             curve: Motion.standard,
-            decoration: BoxDecoration(
-              color: colors.surfaceContainer.withValues(
-                alpha: _hovered ? 0.56 : 0.38,
-              ),
-              borderRadius: borderRadius,
-              border: Border.all(
-                color: widget.active ? theme.accent : colors.hairline,
-                width: widget.active ? 2.0 : 1.0,
-              ),
+            builder: (context, value, child) => DecoratedBox(
+              decoration: _fadedDecoration(value as BoxDecoration, opacity),
+              child: child,
             ),
             child: viewportRect == null
                 ? null
@@ -501,12 +506,14 @@ class _WorkspaceOverviewCardSurfaceState
                         child: DecoratedBox(
                           decoration: BoxDecoration(
                             color: colors.surfaceContainerHigh.withValues(
-                              alpha: 0.32,
+                              alpha: 0.32 * opacity,
                             ),
                             borderRadius: BorderRadius.circular(
                               widget.viewportRadius,
                             ),
-                            border: Border.all(color: colors.hairlineSoft),
+                            border: Border.all(
+                              color: _faded(colors.hairlineSoft, opacity),
+                            ),
                           ),
                         ),
                       ),
@@ -517,4 +524,22 @@ class _WorkspaceOverviewCardSurfaceState
       ),
     );
   }
+}
+
+// Overview cards are resized by the zoom on every frame. Fading their paint
+// directly keeps them out of per-frame offscreen layers, which the engine
+// would otherwise allocate anew at each size.
+Color _faded(Color color, double opacity) =>
+    color.withValues(alpha: color.a * opacity);
+
+BoxDecoration _fadedDecoration(BoxDecoration decoration, double opacity) {
+  final border = decoration.border;
+  return decoration.copyWith(
+    color: decoration.color == null ? null : _faded(decoration.color!, opacity),
+    border: border is Border && border.isUniform
+        ? Border.fromBorderSide(
+            border.top.copyWith(color: _faded(border.top.color, opacity)),
+          )
+        : border,
+  );
 }

@@ -8,6 +8,7 @@ import 'progress.dart';
 import 'build_cache.dart';
 import 'source.dart';
 import 'store.dart';
+import 'workspace.dart';
 
 /// Builds only the generated Flutter application using existing pinned release
 /// engine artifacts. It never rebuilds Rust/the engine or modifies active files.
@@ -42,11 +43,7 @@ final class CompositionBuilder {
         'A successful, unbuilt plan is required',
       );
     }
-    if (plan['selectionRevision'] != store.selection['revision']) {
-      throw const CompositionException(
-        'Selection changed since this plan; plan again',
-      );
-    }
+    requireCurrentPlan(store, plan);
     if (plan['inputDigest'] !=
         treeDigest(Directory(p.join(candidate, 'packages')))) {
       throw const CompositionException(

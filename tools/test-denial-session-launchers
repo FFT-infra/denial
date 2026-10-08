@@ -1,0 +1,222 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+python3 - "$SCRIPT_DIR/.." <<'PY'
+import hashlib
+import os
+from pathlib import Path
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+
+source = Path(sys.argv[1]).resolve()
+
+
+def executable(path, contents):
+    path.write_text(contents)
+    path.chmod(0o755)
+
+
+with tempfile.TemporaryDirectory(prefix='denial-session-launchers-', dir='/tmp') as temporary:
+    base = Path(temporary)
+    stubs = base / 'bin'
+    stubs.mkdir()
+    executable(stubs / 'systemd-cat', r'''#!/usr/bin/env python3
+import os, sys
+if '--priority=warning' in sys.argv:
+    with open(os.environ['TEST_EVENTS'], 'a') as events:
+        events.write('warning:' + sys.stdin.read())
+else:
+    os.execv(sys.argv[2], sys.argv[2:])
+''')
+    executable(stubs / 'systemctl', r'''#!/usr/bin/env python3
+import os, sys
+if 'stop' in sys.argv:
+    with open(os.environ['TEST_EVENTS'], 'a') as events:
+        events.write('cleanup\n')
+''')
+    executable(stubs / 'Xwayland', '#!/bin/sh\nexit 99\n')
+    compositor = stubs / 'compositor'
+    executable(compositor, r'''#!/usr/bin/env python3
+import os, signal, sys
+def record(message):
+    with open(os.environ['TEST_EVENTS'], 'a') as events:
+        events.write(message + '\n')
+def terminate(signum, frame):
+    record('terminated')
+    sys.exit(143)
+signal.signal(signal.SIGTERM, terminate)
+record('launch:' + sys.stdin.readline().strip())
+mode = os.environ.get('TEST_MODE', 'exit')
+if mode == 'crash':
+    os.kill(os.getpid(), signal.SIGKILL)
+if mode == 'wait':
+    record('ready:' + str(os.getpid()))
+    signal.pause()
+sys.exit(int(os.environ.get('TEST_STATUS', '0')))
+''')
+
+    def fixture(name, packaged=False, mismatch=False, missing=False):
+        case = base / name
+        repo = case / 'repo'
+        (repo / 'tools/lib').mkdir(parents=True)
+        for relative in ('tools/denial-pc', 'tools/lib/denial-architecture.sh',
+                         'prebuilt/flutter-engine/SOURCE_LOCK.json',
+                         'packaging/arch/dev.denial.Settings.desktop',
+                         'packaging/dev.denial.Welcome.desktop'):
+            destination = repo / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source / relative, destination)
+        pinned = repo / 'prebuilt/flutter-engine/linux-x64-release'
+        pinned.mkdir()
+        pinned_hash = hashlib.sha256(b'pinned engine').hexdigest()
+        (pinned / 'libflutter_engine.so.sha256').write_text(pinned_hash + '  libflutter_engine.so\n')
+        bundle = case / 'bundle'
+        (bundle / 'lib').mkdir(parents=True)
+        (bundle / 'data').mkdir()
+        (bundle / 'data/icudtl.dat').touch()
+        (bundle / 'lib/libapp.so').touch()
+        if not missing:
+            (bundle / 'lib/libflutter_engine.so').write_bytes(b'older engine' if mismatch else b'pinned engine')
+        config = case / 'outputs.conf'
+        config.touch()
+        machine_config = case / 'session.conf'
+        machine_config.touch()
+        events = case / 'events'
+        env = {key: value for key, value in os.environ.items()
+               if not key.startswith(('DENIAL_', 'DENIA_', 'XDG_'))
+               and key != 'WAYLAND_DISPLAY'}
+        env.update({
+            'PATH': str(stubs) + os.pathsep + env['PATH'],
+            'XDG_CACHE_HOME': str(case / 'cache'),
+            'XDG_DATA_HOME': str(case / 'data'),
+            'XDG_CONFIG_HOME': str(case / 'config'),
+            'XDG_STATE_HOME': str(case / 'state'),
+            'DENIAL_PC_BUNDLE': str(bundle),
+            'DENIAL_PC_BINARY': str(compositor),
+            'DENIAL_SETTINGS_BINARY': str(stubs / 'Xwayland'),
+            'DENIAL_PC_DRM_DEVICE': '/dev/null',
+            'DENIAL_PC_OUTPUT_CONFIG': str(config),
+            'DENIAL_PC_XWAYLAND': '0',
+            'DENIAL_SESSION_CONFIG': str(machine_config),
+            'DENIAL_FLUTTER_BUNDLE': str(bundle),
+            'DENIAL_OUTPUT_CONFIG': str(config),
+            'DENIAL_DRM_DEVICE': '/dev/null',
+            'TEST_EVENTS': str(events),
+        })
+        if packaged:
+            installed = case / 'prefix/bin'
+            installed.mkdir(parents=True)
+            launcher = installed / 'denial-session'
+            shutil.copy2(source / 'packaging/arch/denial-session', launcher)
+            (installed / 'deniald').symlink_to(compositor)
+            (installed / 'denialctl').symlink_to(stubs / 'Xwayland')
+            command = [str(launcher)]
+        else:
+            command = [str(repo / 'tools/denial-pc'), 'session']
+        return command, env, events
+
+    def run(command, env, events, expected):
+        result = subprocess.run(command, env=env, input='session-stdin\n',
+                                text=True, capture_output=True, timeout=10)
+        assert result.returncode == expected, (command, result.returncode, result.stderr)
+        return result, events.read_text() if events.exists() else ''
+
+    for packaged in (False, True):
+        kind = 'packaged' if packaged else 'development'
+        for status in (0, 1, 2, 42):
+            command, env, events = fixture(f'{kind}-exit-{status}', packaged)
+            env['TEST_STATUS'] = str(status)
+            result, log = run(command, env, events, 2 if status == 1 else status)
+            assert 'launch:session-stdin\n' in log, log
+            assert ('cleanup\n' in log) == packaged, log
+            if status == 1:
+                assert 'session exited with status 1; reporting session failure (2)' in result.stderr
+        command, env, events = fixture(f'{kind}-startup-failure', packaged, missing=True)
+        result, log = run(command, env, events, 2)
+        assert not log and 'missing ' in result.stderr
+        if packaged:
+            run(command + ['--check'], env, events, 1)
+        command, env, events = fixture(f'{kind}-crash', packaged)
+        env['TEST_MODE'] = 'crash'
+        result, log = run(command, env, events, 137)
+        assert 'launch:' in log and ('cleanup\n' in log) == packaged
+
+        command, env, events = fixture(f'{kind}-terminate', packaged)
+        env['TEST_MODE'] = 'wait'
+        process = subprocess.Popen(command, env=env, stdin=subprocess.PIPE,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   text=True, start_new_session=True)
+        try:
+            process.stdin.write('session-stdin\n')
+            process.stdin.flush()
+            deadline = time.monotonic() + 5
+            while not events.exists() or 'ready:' not in events.read_text():
+                assert process.poll() is None, process.stderr.read()
+                assert time.monotonic() < deadline, 'compositor fixture did not start'
+                time.sleep(0.02)
+            process.terminate()
+            output, error = process.communicate(timeout=5)
+            assert process.returncode == 143, error
+            log = events.read_text()
+            assert 'terminated\n' in log and ('cleanup\n' in log) == packaged, log
+        finally:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            if process.poll() is None:
+                process.communicate(timeout=5)
+        print(f'PASS: {kind} launcher handles startup failure, normal exit, crash, stdin, and termination')
+
+    command, env, events = fixture('mismatched-load-failure', mismatch=True)
+    env['TEST_STATUS'] = '1'
+    result, log = run(command, env, events, 2)
+    assert log.index('warning:') < log.index('launch:')
+    assert 'WARNING: loading a mismatched bundle' in result.stderr
+    assert 'expected_sha256=' in log and 'actual_sha256=' in log
+    print('PASS: mismatched engine warning precedes load failure and SDDM-safe exit')
+
+    command, env, events = fixture('early-development-failure')
+    (Path(command[0]).parent.parent / 'prebuilt/flutter-engine/SOURCE_LOCK.json').unlink()
+    result, log = run(command, env, events, 2)
+    assert 'missing Flutter source lock' in result.stderr and not log
+    command, env, events = fixture('early-packaged-failure', packaged=True)
+    env['DENIAL_SESSION_CONFIG'] = 'relative-path'
+    result, log = run(command, env, events, 2)
+    assert 'must be an absolute path' in result.stderr and not log
+    print('PASS: failures before launcher initialization also return an SDDM-safe status')
+
+    for entry in ('engine-test-session', 'session'):
+        command, env, events = fixture(f'engine-test-{entry}')
+        store = Path(env['XDG_CACHE_HOME']) / 'denial/engine-test'
+        stage = store / 'fixture'
+        stage.mkdir(parents=True)
+        (stage / 'bundle').symlink_to(env['DENIAL_PC_BUNDLE'])
+        (stage / 'libflutter_engine.so.sha256').write_text(hashlib.sha256(b'pinned engine').hexdigest() + '\n')
+        flag = store / ('current' if entry == 'engine-test-session' else 'next-session')
+        flag.symlink_to('fixture')
+        command[-1] = entry
+        env['TEST_STATUS'] = '1'
+        result, log = run(command, env, events, 2)
+        assert 'launch:session-stdin\n' in log
+        if entry == 'session':
+            assert not flag.is_symlink(), 'one-shot flag was not consumed'
+        (stage / 'bundle/lib/libflutter_engine.so').write_bytes(b'corrupted engine')
+        if entry == 'session':
+            flag.symlink_to('fixture')
+        events.unlink()
+        result, log = run(command, env, events, 2)
+        assert 'bundle engine does not match the staged engine test' in result.stderr and not log
+    print('PASS: explicit and one-shot engine-test sessions handle failed startup and reject corrupted engines')
+
+    command, env, events = fixture('strict-engine-build', mismatch=True)
+    command[-1] = 'engine-test-build'
+    result, log = run(command, env, events, 1)
+    assert 'bundle engine does not match' in result.stderr and not log
+    print('PASS: non-session build verification retains strict checks and original status')
+PY

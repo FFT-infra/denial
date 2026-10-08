@@ -11,6 +11,27 @@ String? compositionStartupError(Map<String, Object?> state) {
   return error is String && error.trim().isNotEmpty ? error : null;
 }
 
+/// What deniald waits to rebuild after Denial itself was updated, or null.
+/// The packaged shell runs meanwhile; this is neither an error nor a pending
+/// selection change.
+Map<String, Object?>? pluginRebuild(Map<String, Object?> state) {
+  final native = state['native'];
+  if (native is! Map || native['available'] == false) return null;
+  final rebuild = native['plugin_rebuild'];
+  return rebuild is Map<String, Object?> && rebuild['bundle'] is String
+      ? rebuild
+      : null;
+}
+
+/// Plain words for the update the plugins are rebuilt for. A development
+/// build identity is never presented as a release.
+String rebuildIntroduction(Map<String, Object?> rebuild) {
+  final version = rebuild['version'];
+  return version is String && RegExp(r'^\d+\.\d+\.\d+$').hasMatch(version)
+      ? 'Denial $version is installed.'
+      : 'Denial was updated.';
+}
+
 bool selectionNeedsApply(Map<String, Object?> state) {
   Map<String, Object?> map(Object? value) =>
       value is Map<String, Object?> ? value : {};
