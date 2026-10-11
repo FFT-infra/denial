@@ -116,6 +116,19 @@ immutable input layout containing shell regions, client regions, ordering,
 visibility and keyboard/exclusive-shell flags. Rust swaps that snapshot as one
 unit.
 
+Desktop touchscreen swipes use the same native recognition, configurable
+shortcut bindings, and release lifecycle as touchpad swipes. Three fingers up
+open the overview; three fingers left or right navigate windows (continuously
+in the scrolling layout when bound to the window switcher). Four fingers left
+or up select the next workspace; right or down select the previous workspace.
+These are the default bindings and can be remapped in Settings. Contacts may
+span tiled windows and desktop background, including an empty desktop. Shortcut
+actions target the output where the swipe started rather than the mouse output.
+Mobile mode, the lock screen, exclusive shell overlays and the software keyboard
+retain their own input. One-finger corner movement, two-finger resizing, and
+four-finger inward window closing remain separate window gestures; translating
+four fingers toward a window's center does not count as closing it.
+
 - shell hits become Flutter pointer events;
 - client hits are transformed and delivered through the Wayland seat;
 - graphics tablets are advertised through `zwp_tablet_manager_v2`; tool

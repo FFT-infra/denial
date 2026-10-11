@@ -24,6 +24,14 @@
     "description": "Scrolling layout swap setting."
   },
   "@@locale": "en",
+  "shellPresentationDesktop": "Desktop view",
+  "@shellPresentationDesktop": {
+    "description": "Desktop presentation toggle in the mobile Quick Settings panel. This changes the widget layout, not native session policy."
+  },
+  "shellPresentationMobile": "Mobile view",
+  "@shellPresentationMobile": {
+    "description": "Accessible label for the mobile presentation button in the desktop Dashboard. This changes the widget layout, not native session policy."
+  },
   "homeResizeWidget": "Resize widget",
   "@homeResizeWidget": {
     "description": "Accessible label for a home widget resize handle."

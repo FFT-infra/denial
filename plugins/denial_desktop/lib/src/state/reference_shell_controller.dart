@@ -876,12 +876,16 @@ class ReferenceShellController extends Notifier<ReferenceShellState>
 
   void publishInputLayout(
     Size viewSize,
-    ShellInteractionSnapshot interactions,
-  ) {
+    ShellInteractionSnapshot interactions, {
+    double topInset = 0.0,
+    bool force = false,
+  }) {
+    if (force) _inputLayoutCoordinator.invalidate();
     _inputLayoutCoordinator.publish(
       state: state,
       viewSize: viewSize,
       interactions: interactions,
+      topInset: topInset,
     );
   }
 }

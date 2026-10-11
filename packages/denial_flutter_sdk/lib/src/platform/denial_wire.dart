@@ -49,6 +49,8 @@ const String denialWireToFlutterChannel = 'denial/wire/to_flutter';
 const int _inputLayoutKeyboardCapture = 1 << 0;
 const int _inputLayoutExclusiveShell = 1 << 1;
 const int _inputLayoutObserveClientPointerPresses = 1 << 2;
+const int _inputLayoutPresentationSpecified = 1 << 3;
+const int _inputLayoutMobilePresentation = 1 << 4;
 const int _inputWindowVisible = 1 << 0;
 const int _inputWindowHitTestDisabled = 1 << 1;
 const int _inputWindowGeometryLocked = 1 << 2;
@@ -232,6 +234,12 @@ class DenialWireCodec {
     if (snapshot.observeClientPointerPresses) {
       flags |= _inputLayoutObserveClientPointerPresses;
     }
+    if (snapshot.mobilePresentation case final mobile?) {
+      flags |= _inputLayoutPresentationSpecified;
+      if (mobile) {
+        flags |= _inputLayoutMobilePresentation;
+      }
+    }
 
     return _encodeEnvelope(
       generated.PayloadTypeId.InputLayout,
@@ -285,14 +293,14 @@ class DenialWireCodec {
     required double systemBarThickness,
     required double maximizePadding,
   }) {
+    final hidden = side == SystemBarSide.hidden;
     if (requestId <= 0 ||
-        side == SystemBarSide.hidden ||
-        monitorIds.isEmpty ||
+        (hidden ? monitorIds.isNotEmpty : monitorIds.isEmpty) ||
         monitorIds.length > denialWireMaxWindows ||
         monitorIds.any((monitorId) => monitorId < 0) ||
         monitorIds.toSet().length != monitorIds.length ||
         !systemBarThickness.isFinite ||
-        systemBarThickness <= 0 ||
+        (hidden ? systemBarThickness != 0 : systemBarThickness <= 0) ||
         systemBarThickness > denialWireMaxSystemBarThickness ||
         !maximizePadding.isFinite ||
         maximizePadding < 0 ||
@@ -304,9 +312,7 @@ class DenialWireCodec {
       SystemBarSide.right => generated.SystemBarSide.Right,
       SystemBarSide.top => generated.SystemBarSide.Top,
       SystemBarSide.bottom => generated.SystemBarSide.Bottom,
-      SystemBarSide.hidden => throw StateError(
-        'hidden system bar is not configurable',
-      ),
+      SystemBarSide.hidden => generated.SystemBarSide.Hidden,
     };
     return _encodeEnvelope(
       generated.PayloadTypeId.WindowRequest,

@@ -235,8 +235,20 @@ impl WaylandFrontend {
 
     #[cfg(feature = "flutter")]
     pub(crate) fn can_scroll_layout_horizontally(&self) -> bool {
+        self.can_scroll_layout_horizontally_at(None)
+    }
+
+    #[cfg(feature = "flutter")]
+    pub(crate) fn can_scroll_layout_horizontally_at(
+        &self,
+        position: Option<Point<f64, Logical>>,
+    ) -> bool {
         self.window_layout.kind() == WindowLayoutKind::Scrolling
-            && self.horizontal_layout_scroll_context().is_some()
+            && self
+                .horizontal_layout_scroll_context()
+                .is_some_and(|(_, _, _, monitor, _)| {
+                    position.is_none_or(|position| monitor.to_f64().contains(position))
+                })
     }
 
     #[cfg(feature = "flutter")]
@@ -912,7 +924,10 @@ impl WaylandFrontend {
         let previously_managed = self.window_layout.manages_geometry();
         let next = create_window_layout(kind);
         let next_managed = next.manages_geometry();
-        if previously_managed && !next_managed {
+        let restore_stacking = previously_managed && !next_managed;
+        #[cfg(feature = "flutter")]
+        let restore_stacking = restore_stacking && !self.mobile_shell;
+        if restore_stacking {
             self.restore_stacking_geometries();
         }
         self.window_layout = next;
@@ -1094,6 +1109,10 @@ impl WaylandFrontend {
     /// Rebuild output membership after hotplug/rotation while preserving each
     /// window's original stacking rectangle.
     pub(crate) fn rebuild_window_layout(&mut self) -> bool {
+        #[cfg(feature = "flutter")]
+        if self.mobile_shell {
+            return false;
+        }
         if !self.window_layout.manages_geometry() {
             return false;
         }

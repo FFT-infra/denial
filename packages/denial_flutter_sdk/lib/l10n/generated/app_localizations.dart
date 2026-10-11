@@ -134,6 +134,18 @@ abstract class AppLocalizations {
   /// **'Keep each window’s width when swapping single-window columns on the same workspace and display. On vertical strips, keep height instead. Split columns keep their existing sizes.'**
   String get settingsScrollingLayoutPreserveSwapSizesDescription;
 
+  /// Desktop presentation toggle in the mobile Quick Settings panel. This changes the widget layout, not native session policy.
+  ///
+  /// In en, this message translates to:
+  /// **'Desktop view'**
+  String get shellPresentationDesktop;
+
+  /// Accessible label for the mobile presentation button in the desktop Dashboard. This changes the widget layout, not native session policy.
+  ///
+  /// In en, this message translates to:
+  /// **'Mobile view'**
+  String get shellPresentationMobile;
+
   /// Accessible label for a home widget resize handle.
   ///
   /// In en, this message translates to:

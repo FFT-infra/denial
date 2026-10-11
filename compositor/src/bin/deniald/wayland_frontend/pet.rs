@@ -246,7 +246,8 @@ pub(super) fn drag_speed(
 /// by enough, or it started or stopped.
 pub(super) fn drag_speed_changed(speed: Point<f64, Logical>, last: Point<f64, Logical>) -> bool {
     let zero = Point::<f64, Logical>::default();
-    (speed.x - last.x).hypot(speed.y - last.y) >= DRAG_TOLERANCE || (speed == zero) != (last == zero)
+    (speed.x - last.x).hypot(speed.y - last.y) >= DRAG_TOLERANCE
+        || (speed == zero) != (last == zero)
 }
 
 /// The hold a shell names for a pet, if the pet accepts it: one protocol
@@ -630,7 +631,10 @@ impl WaylandFrontend {
     /// anchor, if that changed. Gives whether any pet still watches.
     fn point_pets(&mut self) -> bool {
         self.pets.surfaces.retain(|surface| surface.is_alive());
-        let pointer = self.seat.get_pointer().map(|pointer| pointer.current_location());
+        let pointer = self
+            .seat
+            .get_pointer()
+            .map(|pointer| pointer.current_location());
         let mut watching = false;
         for surface in self.pets.surfaces.clone() {
             if with_pet(&surface, |pet| pet.watching) != Some(true) {

@@ -552,10 +552,16 @@ the compositor. See [custom shells](CUSTOM_SHELLS.md) for input, visibility,
 lock-frame and lifetime responsibilities. Bootstrap mounts no hidden default UI.
 
 `services.dart` also exposes focused window, application, desktop, workspace,
-telemetry, media, presentation and tray interfaces. Accept the smallest capability
-in your feature constructors/helpers, such as `ShellWindowServices` for previews
+telemetry, audio, connectivity, media, presentation and tray interfaces. Accept
+the smallest capability in your feature constructors/helpers, such as
+`ShellWindowServices` for previews
 or `ShellMediaServices` for playback controls. The supplied `ShellServices` bundle
 implements all of them, so existing plugin calls remain valid.
+
+`ShellAudioServices` supplies output volume and begin/change/commit interactions;
+`ShellConnectivityServices` supplies the connected Wi-Fi network and its current
+signal strength. `controls.dart` exposes the shared themed `RangeBar`,
+`VerticalRangeBar` and `WifiStatusIcon` for consistent desktop/mobile controls.
 
 `rendering.dart` exposes live window surfaces and the native window-plane layer;
 `input.dart` exposes input regions, coordinate transforms and visibility layout.

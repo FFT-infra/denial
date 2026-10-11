@@ -25,12 +25,14 @@ class ShellRuntimeBindings extends ConsumerStatefulWidget {
     this.pairingSurfaceBuilder,
     this.onLocked,
     this.workArea,
+    this.mobilePresentation = false,
   });
 
   final Widget child;
   final DenialPairingSurfaceBuilder? pairingSurfaceBuilder;
   final DenialShellEffect? onLocked;
   final ShellWorkArea? workArea;
+  final bool mobilePresentation;
 
   @override
   ConsumerState<ShellRuntimeBindings> createState() =>
@@ -41,7 +43,8 @@ class _ShellRuntimeBindingsState extends ConsumerState<ShellRuntimeBindings> {
   @override
   void didUpdateWidget(ShellRuntimeBindings oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.workArea != widget.workArea) {
+    if (oldWidget.workArea != widget.workArea ||
+        oldWidget.mobilePresentation != widget.mobilePresentation) {
       _scheduleLayoutSync(ref.read(shellSettingsProvider).layout);
     }
   }
@@ -135,7 +138,9 @@ class _ShellRuntimeBindingsState extends ConsumerState<ShellRuntimeBindings> {
             side: reservation?.edge ?? PanelEdge.hidden,
             outputNames: reservation?.outputNames ?? const [],
             systemBarThickness: reservation?.thickness ?? 0,
-            maximizePadding: layout.maximizePadding,
+            maximizePadding: widget.mobilePresentation
+                ? 0
+                : layout.maximizePadding,
           );
     });
   }

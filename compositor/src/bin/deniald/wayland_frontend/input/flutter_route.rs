@@ -402,12 +402,28 @@ pub(super) fn process_flutter_input_event(
                     software_keyboard_owns_touch(frontend.input_layout.as_ref(), scene_position),
                 )
             };
+            let swipe_directions = swipe_scroll_directions(state, Some(position));
             let gesture = {
                 let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
-                let target = (!secure_locked)
+                frontend
+                    .touch_gestures
+                    .set_swipe_directions(swipe_directions);
+                let target = (!secure_locked && !frontend.mobile_shell && !software_keyboard_touch)
                     .then(|| frontend.touch_window_target_at(position))
                     .flatten();
-                frontend.touch_gestures.down(slot, position, target)
+                let desktop_background = !secure_locked
+                    && !frontend.mobile_shell
+                    && !software_keyboard_touch
+                    && target.is_none()
+                    && frontend
+                        .input_layout
+                        .as_ref()
+                        .is_some_and(|layout| !layout.exclusive_shell());
+                if desktop_background {
+                    frontend.touch_gestures.down_on_desktop(slot, position)
+                } else {
+                    frontend.touch_gestures.down(slot, position, target)
+                }
             };
             let gesture_consumed = gesture.consume;
             let flush_clients = apply_touch_gesture_update(state, gesture);
@@ -446,7 +462,7 @@ pub(super) fn process_flutter_input_event(
                         .expect("missing Wayland frontend")
                         .text_input
                         .note_client_touch();
-                    let focus = route.focus_at(position);
+                    let (focus, location) = route.touch_at(position);
                     let touch = state
                         .wayland
                         .as_ref()
@@ -459,7 +475,7 @@ pub(super) fn process_flutter_input_event(
                         Some(focus),
                         &DownEvent {
                             slot: touch_event.slot(),
-                            location: position,
+                            location,
                             serial,
                             time: touch_event.time_msec(),
                         },
@@ -500,7 +516,7 @@ pub(super) fn process_flutter_input_event(
                 .as_mut()
                 .expect("missing Wayland frontend")
                 .touch_gestures
-                .motion(slot, position);
+                .motion_at(slot, position, touch_event.time());
             let gesture_consumed = gesture.consume;
             let flush_clients = apply_touch_gesture_update(state, gesture);
             if gesture_consumed {
@@ -530,9 +546,9 @@ pub(super) fn process_flutter_input_event(
                 frontend
                     .client_touch_routes
                     .get(&slot)
-                    .map(|route| route.focus_at(position))
+                    .map(|route| route.touch_at(position))
             };
-            if let Some(focus) = focus {
+            if let Some((focus, location)) = focus {
                 let touch = state
                     .wayland
                     .as_ref()
@@ -545,7 +561,7 @@ pub(super) fn process_flutter_input_event(
                     Some(focus),
                     &TouchMotionEvent {
                         slot: touch_event.slot(),
-                        location: position,
+                        location,
                         time: touch_event.time_msec(),
                     },
                 );
@@ -568,7 +584,7 @@ pub(super) fn process_flutter_input_event(
                 .as_mut()
                 .expect("missing Wayland frontend")
                 .touch_gestures
-                .up(slot);
+                .up_at(slot, touch_event.time());
             let gesture_consumed = gesture.consume;
             let flush_clients = apply_touch_gesture_update(state, gesture);
             if gesture_consumed {
@@ -644,7 +660,7 @@ pub(super) fn process_flutter_input_event(
                 .as_mut()
                 .expect("missing Wayland frontend")
                 .touch_gestures
-                .cancel(slot);
+                .cancel_at(slot, touch_event.time());
             let gesture_consumed = gesture.consume;
             let flush_clients = apply_touch_gesture_update(state, gesture);
             if gesture_consumed {
@@ -1132,7 +1148,7 @@ pub(super) fn activate_client_route(
 }
 
 #[cfg(feature = "flutter")]
-pub(super) fn release_client_geometry_for_shell_grab(
+pub(in super::super) fn release_client_geometry_for_shell_grab(
     state: &mut RuntimeState,
     window: &smithay::desktop::Window,
 ) {

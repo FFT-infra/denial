@@ -29,6 +29,8 @@ pub(super) struct WindowRecord {
     pub(super) layout_preview_size: Option<Size<i32, Logical>>,
     pub(super) restore_geometry: Option<Rectangle<i32, Logical>>,
     pub(super) layout_restore_geometry: Option<Rectangle<i32, Logical>>,
+    #[cfg(feature = "flutter")]
+    pub(super) mobile_restore: Option<(WindowGeometryIntent, WindowPlacementState)>,
     pub(super) layout_insertion_anchor: Option<ObjectId>,
     pub(super) restored_position: bool,
     pub(super) client_geometry_state_requested: bool,

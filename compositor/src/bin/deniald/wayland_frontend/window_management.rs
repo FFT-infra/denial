@@ -371,6 +371,9 @@ fn activate_workspace_fallback(
 #[cfg(feature = "flutter")]
 fn apply_window_command(state: &mut RuntimeState, command: WindowCommand) {
     match command {
+        WindowCommand::Minimize { window_id } => {
+            minimize_toplevel_by_id(state, window_id);
+        }
         WindowCommand::CreateLocal {
             app_id,
             title,
@@ -508,7 +511,8 @@ fn apply_local_window_command(state: &mut RuntimeState, window_id: u64, command:
                 state.scene_sync.mark_dirty();
             }
         }
-        WindowCommand::CreateLocal { .. }
+        WindowCommand::Minimize { .. }
+        | WindowCommand::CreateLocal { .. }
         | WindowCommand::SwitchWorkspace { .. }
         | WindowCommand::MoveToWorkspace { .. }
         | WindowCommand::DropOnWorkspace { .. }
@@ -547,7 +551,8 @@ fn apply_client_window_command(
             exact,
             layout_drop,
         ),
-        WindowCommand::CreateLocal { .. }
+        WindowCommand::Minimize { .. }
+        | WindowCommand::CreateLocal { .. }
         | WindowCommand::SwitchWorkspace { .. }
         | WindowCommand::MoveToWorkspace { .. }
         | WindowCommand::DropOnWorkspace { .. }

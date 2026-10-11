@@ -115,14 +115,13 @@ and `.18`, ordinary runtime, integration, verification, or service-activation
 failures are diagnostic outcomes, not triggers for automatic rollback. Do not
 switch the engine, shell bundle, compositor, service configuration, or selected
 revision back to a previous version merely because the candidate fails to start
-or work correctly. Retain the candidate, logs, source/configuration provenance,
-and previous versions and backups. Report the failure and request the Doctor's
-approval before switching back; an explicit Doctor-directed rollback is allowed.
+or work correctly. Report the failure and request the Doctor's approval before
+switching back; an explicit Doctor-directed rollback is allowed.
 
 Report separately what is staged/installed, what revision the service or bundle
 selection points to, what is actually running (or that nothing is running), and
-where the retained previous versions/backups are. Retaining an installed
-candidate does not mean it is selected or active. If activation fails, preserve
+where the previous versions/backups are. An installed candidate is not
+necessarily selected or active. If activation fails, preserve
 the current state for diagnosis rather than silently restoring the old selection
 or claiming the new revision is running.
 

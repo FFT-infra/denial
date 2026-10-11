@@ -30,6 +30,12 @@ class AppLocalizationsZh extends AppLocalizations {
       '在同一工作区和显示器上交换两个单窗口列时，保留各自的宽度。纵向滚动布局保留高度。拆分列保持原有大小。';
 
   @override
+  String get shellPresentationDesktop => '桌面视图';
+
+  @override
+  String get shellPresentationMobile => '移动视图';
+
+  @override
   String get homeResizeWidget => '调整小组件大小';
 
   @override

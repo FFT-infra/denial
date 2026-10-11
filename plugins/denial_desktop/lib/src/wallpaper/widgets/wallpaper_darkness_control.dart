@@ -6,7 +6,7 @@ import 'package:denial_flutter_sdk/motion.dart';
 import 'package:denial_flutter_sdk/shell_theme.dart';
 import 'package:denial_flutter_sdk/tokens.dart';
 
-import '../../widgets/shade/range_bar.dart';
+import 'package:denial_flutter_sdk/controls.dart';
 
 import 'package:denial_flutter_sdk/rendering.dart';
 

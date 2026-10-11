@@ -6,6 +6,8 @@
   "settingsScrollingLayoutPreserveSwapSizes": "交换时保留窗口大小",
   "settingsScrollingLayoutPreserveSwapSizesDescription": "在同一工作区和显示器上交换两个单窗口列时，保留各自的宽度。纵向滚动布局保留高度。拆分列保持原有大小。",
   "@@locale": "zh",
+  "shellPresentationDesktop": "桌面视图",
+  "shellPresentationMobile": "移动视图",
   "homeResizeWidget": "调整小组件大小",
   "actionCancel": "取消",
   "actionDismiss": "关闭",

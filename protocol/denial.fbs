@@ -54,7 +54,8 @@ enum WindowRequestKind : ubyte {
   CreateLocalWindow = 5,
   ConfigureSystemBar = 6,
   SwitchWorkspace = 7,
-  MoveWindowToWorkspace = 8
+  MoveWindowToWorkspace = 8,
+  MinimizeWindow = 9
 }
 
 enum WindowResponseKind : ubyte {
@@ -281,6 +282,8 @@ struct WireSize {
 //   bit 0: Flutter captures the keyboard
 //   bit 1: Flutter shell is exclusive
 //   bit 2: Flutter observes client pointer presses without consuming them
+//   bit 3: Flutter specifies its active window-geometry presentation
+//   bit 4: mobile presentation (desktop when bit 3 is set and bit 4 is clear)
 // InputWindowRegion.flags:
 //   bit 0: visible
 //   bit 1: hit-test disabled

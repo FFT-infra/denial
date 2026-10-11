@@ -221,6 +221,80 @@ fn legacy_system_bar_request_retains_native_work_area_metrics() {
 }
 
 #[test]
+fn mobile_work_area_can_transition_to_desktop_and_back() {
+    let mut bridge = bridge();
+    bridge.work_area.system_bar.side = SystemBarSide::Hidden;
+    bridge.work_area.system_bar.outputs.clear();
+    bridge.work_area.system_bar.thickness = 0.0;
+    bridge.work_area.maximize_padding = 0.0;
+    let desktop = system_bar_request(fb::SystemBarSide::Bottom, &[9], 60.0, 8.0);
+    let response = bridge.handle(&desktop).unwrap().unwrap();
+    let envelope = fb::root_as_envelope(response).unwrap();
+    let layout = envelope
+        .payload_as_window_response()
+        .unwrap()
+        .display_layout()
+        .unwrap();
+    assert_eq!(layout.system_bar_side(), fb::SystemBarSide::Bottom);
+    assert_eq!(layout.system_bar_monitor_id(), 9);
+    assert_eq!(layout.system_bar_thickness(), 60.0);
+    assert_eq!(layout.maximize_padding(), 8.0);
+    let work_area = bridge.take_work_area_update().unwrap();
+    assert_eq!(work_area.system_bar.outputs, ["main"]);
+    assert_eq!(work_area.system_bar.thickness, 60.0);
+    assert_eq!(work_area.maximize_padding, 8.0);
+
+    let mobile = system_bar_request(fb::SystemBarSide::Hidden, &[], 0.0, 0.0);
+    let response = bridge.handle(&mobile).unwrap().unwrap();
+    let envelope = fb::root_as_envelope(response).unwrap();
+    let layout = envelope
+        .payload_as_window_response()
+        .unwrap()
+        .display_layout()
+        .unwrap();
+    assert_eq!(layout.system_bar_side(), fb::SystemBarSide::Hidden);
+    assert_eq!(layout.system_bar_monitor_id(), -1);
+    assert_eq!(layout.system_bar_monitor_ids().unwrap().len(), 0);
+    assert_eq!(layout.system_bar_thickness(), 0.0);
+    assert_eq!(layout.maximize_padding(), 0.0);
+    let work_area = bridge.take_work_area_update().unwrap();
+    assert_eq!(work_area.system_bar.side, SystemBarSide::Hidden);
+    assert!(work_area.system_bar.outputs.is_empty());
+    assert_eq!(work_area.system_bar.thickness, 0.0);
+    assert_eq!(work_area.maximize_padding, 0.0);
+
+    assert!(bridge.handle(&desktop).unwrap().is_some());
+    assert_eq!(
+        bridge.take_work_area_update().unwrap().maximize_padding,
+        8.0
+    );
+}
+
+#[test]
+fn desktop_padding_can_be_configured_without_a_panel() {
+    let mut bridge = bridge();
+    let request = system_bar_request(fb::SystemBarSide::Hidden, &[], 0.0, 12.0);
+    assert!(bridge.handle(&request).unwrap().is_some());
+    let work_area = bridge.take_work_area_update().unwrap();
+    assert_eq!(work_area.system_bar.side, SystemBarSide::Hidden);
+    assert_eq!(work_area.maximize_padding, 12.0);
+}
+
+#[test]
+fn system_bar_request_requires_hosts_and_thickness_only_when_visible() {
+    let mut bridge = bridge();
+    for request in [
+        system_bar_request(fb::SystemBarSide::Hidden, &[9], 0.0, 0.0),
+        system_bar_request(fb::SystemBarSide::Hidden, &[], 32.0, 0.0),
+        system_bar_request(fb::SystemBarSide::Bottom, &[], 32.0, 8.0),
+        system_bar_request(fb::SystemBarSide::Bottom, &[9], 0.0, 8.0),
+    ] {
+        assert!(bridge.handle(&request).is_err());
+        assert!(bridge.take_work_area_update().is_none());
+    }
+}
+
+#[test]
 fn system_bar_request_rejects_invalid_work_area_metrics() {
     let mut bridge = bridge();
     for request in [
@@ -396,6 +470,44 @@ fn workspace_drops_resolve_on_one_output_and_previews_end_without_geometry() {
 }
 
 #[test]
+fn taskbar_minimize_targets_native_window_state_without_geometry() {
+    let mut bridge = bridge();
+    assert!(
+        bridge
+            .handle(&window_request(
+                fb::WindowRequestKind::MinimizeWindow,
+                0,
+                42,
+                None
+            ))
+            .unwrap()
+            .is_none()
+    );
+    let commands = bridge.drain_window_commands().collect::<Vec<_>>();
+    assert_eq!(commands, vec![WindowCommand::Minimize { window_id: 42 }]);
+    assert_eq!(commands[0].window_id(), Some(42));
+}
+
+#[test]
+fn taskbar_minimize_rejects_missing_identity_and_unknown_flags() {
+    assert!(matches!(
+        bridge().handle(&request(fb::WindowRequestKind::MinimizeWindow, 0)),
+        Err(WireError::Identity)
+    ));
+    assert!(matches!(
+        bridge().handle(&window_request_with_flags(
+            fb::WindowRequestKind::MinimizeWindow,
+            0,
+            42,
+            None,
+            4,
+            1,
+        )),
+        Err(WireError::Flags)
+    ));
+}
+
+#[test]
 fn configure_window_distinguishes_layout_drops_from_exact_geometry() {
     let geometry = fb::WireRect::new(100.0, 200.0, 800.0, 600.0);
     let mut bridge = bridge();
@@ -541,6 +653,29 @@ fn input_layout(
     flags: u32,
 ) -> Vec<u8> {
     input_layout_with_visible(shell_regions, windows, &[], flags)
+}
+
+#[test]
+fn input_layout_selects_presentation_without_changing_legacy_defaults() {
+    for (flags, expected) in [
+        (0, None),
+        (INPUT_LAYOUT_MOBILE_PRESENTATION, None),
+        (INPUT_LAYOUT_PRESENTATION_SPECIFIED, Some(false)),
+        (
+            INPUT_LAYOUT_PRESENTATION_SPECIFIED | INPUT_LAYOUT_MOBILE_PRESENTATION,
+            Some(true),
+        ),
+    ] {
+        let mut bridge = bridge();
+        assert!(bridge.handle(&input_layout(&[], &[], flags)).is_ok());
+        assert_eq!(
+            bridge
+                .take_input_layout_update()
+                .unwrap()
+                .mobile_presentation(),
+            expected
+        );
+    }
 }
 
 fn input_layout_with_visible(

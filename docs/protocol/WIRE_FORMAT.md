@@ -34,6 +34,27 @@ atomic layout and leave native hit testing on an obsolete snapshot. Configure
 requests retain their separate 64-pixel minimum, and fixed placement packets
 retain their one-pixel minimum.
 
+InputLayout flag bit 3 specifies an active presentation; bit 4 selects mobile
+geometry when set and desktop geometry when clear. Without bit 3, native keeps
+its current presentation for compatibility. Scene publishers set these flags
+even with no client windows. Changing presentation releases mobile geometry
+and its status inset, restores retained desktop targets, and reenrolls windows
+in the selected desktop layout. Startup security policy remains independent.
+
+`ConfigureSystemBar` publishes the complete active work area, including window
+padding. A visible bar requires live output IDs and positive thickness. A hidden
+bar uses an empty output list and zero thickness; its padding may still be
+positive for desktops without a panel. Mobile presentation publishes hidden,
+zero-thickness, zero-padding policy. Entering desktop resolves a live panel
+output even when the previous layout had no reservation, then republishes the
+desktop panel and padding settings. Native legacy `-1` metric values still keep
+the corresponding metric unchanged.
+
+`MinimizeWindow` targets a nonzero window ID and accepts no flags. The native
+window manager owns the transition for both client and local Flutter windows,
+including focus, tile membership and window-state publication. `FocusWindow`
+restores a minimized window through the same native manager.
+
 ## Fixed window-placement packet
 
 On the ordered `denial/wire/to_flutter` stream, a message beginning with

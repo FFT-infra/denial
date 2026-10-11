@@ -44,8 +44,8 @@ without starting Flutter or opening a window. Impeller is the default.
 This repository builds Slimpeller, so Skia is unavailable in its engine.
 
 The runner supports one window/view and seat, integer display scaling, resize,
-pointer/buttons/scrolling, keyboard layout/compose/repeat, basic text editing,
-cursor shapes and window close. Dart entrypoint arguments follow `--`.
+pointer/buttons/scrolling, multi-touch, keyboard layout/compose/repeat, basic text
+editing, cursor shapes and window close. Dart entrypoint arguments follow `--`.
 Installed `denial-settings` and `denial-plugin-manager` executables find their
 adjacent bundles; Settings also accepts `--welcome`, `--autostart`, and `--page=`.
 Welcome retains its completion-marker check before opening a window.
@@ -54,7 +54,7 @@ Plugin Manager retains its installation descriptor beside the runner.
 Settings file selection uses the external FileChooser portal, and Welcome web
 links use `xdg-open`. The portal backend can be supplied by any desktop toolkit;
 it does not handle Denial application windows or input. Accessibility, external
-IME, clipboard, activation/single-instance handling, touch and platform plugins
+IME, clipboard, activation/single-instance handling and platform plugins
 remain outside this runner's current scope.
 
 Flutter's Linux key-event JSON codec calls its XKB format `gtk`. That protocol

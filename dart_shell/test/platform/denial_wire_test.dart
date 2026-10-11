@@ -343,6 +343,25 @@ void main() {
     );
   });
 
+  test('work-area configuration can remove the panel and set padding independently', () {
+    final codec = DenialWireCodec();
+    for (final padding in [0.0, 12.0]) {
+      final bytes = codec.encodeSystemBarConfiguration(
+        requestId: 45,
+        side: model.SystemBarSide.hidden,
+        monitorIds: const [],
+        systemBarThickness: 0,
+        maximizePadding: padding,
+      );
+      expect(bytes, isNotNull);
+      final request = Envelope(bytes!).payload as WindowRequest;
+      expect(request.systemBarSide, SystemBarSide.Hidden);
+      expect(request.systemBarMonitorIds, isEmpty);
+      expect(request.systemBarThickness, 0);
+      expect(request.maximizePadding, padding);
+    }
+  });
+
   test(
     'routing comparison is allocation-free and includes surface identity',
     () {
@@ -408,6 +427,28 @@ void main() {
     final bytes = DenialWireCodec().encodeInputLayout(observing);
     expect(bytes, isNotNull);
     expect((Envelope(bytes!).payload as InputLayout).flags, 1 << 2);
+  });
+
+  test('input layout selects native presentation even with no windows', () {
+    const legacy = InputLayoutSnapshot(
+      epoch: 1,
+      shellRegions: <Rect>[],
+      windows: <InputWindowRegion>[],
+    );
+    for (final mobile in <bool>[false, true]) {
+      final selected = InputLayoutSnapshot(
+        epoch: 2,
+        shellRegions: const <Rect>[],
+        windows: const <InputWindowRegion>[],
+        mobilePresentation: mobile,
+      );
+      expect(legacy.hasSameRoutingAs(selected), isFalse);
+      final bytes = DenialWireCodec().encodeInputLayout(selected)!;
+      expect(
+        (Envelope(bytes).payload as InputLayout).flags,
+        (1 << 3) | (mobile ? 1 << 4 : 0),
+      );
+    }
   });
 
   test('Dart input goldens are current and decode in Dart', () {
@@ -806,6 +847,18 @@ void main() {
       ByteData.sublistView(snapshot(textureId: 7)),
     );
     expect(codec.decodeWindows(invalid!.payload as WindowSnapshot), isNull);
+  });
+
+  test('taskbar minimize targets a window without changing geometry', () {
+    final bytes = DenialWireCodec().encodeWindowRequest(
+      WindowRequestKind.MinimizeWindow,
+      windowId: 42,
+    );
+    final request = Envelope(bytes).payload as WindowRequest;
+    expect(request.kind, WindowRequestKind.MinimizeWindow);
+    expect(request.windowId, 42);
+    expect(request.geometry, isNull);
+    expect(request.flags, 0);
   });
 
   test('popup surfaces decode as focus-inert non-application content', () {

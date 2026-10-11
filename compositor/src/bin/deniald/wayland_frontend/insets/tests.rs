@@ -156,6 +156,47 @@ const EDGES: [xdg_toplevel::State; 4] = [
     xdg_toplevel::State::TiledBottom,
 ];
 
+#[cfg(feature = "flutter")]
+#[test]
+fn desktop_transition_releases_mobile_edges_and_allows_live_resize() {
+    let mut fixture = Fixture::new(2);
+    fixture.configure((1200, 752));
+    configure_desktop_toplevel(
+        fixture.toplevel(),
+        (900, 620).into(),
+        WindowPlacementState::default(),
+    );
+    let events = fixture.events();
+    let event = configure_event(&events);
+    assert_eq!(&event[2..5], &[900, 620, 0]);
+    let serial = events.iter().find(|event| event[0] == 3).unwrap()[2];
+    fixture.request(3, 4, &[serial]);
+    fixture.request(2, 6, &[]);
+
+    let window = Window::new_wayland_window(fixture.toplevel().clone());
+    let managed = ManagedWindow::new(&window).unwrap();
+    managed.prepare_interactive_resize((850, 580).into(), false);
+    let events = fixture.events();
+    let event = configure_event(&events);
+    assert_eq!(&event[2..4], &[850, 580]);
+    assert!(event[5..].contains(&(xdg_toplevel::State::Resizing as u32)));
+    for edge in EDGES {
+        assert!(!event[5..].contains(&(edge as u32)));
+    }
+}
+
+#[cfg(feature = "flutter")]
+#[test]
+fn mobile_only_window_centers_inside_the_desktop_work_area() {
+    let bounds = Rectangle::new((102, 52).into(), (1196, 696).into());
+    let geometry = initial_desktop_geometry((900, 620).into(), bounds);
+    assert_eq!(
+        geometry,
+        Rectangle::new((250, 90).into(), (900, 620).into())
+    );
+    assert_eq!(initial_desktop_geometry((1200, 752).into(), bounds), bounds);
+}
+
 fn configure_event(events: &[Vec<u32>]) -> &Vec<u32> {
     events
         .iter()

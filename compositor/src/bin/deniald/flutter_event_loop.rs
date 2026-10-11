@@ -2052,7 +2052,6 @@ fn synchronize_periodic_power_configuration(
 
 fn synchronize_periodic_shell_services(
     runtime: &mut flutter_runtime::FlutterRuntime,
-    flutter_launcher: &mut FlutterLauncher,
     events: &mut RuntimeState,
 ) -> Result<(), Box<dyn Error>> {
     synchronize_clipboard(runtime, events)?;
@@ -2061,7 +2060,6 @@ fn synchronize_periodic_shell_services(
     synchronize_xembed_tray(runtime, events)?;
     synchronize_shell_keyboard(runtime, events)?;
     synchronize_settings(runtime, events)?;
-    synchronize_system_bar_configuration(runtime, events, Some(flutter_launcher));
     Ok(())
 }
 
@@ -2968,6 +2966,10 @@ pub(super) fn run_flutter_event_loop(
         // work. Drain them before a spent background slice can defer them;
         // otherwise busy frames can indefinitely postpone an app's close.
         process_flutter_event_batch(runtime, &mut events)?;
+        // Apply scene work-area changes before its input layout can switch
+        // native presentation and restore desktop window geometry. This is
+        // interactive state, so it must not wait for periodic shell services.
+        synchronize_system_bar_configuration(runtime, &mut events, Some(flutter_launcher));
         if dispatch_when_background_slice_expires(background_started, event_loop, &mut events)? {
             continue;
         }
@@ -2988,7 +2990,7 @@ pub(super) fn run_flutter_event_loop(
             &mut events,
         )?;
         if background_services_due {
-            synchronize_periodic_shell_services(runtime, flutter_launcher, &mut events)?;
+            synchronize_periodic_shell_services(runtime, &mut events)?;
         }
         if dispatch_when_background_slice_expires(background_started, event_loop, &mut events)? {
             continue;

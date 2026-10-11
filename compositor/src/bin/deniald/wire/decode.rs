@@ -196,17 +196,27 @@ impl WireBridge {
                     fb::SystemBarSide::Right => SystemBarSide::Right,
                     fb::SystemBarSide::Top => SystemBarSide::Top,
                     fb::SystemBarSide::Bottom => SystemBarSide::Bottom,
-                    fb::SystemBarSide::Hidden => return Err(WireError::Enumeration),
+                    fb::SystemBarSide::Hidden => SystemBarSide::Hidden,
                     _ => return Err(WireError::Enumeration),
                 };
                 let monitor_ids = request.system_bar_monitor_ids().ok_or(WireError::Payload)?;
-                if monitor_ids.is_empty() || monitor_ids.len() > self.snapshot.outputs.len() {
+                let hidden = side == SystemBarSide::Hidden;
+                if (if hidden {
+                    !monitor_ids.is_empty()
+                } else {
+                    monitor_ids.is_empty()
+                }) || monitor_ids.len() > self.snapshot.outputs.len()
+                {
                     return Err(WireError::Count);
                 }
                 let thickness = request.system_bar_thickness();
                 if thickness != -1.0
                     && (!thickness.is_finite()
-                        || thickness <= 0.0
+                        || (if hidden {
+                            thickness != 0.0
+                        } else {
+                            thickness <= 0.0
+                        })
                         || thickness > MAX_SYSTEM_BAR_THICKNESS)
                 {
                     return Err(WireError::Payload);
@@ -337,6 +347,7 @@ impl WireBridge {
             }
             kind @ (fb::WindowRequestKind::CloseWindow
             | fb::WindowRequestKind::FocusWindow
+            | fb::WindowRequestKind::MinimizeWindow
             | fb::WindowRequestKind::ConfigureWindow) => {
                 if self.pending_window_commands.len() >= MAX_PENDING_WINDOW_COMMANDS {
                     return Err(WireError::Count);
@@ -348,6 +359,12 @@ impl WireBridge {
                 let command = match kind {
                     fb::WindowRequestKind::CloseWindow => WindowCommand::Close { window_id },
                     fb::WindowRequestKind::FocusWindow => WindowCommand::Focus { window_id },
+                    fb::WindowRequestKind::MinimizeWindow => {
+                        if request.flags() != 0 {
+                            return Err(WireError::Flags);
+                        }
+                        WindowCommand::Minimize { window_id }
+                    }
                     fb::WindowRequestKind::ConfigureWindow => {
                         const EXACT: u32 = 1 << 0;
                         const LAYOUT_DROP: u32 = 1 << 1;

@@ -23,6 +23,7 @@ remain in the compositor.
 | `settings.dart`, `applications.dart`, `wallpaper.dart` | Configuration, application catalog/launching and wallpaper APIs |
 | `environment.dart`, `localization.dart`, `diagnostics.dart` | Environment, localization and instrumentation |
 | `theme.dart`, `effects.dart`, `materials.dart` | Shared presentation primitives |
+| `controls.dart` | Themed range sliders and connection/signal-strength Wi-Fi glyph |
 | `wire.dart` | Low-level versioned codecs and channel definitions; import with a prefix |
 
 Use the injected `ShellServices` when extending a host. A complete replacement
@@ -39,12 +40,20 @@ request ID allocator and wire codec under `src/platform/bridge`.
 
 Feature widgets and helpers can depend on `ShellWindowServices`,
 `ShellApplicationServices`, `ShellDesktopServices`, `ShellWorkspaceServices`,
-`ShellTelemetryServices`, `ShellMediaServices`, `ShellPresentationServices` or
+`ShellTelemetryServices`, `ShellAudioServices`, `ShellConnectivityServices`,
+`ShellMediaServices`, `ShellPresentationServices` or
 `ShellTrayServices` from `services.dart`. Each exposes only its capability.
 `ShellServices` implements the complete bundle for surface/action injection;
-existing member calls and host implementations remain compatible. For example,
+hosts provide each capability through their existing platform services. For example,
 a preview helper can accept `ShellWindowServices` without depending on media,
 tray or telemetry providers.
+
+`ShellAudioServices` shares output volume and interaction reconciliation with the
+host; `ShellConnectivityServices` projects the same connected Wi-Fi network used
+by mobile status indicators. `controls.dart` provides `RangeBar`,
+`VerticalRangeBar` and `WifiStatusIcon` without host-state dependencies. Sliders
+use the supplied colors and shared roundness; the vertical control's `iconScale`
+lets mobile geometry preserve native glyph sizes.
 
 `ShellController` owns the single native window subscription, focus operations and
 authoritative lock state. `ShellState` contains native snapshots and lookup indexes;

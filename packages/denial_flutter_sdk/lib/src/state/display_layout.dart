@@ -7,6 +7,7 @@ import '../models/display_layout.dart';
 import '../platform/denial_bridge.dart';
 import '../platform/denial_bridge_provider.dart';
 import 'notifier_lifecycle.dart';
+import 'system_bar_outputs.dart';
 
 final displayLayoutProvider =
     NotifierProvider<DisplayLayoutController, DisplayLayout?>(
@@ -223,21 +224,23 @@ class DisplayLayoutController extends Notifier<DisplayLayout?>
   }
 
   DisplayLayout _applyConfiguredValues(DisplayLayout layout) {
-    final selectedNames = _configuredOutputNames.toSet();
-    final selectedIds = selectedNames.isEmpty
-        ? layout.effectiveSystemBarMonitorIds
-        : layout.outputs
-              .where((output) => selectedNames.contains(output.name))
-              .map((output) => output.monitorId)
-              .toList(growable: false);
     final side = _configuredSide ?? layout.systemBarSide;
-    final monitorIds = selectedIds.isEmpty
-        ? layout.effectiveSystemBarMonitorIds
-        : selectedIds;
+    final monitorIds = side == SystemBarSide.hidden
+        ? const <int>[]
+        : resolveSystemBarMonitorIds(
+            outputs: layout.outputs.map(
+              (output) => (monitorId: output.monitorId, name: output.name),
+            ),
+            outputNames: _configuredOutputNames,
+            currentMonitorIds: layout.effectiveSystemBarMonitorIds,
+            mainMonitorId: layout.mainOutput?.monitorId,
+          );
     return layout.copyWithSystemBar(
       side: side,
       monitorIds: monitorIds,
-      thickness: _configuredThickness ?? layout.systemBarThickness,
+      thickness: side == SystemBarSide.hidden
+          ? 0
+          : _configuredThickness ?? layout.systemBarThickness,
       windowPadding: _configuredMaximizePadding ?? layout.maximizePadding,
     );
   }
@@ -256,8 +259,8 @@ class DisplayLayoutController extends Notifier<DisplayLayout?>
     DisplayLayout native,
     DisplayLayout configured,
   ) {
-    if (configured.systemBarSide == SystemBarSide.hidden ||
-        configured.effectiveSystemBarMonitorIds.isEmpty ||
+    if ((configured.systemBarSide != SystemBarSide.hidden &&
+            configured.effectiveSystemBarMonitorIds.isEmpty) ||
         _sameShellConfiguration(native, configured)) {
       return;
     }

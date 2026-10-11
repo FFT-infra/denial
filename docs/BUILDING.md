@@ -111,9 +111,8 @@ safe staging and never truncate an engine mapped by any running process.
 Installation/activation must preserve previous versions and rollback backups.
 For authorized test-device deployments, follow the
 [no automatic rollback policy](../AGENTS.md#test-device-deployment-failures-no-automatic-rollback),
-including when service activation fails: retain the candidate and diagnostic
-evidence, report installed/selected/running state separately, and ask the Doctor
-before switching back. Local workstation activation still waits at the standard
+including when service activation fails: report installed/selected/running
+state separately, and ask the Doctor before switching back. Local workstation activation still waits at the standard
 user-owned session checkpoint. This command neither authorizes a restart/logout
 nor arms an isolated engine test.
 

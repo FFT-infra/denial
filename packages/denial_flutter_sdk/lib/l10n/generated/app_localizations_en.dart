@@ -32,6 +32,12 @@ class AppLocalizationsEn extends AppLocalizations {
       'Keep each window’s width when swapping single-window columns on the same workspace and display. On vertical strips, keep height instead. Split columns keep their existing sizes.';
 
   @override
+  String get shellPresentationDesktop => 'Desktop view';
+
+  @override
+  String get shellPresentationMobile => 'Mobile view';
+
+  @override
   String get homeResizeWidget => 'Resize widget';
 
   @override

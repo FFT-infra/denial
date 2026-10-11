@@ -11,6 +11,7 @@ mod file_chooser;
 mod platform;
 mod renderer;
 mod texture;
+mod touch;
 
 use std::sync::Arc;
 

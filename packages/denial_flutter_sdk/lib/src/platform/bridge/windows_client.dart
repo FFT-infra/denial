@@ -118,6 +118,16 @@ final class BridgeWindowsClient {
     );
   }
 
+  void minimizeWindow(DenialWindow window) {
+    if (window.windowId <= 0) return;
+    _context.sendWire(
+      _context.codec.encodeWindowRequest(
+        wire.WindowRequestKind.MinimizeWindow,
+        windowId: window.windowId,
+      ),
+    );
+  }
+
   void switchWorkspace({required int monitorId, required int workspaceId}) {
     if (monitorId < 0 || workspaceId < 1 || workspaceId > 9) {
       return;

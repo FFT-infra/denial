@@ -1163,7 +1163,7 @@ PYSDK
             "$dart" analyze --fatal-infos
             if [[ "$package" == packages/denial_flutter_sdk ]]; then
                 # Core SDK persistence and lifecycle tests need no development engine.
-                "$dart" test test/glass_configuration_test.dart test/surface_events_test.dart test/settings_document_test.dart test/bridge_transport_test.dart
+                "$dart" test test/glass_configuration_test.dart test/surface_events_test.dart test/settings_document_test.dart test/bridge_transport_test.dart test/system_bar_outputs_test.dart
             fi
             if [[ "$package" == plugins/denial_pets ]]; then
                 # The perching rule is plain Dart.

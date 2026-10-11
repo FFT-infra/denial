@@ -295,6 +295,8 @@ class DenialBridge {
 
   void focusWindow(DenialWindow window) => _windows.focusWindow(window);
 
+  void minimizeWindow(DenialWindow window) => _windows.minimizeWindow(window);
+
   void switchWorkspace({required int monitorId, required int workspaceId}) =>
       _windows.switchWorkspace(monitorId: monitorId, workspaceId: workspaceId);
 

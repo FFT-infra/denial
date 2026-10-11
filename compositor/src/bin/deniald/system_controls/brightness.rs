@@ -262,6 +262,13 @@ fn paths_related(left: &Path, right: &Path) -> bool {
     left == right || left.starts_with(right) || right.starts_with(left)
 }
 
+fn drm_connector_sysfs_entry(path: &Path) -> bool {
+    // Older kernels expose connector status without connector_id. Neither
+    // brightness provider needs the numeric ID; names, device ancestry and
+    // DDC/EDID relationships identify their outputs.
+    path.join("connector_id").is_file() || path.join("status").is_file()
+}
+
 fn discover_backlights(backlight_root: &Path, drm_root: &Path) -> HashMap<String, BacklightDevice> {
     let mut backlights = fs::read_dir(backlight_root)
         .into_iter()
@@ -294,7 +301,7 @@ fn discover_backlights(backlight_root: &Path, drm_root: &Path) -> HashMap<String
         .flatten()
         .filter_map(|entry| {
             let path = entry.path();
-            if !path.join("connector_id").is_file() {
+            if !drm_connector_sysfs_entry(&path) {
                 return None;
             }
             let name = connector_from_ddc_name(&entry.file_name().to_string_lossy());
@@ -559,7 +566,7 @@ fn drm_connector_identities(root: &Path) -> Vec<DrmConnectorIdentity> {
         .flatten()
         .filter_map(|entry| {
             let path = entry.path();
-            if !path.join("connector_id").is_file() {
+            if !drm_connector_sysfs_entry(&path) {
                 return None;
             }
             let name = connector_from_ddc_name(&entry.file_name().to_string_lossy());
@@ -897,3 +904,7 @@ pub(super) fn run_brightness_worker(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "brightness_tests.rs"]
+mod tests;

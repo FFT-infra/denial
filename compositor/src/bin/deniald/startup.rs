@@ -370,6 +370,7 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
             session.clone(),
             &seat_name,
             drm_fd.clone(),
+            render_fd.clone(),
             options.xwayland,
             options.work_area.clone(),
             output_configuration.scrolling_layout_axes.clone(),

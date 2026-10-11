@@ -276,8 +276,9 @@ class DesktopScene extends ConsumerStatefulWidget {
     required this.mainOutputRect,
     required this.applicationSearchFocusNode,
     required this.onOpenLauncher,
-    required this.onDismissLauncher,
+    required this.onDismissPanel,
     required this.onOpenDashboard,
+    required this.onToggleDashboard,
     required this.onCloseWallpaperSelector,
     required this.onOpenSettings,
     required this.onOpenPowerSettings,
@@ -314,8 +315,9 @@ class DesktopScene extends ConsumerStatefulWidget {
   final Rect? mainOutputRect;
   final FocusNode applicationSearchFocusNode;
   final VoidCallback onOpenLauncher;
-  final VoidCallback onDismissLauncher;
+  final VoidCallback onDismissPanel;
   final VoidCallback onOpenDashboard;
+  final VoidCallback onToggleDashboard;
   final VoidCallback onCloseWallpaperSelector;
   final VoidCallback onOpenSettings;
   final VoidCallback onOpenPowerSettings;
@@ -709,7 +711,7 @@ class _DesktopSceneState extends ConsumerState<DesktopScene> {
     final mainOutputRect = widget.mainOutputRect;
     final applicationSearchFocusNode = widget.applicationSearchFocusNode;
     final onOpenLauncher = widget.onOpenLauncher;
-    final onDismissLauncher = widget.onDismissLauncher;
+    final onDismissPanel = widget.onDismissPanel;
     final onOpenDashboard = widget.onOpenDashboard;
     final onOpenSettings = widget.onOpenSettings;
     final onOpenPowerSettings = widget.onOpenPowerSettings;
@@ -799,7 +801,9 @@ class _DesktopSceneState extends ConsumerState<DesktopScene> {
             workArea: surfaceLayout.workAreaOf(output),
             isMainOutput:
                 output.monitorId == surfaceLayout.mainOutput?.monitorId,
-            defaultOutputSelected: surfaceLayout.hostsSystemBar(output),
+            defaultOutputSelected: surfaceLayout.hostsDefaultShellSurface(
+              output,
+            ),
             workspaceId: desktop.activeWorkspaceFor(output.monitorId),
             fullscreen: fullscreenMonitorIds.contains(output.monitorId),
             overview: desktop.overviewActive,
@@ -816,6 +820,8 @@ class _DesktopSceneState extends ConsumerState<DesktopScene> {
       ref: ref,
       onOpenPowerSettings: onOpenPowerSettings,
       onToggleLauncher: widget.onToggleLauncher,
+      onOpenDashboard: onOpenDashboard,
+      onToggleDashboard: widget.onToggleDashboard,
     );
     Widget surfacePlane(ShellSurfaceLayer layer) => ShellSurfacePlane(
       key: ValueKey(layer),
@@ -1012,7 +1018,7 @@ class _DesktopSceneState extends ConsumerState<DesktopScene> {
                 panelDurationScale: widget.panelDurationScale,
                 applicationSearchFocusNode: applicationSearchFocusNode,
                 onOpenLauncher: onOpenLauncher,
-                onDismissLauncher: onDismissLauncher,
+                onDismissPanel: onDismissPanel,
                 onOpenDashboard: onOpenDashboard,
                 onOpenSettings: onOpenSettings,
                 onCancelPanelClose: onCancelPanelClose,

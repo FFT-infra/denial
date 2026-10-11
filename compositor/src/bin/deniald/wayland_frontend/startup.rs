@@ -9,7 +9,8 @@ impl WaylandFrontend {
         snapshot: &TopologySnapshot,
         session: LibSeatSession,
         seat_name: &str,
-        drm_device: DrmDeviceFd,
+        display_device: DrmDeviceFd,
+        render_device: DrmDeviceFd,
         xwayland_enabled: bool,
         work_area: crate::options::WorkAreaOptions,
         scrolling_layout_axes: BTreeMap<String, ScrollingLayoutAxis>,
@@ -55,11 +56,15 @@ impl WaylandFrontend {
         let input_method = InputMethodManager::new(&display_handle);
         let shm_state = ShmState::new::<RuntimeState>(&display_handle, vec![]);
         let dmabuf_state = DmabufState::new();
-        let drm_syncobj_state = if supports_syncobj_eventfd(&drm_device) {
+        // Syncobjs belong on a capable render device, which can be separate
+        // from the KMS device. Keep the display device as a fallback only.
+        let syncobj_device =
+            select_syncobj_device(&render_device, &display_device, supports_syncobj_eventfd);
+        let drm_syncobj_state = if let Some(syncobj_device) = syncobj_device {
             info!("advertising linux-drm-syncobj-v1 explicit synchronization");
             Some(DrmSyncobjState::new::<RuntimeState>(
                 &display_handle,
-                drm_device.clone(),
+                syncobj_device.clone(),
             ))
         } else {
             warn!("DRM syncobj eventfd is unavailable; retaining implicit DMA-BUF synchronization");
@@ -153,7 +158,7 @@ impl WaylandFrontend {
             let output = Output::new(
                 spec.name.clone(),
                 output_metadata::resolve(
-                    output_metadata::read(&drm_device, spec.id, &spec.name),
+                    output_metadata::read(&display_device, spec.id, &spec.name),
                     None,
                     &spec.name,
                 ),
@@ -276,7 +281,7 @@ impl WaylandFrontend {
         }
         let libinput = init_libinput(event_loop, session.clone(), seat_name)?;
         Ok(Self {
-            output_metadata_device: drm_device,
+            output_metadata_device: display_device,
             start_time: Instant::now(),
             socket_name,
             loop_handle,
@@ -509,5 +514,60 @@ impl WaylandFrontend {
             atlas_scale,
             atlas_size,
         })
+    }
+}
+
+fn select_syncobj_device<'a, T>(
+    render_device: &'a T,
+    display_device: &'a T,
+    mut supports: impl FnMut(&T) -> bool,
+) -> Option<&'a T> {
+    if supports(render_device) {
+        Some(render_device)
+    } else if supports(display_device) {
+        Some(display_device)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::select_syncobj_device;
+
+    #[test]
+    fn syncobj_device_prefers_capable_render_then_capable_display() {
+        for (render_capable, display_capable, expected) in [
+            (true, true, Some("render")),
+            (true, false, Some("render")),
+            (false, true, Some("display")),
+            (false, false, None),
+        ] {
+            let render = ("render", render_capable);
+            let display = ("display", display_capable);
+            let mut probes = Vec::new();
+            let selected = select_syncobj_device(&render, &display, |device| {
+                probes.push(device.0);
+                device.1
+            });
+            assert_eq!(selected.map(|device| device.0), expected);
+            // A capable render device needs no display-device probe.
+            assert_eq!(
+                probes,
+                if render_capable {
+                    vec!["render"]
+                } else {
+                    vec!["render", "display"]
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn syncobj_device_preserves_same_device_selection_and_implicit_fallback() {
+        for capable in [true, false] {
+            let selected = select_syncobj_device(&capable, &capable, |device| *device);
+            assert_eq!(selected, capable.then_some(&capable));
+        }
     }
 }

@@ -1951,6 +1951,9 @@ impl WaylandFrontend {
         &mut self,
         layout: InputLayoutSnapshot,
     ) -> (Option<InputLayoutSnapshot>, bool, bool) {
+        let presentation_changed = layout
+            .mobile_presentation()
+            .is_some_and(|mobile| self.set_mobile_presentation(mobile));
         self.text_input
             .set_shell_capture(layout.keyboard_capture() || layout.exclusive_shell());
         let input_method_changed = self.synchronize_input_method();
@@ -1987,7 +1990,7 @@ impl WaylandFrontend {
         }
         (
             previous,
-            visibility_changed || input_method_changed,
+            visibility_changed || input_method_changed || presentation_changed,
             routing_changed,
         )
     }

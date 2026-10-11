@@ -397,10 +397,10 @@ impl flatbuffers::SimpleToVerifyInSlice for WindowOpacityClass {}
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 pub const ENUM_MIN_WINDOW_REQUEST_KIND: u8 = 0;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MAX_WINDOW_REQUEST_KIND: u8 = 8;
+pub const ENUM_MAX_WINDOW_REQUEST_KIND: u8 = 9;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 #[allow(non_camel_case_types)]
-pub const ENUM_VALUES_WINDOW_REQUEST_KIND: [WindowRequestKind; 9] = [
+pub const ENUM_VALUES_WINDOW_REQUEST_KIND: [WindowRequestKind; 10] = [
   WindowRequestKind::ListWindows,
   WindowRequestKind::GetDisplayLayout,
   WindowRequestKind::CloseWindow,
@@ -410,6 +410,7 @@ pub const ENUM_VALUES_WINDOW_REQUEST_KIND: [WindowRequestKind; 9] = [
   WindowRequestKind::ConfigureSystemBar,
   WindowRequestKind::SwitchWorkspace,
   WindowRequestKind::MoveWindowToWorkspace,
+  WindowRequestKind::MinimizeWindow,
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -426,9 +427,10 @@ impl WindowRequestKind {
   pub const ConfigureSystemBar: Self = Self(6);
   pub const SwitchWorkspace: Self = Self(7);
   pub const MoveWindowToWorkspace: Self = Self(8);
+  pub const MinimizeWindow: Self = Self(9);
 
   pub const ENUM_MIN: u8 = 0;
-  pub const ENUM_MAX: u8 = 8;
+  pub const ENUM_MAX: u8 = 9;
   pub const ENUM_VALUES: &'static [Self] = &[
     Self::ListWindows,
     Self::GetDisplayLayout,
@@ -439,6 +441,7 @@ impl WindowRequestKind {
     Self::ConfigureSystemBar,
     Self::SwitchWorkspace,
     Self::MoveWindowToWorkspace,
+    Self::MinimizeWindow,
   ];
   /// Returns the variant's name or "" if unknown.
   pub fn variant_name(self) -> Option<&'static str> {
@@ -452,6 +455,7 @@ impl WindowRequestKind {
       Self::ConfigureSystemBar => Some("ConfigureSystemBar"),
       Self::SwitchWorkspace => Some("SwitchWorkspace"),
       Self::MoveWindowToWorkspace => Some("MoveWindowToWorkspace"),
+      Self::MinimizeWindow => Some("MinimizeWindow"),
       _ => None,
     }
   }

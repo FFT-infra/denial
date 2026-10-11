@@ -56,6 +56,54 @@ fn configure_mobile_toplevel(toplevel: &ToplevelSurface, size: Size<i32, Logical
     toplevel.send_pending_configure();
 }
 
+#[cfg(feature = "flutter")]
+fn configure_desktop_toplevel(
+    toplevel: &ToplevelSurface,
+    size: Size<i32, Logical>,
+    state: WindowPlacementState,
+) {
+    toplevel.with_pending_state(|pending| {
+        pending.size = Some(size);
+        pending.states.unset(xdg_toplevel::State::Resizing);
+        if !state.fullscreen {
+            pending.fullscreen_output = None;
+        }
+        for edge in [
+            xdg_toplevel::State::TiledLeft,
+            xdg_toplevel::State::TiledRight,
+            xdg_toplevel::State::TiledTop,
+            xdg_toplevel::State::TiledBottom,
+        ] {
+            pending.states.unset(edge);
+        }
+        for (flag, enabled) in [
+            (xdg_toplevel::State::Fullscreen, state.fullscreen),
+            (xdg_toplevel::State::Maximized, state.maximized),
+        ] {
+            if enabled {
+                pending.states.set(flag);
+            } else {
+                pending.states.unset(flag);
+            }
+        }
+    });
+    toplevel.send_pending_configure();
+}
+
+/// Mobile-only windows have no previous desktop placement. Retain the client
+/// size where it fits and center it inside the desktop's reserved work area.
+#[cfg(feature = "flutter")]
+fn initial_desktop_geometry(
+    size: Size<i32, Logical>,
+    bounds: Rectangle<i32, Logical>,
+) -> Rectangle<i32, Logical> {
+    let size = Size::from((
+        size.w.clamp(1, bounds.size.w.max(1)),
+        size.h.clamp(1, bounds.size.h.max(1)),
+    ));
+    topology::centered_transient_geometry(size, bounds, bounds)
+}
+
 /// Matches the mobile status bar's logical height. Output scaling is applied
 /// by the ordinary client configure/viewport and native texture projection.
 pub(super) const MOBILE_STATUS_INSET: i32 = 48;
@@ -127,6 +175,89 @@ impl Dispatch<DenialInsetsManagerV1, ()> for RuntimeState {
 }
 
 impl WaylandFrontend {
+    #[cfg(feature = "flutter")]
+    pub(super) fn set_mobile_presentation(&mut self, mobile: bool) -> bool {
+        if self.mobile_shell == mobile {
+            return false;
+        }
+        let windows = self.space.elements().cloned().collect::<Vec<_>>();
+        if mobile {
+            // Save desktop targets before mobile policy overwrites them. The
+            // layout keeps its own normal rectangles for a later return.
+            for window in &windows {
+                let Some(root) = self.window_root_surface(window) else {
+                    continue;
+                };
+                let target = self.window_geometry_target(window);
+                let state = self.window_placement_state(window);
+                if let Some(record) = self.ensure_window_record_for_surface(&root.id()) {
+                    let intent = record.geometry_intent.unwrap_or_else(|| {
+                        WindowGeometryIntent::for_contract(
+                            target,
+                            WindowGeometryAuthority::Pending,
+                            None,
+                        )
+                    });
+                    record.mobile_restore = Some((intent, state));
+                }
+            }
+            self.mobile_shell = true;
+            for window in &windows {
+                self.configure_mobile_window(window);
+            }
+        } else {
+            // Filter before changing the mode so system UI and unmanaged X11
+            // surfaces retain their independent placement policy.
+            let windows = windows
+                .into_iter()
+                .filter(|window| self.mobile_window_geometry(window).is_some())
+                .collect::<Vec<_>>();
+            self.mobile_shell = false;
+            for window in &windows {
+                let Some(root) = self.window_root_surface(window) else {
+                    continue;
+                };
+                let saved = self
+                    .window_record_for_surface_mut(&root.id())
+                    .and_then(|record| record.mobile_restore.take());
+                let (mut target, mut authority, mut state) = if let Some((intent, state)) = saved {
+                    (intent.target, intent.authority, state)
+                } else {
+                    let current = self.window_geometry_target(window);
+                    let Some(output) = self.output_for_geometry(current) else {
+                        continue;
+                    };
+                    let bounds =
+                        self.maximize_work_area(Some(&output.output), output.logical_geometry);
+                    let bounds = shell_content_geometry(bounds, shell_draws_server_frame(window));
+                    (
+                        initial_desktop_geometry(current.size, bounds),
+                        WindowGeometryAuthority::Pending,
+                        WindowPlacementState::default(),
+                    )
+                };
+                if !self.window_layout.manages_geometry()
+                    && !state.fullscreen
+                    && let Some(record) = self.window_record_for_surface_mut(&root.id())
+                    && record.shell_presentation.is_none()
+                    && let Some(normal) = record.layout_restore_geometry.take()
+                {
+                    target = normal;
+                    authority = WindowGeometryAuthority::Pending;
+                    state.maximized = false;
+                }
+                if let Some(toplevel) = window.toplevel() {
+                    configure_desktop_toplevel(toplevel, target.size, state);
+                }
+                self.set_window_geometry_target_with_authority(window, target, authority);
+            }
+            self.rebuild_window_layout();
+        }
+        self.client_input_route_cache = None;
+        info!(mobile, "changed native window presentation");
+        true
+    }
+
     pub(super) fn mobile_window_geometry(
         &self,
         window: &Window,

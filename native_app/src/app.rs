@@ -9,7 +9,7 @@ use denial_flutter_engine::{EngineEvent, EngineHost, ScheduledTask, sys};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_pointer,
-    delegate_registry, delegate_seat, delegate_xdg_shell, delegate_xdg_window,
+    delegate_registry, delegate_seat, delegate_touch, delegate_xdg_shell, delegate_xdg_window,
     output::{OutputHandler, OutputState},
     reexports::{
         calloop::{EventLoop, LoopHandle, channel},
@@ -27,6 +27,7 @@ use smithay_client_toolkit::{
             AxisScroll, PointerEvent, PointerEventKind, PointerHandler,
             cursor_shape::CursorShapeManager,
         },
+        touch::TouchHandler,
     },
     shell::{
         WaylandSurface,
@@ -43,9 +44,10 @@ use smithay_client_toolkit::{
 use wayland_client::{
     Connection, QueueHandle,
     globals::registry_queue_init,
-    protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface},
+    protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface, wl_touch},
 };
 
+use crate::touch::{TouchEvent, TouchInput};
 use crate::{AppExtension, config::Config, platform::Platform, renderer::Renderer};
 
 pub enum Event {
@@ -106,6 +108,8 @@ pub fn run(config: Config, extension: AppExtension) -> Result<(), Box<dyn std::e
         cursor_device: None,
         keyboard: None,
         pointer: None,
+        touch: None,
+        touch_input: TouchInput::default(),
         input_seat: None,
         loop_handle: handle,
         qh,
@@ -196,6 +200,8 @@ struct App {
     cursor_device: Option<WpCursorShapeDeviceV1>,
     keyboard: Option<wl_keyboard::WlKeyboard>,
     pointer: Option<wl_pointer::WlPointer>,
+    touch: Option<wl_touch::WlTouch>,
+    touch_input: TouchInput,
     input_seat: Option<wl_seat::WlSeat>,
     loop_handle: LoopHandle<'static, App>,
     qh: QueueHandle<App>,
@@ -554,6 +560,23 @@ impl App {
         }
     }
 
+    fn touch_events(&mut self, events: Vec<TouchEvent>) {
+        let Some(host) = &self.host else {
+            return;
+        };
+        if events.is_empty() {
+            return;
+        }
+        let timestamp = (host.engine().current_time_nanos() / 1000) as usize;
+        let events = events
+            .into_iter()
+            .map(|event| event.into_flutter(self.scale, timestamp))
+            .collect::<Vec<_>>();
+        if let Err(error) = host.engine().send_pointer_events(&events) {
+            self.fail(error);
+        }
+    }
+
     fn apply_cursor(&self) {
         let Some(serial) = self.enter_serial else {
             return;
@@ -708,6 +731,12 @@ impl SeatHandler for App {
                     Err(error) => self.fail(error),
                 }
             }
+            Capability::Touch if self.touch.is_none() => {
+                match self.seat_state.get_touch(qh, &seat) {
+                    Ok(touch) => self.touch = Some(touch),
+                    Err(error) => self.fail(error),
+                }
+            }
             _ => {}
         }
     }
@@ -740,12 +769,20 @@ impl SeatHandler for App {
                 self.buttons = 0;
                 self.enter_serial = None;
             }
+            Capability::Touch => {
+                let events = self.touch_input.cancel();
+                self.touch_events(events);
+                if let Some(touch) = self.touch.take() {
+                    touch.release();
+                }
+            }
             _ => {}
         }
     }
     fn remove_seat(&mut self, conn: &Connection, qh: &QueueHandle<Self>, seat: wl_seat::WlSeat) {
         self.remove_capability(conn, qh, seat.clone(), Capability::Keyboard);
         self.remove_capability(conn, qh, seat.clone(), Capability::Pointer);
+        self.remove_capability(conn, qh, seat.clone(), Capability::Touch);
         if self.input_seat.as_ref() == Some(&seat) {
             self.input_seat = None;
         }
@@ -833,6 +870,77 @@ impl KeyboardHandler for App {
         _: u32,
     ) {
         self.modifiers = modifiers;
+    }
+}
+
+impl TouchHandler for App {
+    fn down(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_touch::WlTouch,
+        _: u32,
+        _: u32,
+        surface: wl_surface::WlSurface,
+        id: i32,
+        position: (f64, f64),
+    ) {
+        if &surface == self.surface.wl_surface() {
+            let events = self.touch_input.down(id, position);
+            self.touch_events(events);
+        }
+    }
+
+    fn up(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_touch::WlTouch,
+        _: u32,
+        _: u32,
+        id: i32,
+    ) {
+        let events = self.touch_input.up(id);
+        self.touch_events(events);
+    }
+
+    fn motion(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_touch::WlTouch,
+        _: u32,
+        id: i32,
+        position: (f64, f64),
+    ) {
+        let events = self.touch_input.motion(id, position);
+        self.touch_events(events);
+    }
+
+    fn cancel(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_touch::WlTouch) {
+        let events = self.touch_input.cancel();
+        self.touch_events(events);
+    }
+
+    fn shape(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_touch::WlTouch,
+        _: i32,
+        _: f64,
+        _: f64,
+    ) {
+    }
+
+    fn orientation(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_touch::WlTouch,
+        _: i32,
+        _: f64,
+    ) {
     }
 }
 
@@ -981,6 +1089,7 @@ delegate_output!(App);
 delegate_seat!(App);
 delegate_keyboard!(App);
 delegate_pointer!(App);
+delegate_touch!(App);
 delegate_xdg_shell!(App);
 delegate_xdg_window!(App);
 delegate_layer!(App);

@@ -1,8 +1,8 @@
 //! Compositor-owned touchpad gesture recognition.
 //!
-//! Libinput decides whether a hardware sequence is a swipe, pinch, or hold.
-//! This module deliberately starts one level above that hardware policy: it
-//! turns gesture streams into shortcut triggers or continuous motion phases.
+//! Libinput classifies touchpad sequences; direct touch supplies centroid
+//! motion after capturing three or four contacts. Both use the same swipe
+//! state machine for shortcut triggers and continuous motion phases.
 //! Keeping the recognizer independent from Smithay and the wire protocol makes
 //! gestures easy to extend and the state machine deterministic to test.
 
@@ -177,7 +177,7 @@ impl HorizontalScrollTracker {
 }
 
 #[derive(Debug)]
-struct ActiveSwipe {
+pub(super) struct ActiveSwipe {
     fingers: u32,
     delta_x: f64,
     delta_y: f64,
@@ -188,7 +188,10 @@ struct ActiveSwipe {
 }
 
 impl ActiveSwipe {
-    fn new(fingers: u32, horizontal_scroll_directions: HorizontalScrollDirections) -> Self {
+    pub(super) fn new(
+        fingers: u32,
+        horizontal_scroll_directions: HorizontalScrollDirections,
+    ) -> Self {
         Self {
             fingers,
             delta_x: 0.0,
@@ -200,7 +203,11 @@ impl ActiveSwipe {
         }
     }
 
-    fn update(
+    pub(super) fn has_started(&self) -> bool {
+        self.triggered.is_some() || self.horizontal_scrolling
+    }
+
+    pub(super) fn update(
         &mut self,
         delta_x: f64,
         delta_y: f64,
@@ -292,7 +299,11 @@ impl ActiveSwipe {
             .map(|binding| binding.gesture)
     }
 
-    fn end_event(mut self, cancelled: bool, timestamp_micros: u64) -> Option<TouchpadGestureEvent> {
+    pub(super) fn end_event(
+        mut self,
+        cancelled: bool,
+        timestamp_micros: u64,
+    ) -> Option<TouchpadGestureEvent> {
         if self.horizontal_scrolling {
             // Treat time spent stationary before release as zero motion so a
             // deliberate slow stop does not inherit stale fling velocity.

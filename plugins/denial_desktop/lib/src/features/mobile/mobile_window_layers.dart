@@ -1,4 +1,5 @@
 import 'package:denial_desktop/src/state/reference_shell_controller.dart';
+import 'package:denial_desktop/src/state/reference_shell_presentation.dart';
 
 import 'package:denial_flutter_sdk/shell.dart';
 
@@ -57,6 +58,7 @@ class _MobilePrimaryWindowLayerState
       ),
     );
     final window = visual.window;
+    final topInset = ref.watch(mobilePresentationTopInsetProvider);
     if (window == null) {
       return const SizedBox.shrink();
     }
@@ -70,11 +72,14 @@ class _MobilePrimaryWindowLayerState
           return const SizedBox.shrink();
         }
         return Positioned.fill(
-          child: MobilePrimaryWindowStage(
-            currentWindow: window,
-            switchTargetWindow: visual.switching ? visual.target : null,
-            switchDragX: _dragX,
-            opacity: heroOwnsForeground ? 0.0 : 1.0,
+          child: Padding(
+            padding: EdgeInsets.only(top: topInset),
+            child: MobilePrimaryWindowStage(
+              currentWindow: window,
+              switchTargetWindow: visual.switching ? visual.target : null,
+              switchDragX: _dragX,
+              opacity: heroOwnsForeground ? 0.0 : 1.0,
+            ),
           ),
         );
       },

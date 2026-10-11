@@ -166,7 +166,8 @@ enum WindowRequestKind {
   CreateLocalWindow(5),
   ConfigureSystemBar(6),
   SwitchWorkspace(7),
-  MoveWindowToWorkspace(8);
+  MoveWindowToWorkspace(8),
+  MinimizeWindow(9);
 
   final int value;
   const WindowRequestKind(this.value);
@@ -182,6 +183,7 @@ enum WindowRequestKind {
       case 6: return WindowRequestKind.ConfigureSystemBar;
       case 7: return WindowRequestKind.SwitchWorkspace;
       case 8: return WindowRequestKind.MoveWindowToWorkspace;
+      case 9: return WindowRequestKind.MinimizeWindow;
       default: throw StateError('Invalid value $value for bit flag enum');
     }
   }
@@ -190,7 +192,7 @@ enum WindowRequestKind {
       value == null ? null : WindowRequestKind.fromValue(value);
 
   static const int minValue = 0;
-  static const int maxValue = 8;
+  static const int maxValue = 9;
   static const fb.Reader<WindowRequestKind> reader = _WindowRequestKindReader();
 }
 

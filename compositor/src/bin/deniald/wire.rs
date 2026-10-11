@@ -97,6 +97,8 @@ const KEYBOARD_FLAGS_MASK: u32 = KEYBOARD_CTRL | KEYBOARD_PHASE_MASK;
 pub const INPUT_LAYOUT_KEYBOARD_CAPTURE: u32 = 1 << 0;
 pub const INPUT_LAYOUT_EXCLUSIVE_SHELL: u32 = 1 << 1;
 pub const INPUT_LAYOUT_OBSERVE_CLIENT_POINTER_PRESSES: u32 = 1 << 2;
+pub const INPUT_LAYOUT_PRESENTATION_SPECIFIED: u32 = 1 << 3;
+pub const INPUT_LAYOUT_MOBILE_PRESENTATION: u32 = 1 << 4;
 pub const INPUT_WINDOW_VISIBLE: u32 = 1 << 0;
 pub const INPUT_WINDOW_HIT_TEST_DISABLED: u32 = 1 << 1;
 pub const INPUT_WINDOW_GEOMETRY_LOCKED: u32 = 1 << 2;
@@ -128,6 +130,9 @@ pub enum WindowCommand {
         window_id: u64,
     },
     Focus {
+        window_id: u64,
+    },
+    Minimize {
         window_id: u64,
     },
     Configure {
@@ -267,6 +272,7 @@ impl WindowCommand {
             Self::HoldPet { .. } | Self::CarryPet { .. } => None,
             Self::Close { window_id }
             | Self::Focus { window_id }
+            | Self::Minimize { window_id }
             | Self::Configure { window_id, .. }
             | Self::MoveToWorkspace { window_id, .. }
             | Self::DropOnWorkspace { window_id, .. }
@@ -456,6 +462,11 @@ impl InputLayoutSnapshot {
 
     pub fn observes_client_pointer_presses(&self) -> bool {
         self.flags & INPUT_LAYOUT_OBSERVE_CLIENT_POINTER_PRESSES != 0
+    }
+
+    pub fn mobile_presentation(&self) -> Option<bool> {
+        (self.flags & INPUT_LAYOUT_PRESENTATION_SPECIFIED != 0)
+            .then_some(self.flags & INPUT_LAYOUT_MOBILE_PRESENTATION != 0)
     }
 }
 

@@ -179,6 +179,8 @@ void main() {
       'ShellDesktopServices',
       'ShellWorkspaceServices',
       'ShellTelemetryServices',
+      'ShellAudioServices',
+      'ShellConnectivityServices',
       'ShellMediaServices',
       'ShellPresentationServices',
       'ShellTrayServices',
@@ -196,7 +198,36 @@ void main() {
     final tray = exports.get2('ShellTrayServices') as ClassElement;
     expect(tray.getMethod('buildSystemTray'), isNotNull);
     expect(tray.getMethod('launchApplication'), isNull);
+    final audio = exports.get2('ShellAudioServices') as ClassElement;
+    expect(audio.getGetter('volume'), isNotNull);
+    expect(audio.getMethod('commitVolume'), isNotNull);
+    expect(audio.getMethod('activateWindow'), isNull);
+    final connectivity =
+        exports.get2('ShellConnectivityServices') as ClassElement;
+    expect(connectivity.getGetter('connectedWifi'), isNotNull);
+    expect(connectivity.getMethod('commitVolume'), isNull);
   });
+
+  test(
+    'shared controls expose presentation without host state or backends',
+    () async {
+      await namespace(
+        'controls',
+        available: ['RangeBar', 'VerticalRangeBar', 'WifiStatusIcon'],
+        hidden: [
+          'quickSettingsProvider',
+          'networkConnectivityProvider',
+          'NetworkBackend',
+          'ShellServices',
+          'ShadeReferenceGeometry',
+        ],
+      );
+      expect(
+        (await library('controls')).exportNamespace.definedNames2.keys,
+        unorderedEquals(['RangeBar', 'VerticalRangeBar', 'WifiStatusIcon']),
+      );
+    },
+  );
 
   test(
     'typed platform and value models do not re-export backend internals',

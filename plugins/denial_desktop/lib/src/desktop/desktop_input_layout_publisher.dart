@@ -10,6 +10,7 @@ import 'package:denial_flutter_sdk/models.dart';
 
 import '../state/desktop_window_switcher.dart';
 import '../state/desktop_visibility.dart';
+import '../state/reference_shell_metrics.dart';
 
 import 'package:denial_flutter_sdk/state.dart';
 import 'package:denial_flutter_sdk/settings.dart';
@@ -19,9 +20,14 @@ import 'desktop_held_layers.dart';
 import 'desktop_input_surface_index.dart';
 
 class DesktopInputLayoutPublisher extends ConsumerStatefulWidget {
-  const DesktopInputLayoutPublisher({required this.child, super.key});
+  const DesktopInputLayoutPublisher({
+    required this.child,
+    this.softwareKeyboardEnabled = false,
+    super.key,
+  });
 
   final Widget child;
+  final bool softwareKeyboardEnabled;
 
   @override
   ConsumerState<DesktopInputLayoutPublisher> createState() =>
@@ -43,8 +49,14 @@ class _DesktopInputLayoutPublisherState
   Widget build(BuildContext context) {
     ref.watch(
       referenceShellProvider.select(
-        (state) =>
-            (state.windows, state.layerSurfaces, state.windowSnapshotSequence),
+        (state) => (
+          state.windows,
+          state.layerSurfaces,
+          state.windowSnapshotSequence,
+          state.edgePanelVisible,
+          state.edgePanelDragProgress,
+          state.launchTransitionActive,
+        ),
       ),
     );
     ref.watch(
@@ -124,6 +136,12 @@ class _DesktopInputLayoutPublisherState
         interactions: ref.read(shellInteractionRegistryProvider),
         displayLayout: displayLayout,
         windowLayout: settings.windowLayout,
+        softwareKeyboard: (
+          enabled:
+              widget.softwareKeyboardEnabled && !shell.launchTransitionActive,
+          visible: shell.edgePanelVisible,
+          progress: shell.edgePanelDragProgress,
+        ),
       );
       if (_lastSource?.hasSameInputsAs(source) ?? false) {
         return;
@@ -148,6 +166,13 @@ class _DesktopInputLayoutPublisherState
     final heldLayerSurfaces = _surfaceIndex!.held;
     final desktop = source.desktop;
     final interactions = source.interactions;
+    final softwareKeyboardRegions = source.softwareKeyboard.enabled
+        ? ReferenceShellMetrics.softwareKeyboardRegions(
+            viewSize,
+            progress: source.softwareKeyboard.progress,
+            scrollStripVisible: source.softwareKeyboard.visible,
+          )
+        : const <Rect>[];
 
     final windowsById = source.windowsById;
     final popupSurfaces = source.desktopVisible
@@ -266,6 +291,10 @@ class _DesktopInputLayoutPublisherState
         subtractSurfaceTree(surface);
       }
     }
+    // The system keyboard is painted above every desktop surface, including
+    // foreground layer clients. Give its whole sheet and scroll strip shell
+    // ownership, while preserving the editor as the native text endpoint.
+    shellRegions.addAll(softwareKeyboardRegions);
 
     final inputWindows = <InputWindowRegion>[];
     final visibleSurfaceIds = <int>{};
@@ -472,10 +501,12 @@ class _DesktopInputLayoutPublisherState
       epoch: _epoch + 1,
       shellRegions: shellRegions,
       windows: inputWindows,
+      softwareKeyboardRegions: softwareKeyboardRegions,
       visibleSurfaceIds: visibleSurfaceIds.toList(growable: false),
       keyboardCapture: source.desktopVisible || interactions.capturesKeyboard,
       exclusiveShellMode: interactions.compositorExclusive,
       observeClientPointerPresses: interactions.observesClientPointerPresses,
+      mobilePresentation: false,
     );
     if (_lastSnapshot?.hasSameRoutingAs(snapshot) ?? false) {
       return true;
@@ -608,6 +639,7 @@ class _DesktopInputLayoutSource {
     required this.interactions,
     required this.displayLayout,
     required this.windowLayout,
+    required this.softwareKeyboard,
   });
 
   final Size viewSize;
@@ -623,6 +655,7 @@ class _DesktopInputLayoutSource {
   final ShellInteractionSnapshot interactions;
   final DisplayLayout? displayLayout;
   final DesktopWindowLayout windowLayout;
+  final ({bool enabled, bool visible, double progress}) softwareKeyboard;
 
   bool hasSameInputsAs(_DesktopInputLayoutSource other) {
     return desktopVisible == other.desktopVisible &&
@@ -635,7 +668,8 @@ class _DesktopInputLayoutSource {
         identical(switcher, other.switcher) &&
         identical(interactions, other.interactions) &&
         identical(displayLayout, other.displayLayout) &&
-        windowLayout == other.windowLayout;
+        windowLayout == other.windowLayout &&
+        softwareKeyboard == other.softwareKeyboard;
   }
 }
 
