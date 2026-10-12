@@ -1,4 +1,5 @@
 import 'package:denial_desktop/src/state/reference_shell_controller.dart';
+import 'package:denial_desktop/src/state/reference_shell_presentation.dart';
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -17,6 +18,7 @@ class InputLayoutPublisher extends ConsumerStatefulWidget {
 
 class _InputLayoutPublisherState extends ConsumerState<InputLayoutPublisher> {
   bool _scheduled = false;
+  bool _forcePublish = true;
 
   @override
   Widget build(BuildContext context) {
@@ -37,6 +39,7 @@ class _InputLayoutPublisherState extends ConsumerState<InputLayoutPublisher> {
       ),
     );
     ref.watch(shellInteractionRegistryProvider);
+    ref.watch(mobilePresentationTopInsetProvider);
     _schedulePublish(MediaQuery.sizeOf(context));
     return widget.child;
   }
@@ -57,7 +60,10 @@ class _InputLayoutPublisherState extends ConsumerState<InputLayoutPublisher> {
           .publishInputLayout(
             viewSize,
             ref.read(shellInteractionRegistryProvider),
+            topInset: ref.read(mobilePresentationTopInsetProvider),
+            force: _forcePublish,
           );
+      _forcePublish = false;
     });
   }
 }

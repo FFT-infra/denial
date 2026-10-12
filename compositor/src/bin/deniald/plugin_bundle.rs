@@ -85,7 +85,56 @@ fn hash_tree(root: &Path) -> Result<String, String> {
     Ok(format!("{:x}", hash.finalize()))
 }
 
+/// Why the installed Denial cannot load a sealed composition built for another
+/// release. Every other rejection means a damaged or unsupported bundle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum UpdateReason {
+    FlutterGeneration,
+    Source,
+}
+
+#[derive(Debug)]
+pub(super) struct Rejection {
+    pub(super) message: String,
+    pub(super) update: Option<UpdateReason>,
+}
+
+impl From<String> for Rejection {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            update: None,
+        }
+    }
+}
+
+impl From<&str> for Rejection {
+    fn from(message: &str) -> Self {
+        message.to_owned().into()
+    }
+}
+
+/// The installed shell's source identity, or `None` for a development bundle
+/// without one.
+pub(super) fn installed_source_identity(
+    official: &Path,
+) -> Result<Option<serde_json::Value>, String> {
+    let source_marker = official.join(".denial-ui-source.json");
+    if !source_marker.exists() {
+        return Ok(None);
+    }
+    let installed: serde_json::Value =
+        serde_json::from_reader(File::open(&source_marker).map_err(|e| e.to_string())?)
+            .map_err(|e| format!("invalid installed source identity: {e}"))?;
+    Ok(installed.is_object().then_some(installed))
+}
+
 pub(super) fn validate(bundle: &Path, official: &Path) -> Result<PathBuf, String> {
+    validate_bundle(bundle, official).map_err(|rejection| rejection.message)
+}
+
+pub(super) fn validate_bundle(bundle: &Path, official: &Path) -> Result<PathBuf, Rejection> {
     if !bundle.is_absolute() {
         return Err("plugin bundle path must be absolute".into());
     }
@@ -115,22 +164,30 @@ pub(super) fn validate(bundle: &Path, official: &Path) -> Result<PathBuf, String
         "aarch64" => "linux-arm64",
         _ => "unsupported",
     };
-    if manifest.schema != 1
-        || manifest.mode != "release"
-        || manifest.platform != platform
-        || manifest.flutter_generation != denial_core::FLUTTER_ENGINE_ABI
-    {
+    if manifest.schema != 1 || manifest.mode != "release" || manifest.platform != platform {
         return Err(
             "plugin bundle mode, architecture, or Flutter generation is incompatible".into(),
         );
     }
+    if manifest.flutter_generation != denial_core::FLUTTER_ENGINE_ABI {
+        return Err(Rejection {
+            message: "plugin bundle mode, architecture, or Flutter generation is incompatible"
+                .into(),
+            update: Some(UpdateReason::FlutterGeneration),
+        });
+    }
     let source_marker = official.join(".denial-ui-source.json");
     if source_marker.exists() {
-        let installed: serde_json::Value =
-            serde_json::from_reader(File::open(&source_marker).map_err(|e| e.to_string())?)
-                .map_err(|e| format!("invalid installed source identity: {e}"))?;
-        if !installed.is_object() || manifest.source_identity != installed {
+        let Some(installed) = installed_source_identity(official)? else {
             return Err("plugin bundle source does not match installed Denial; prepare the matching build tools and rebuild".into());
+        };
+        if manifest.source_identity != installed {
+            // The bundle itself may be intact. It was sealed for the identity
+            // of another installed release, which a rebuild can replace.
+            return Err(Rejection {
+                message: "plugin bundle source does not match installed Denial; prepare the matching build tools and rebuild".into(),
+                update: Some(UpdateReason::Source),
+            });
         }
     }
     let mut all = Vec::new();
@@ -149,7 +206,7 @@ pub(super) fn validate(bundle: &Path, official: &Path) -> Result<PathBuf, String
         ("data/icudtl.dat", &manifest.icu_sha256),
     ] {
         if hash_file(&bundle.join(relative))? != *expected {
-            return Err(format!("plugin bundle checksum mismatch: {relative}"));
+            return Err(format!("plugin bundle checksum mismatch: {relative}").into());
         }
     }
     if hash_tree(&bundle.join("data/flutter_assets"))? != manifest.assets_sha256 {
@@ -167,6 +224,26 @@ struct Selection {
     pending: Option<PathBuf>,
     last_start_ms: u64,
     recent_starts: u32,
+}
+
+/// The command that rebuilds a composition left behind by a Denial update.
+/// The plugin manager is a separate package; without it the packaged shell
+/// simply stays active.
+pub(super) fn resume_arguments() -> Option<Vec<String>> {
+    let configured = std::env::var_os("DENIAL_PLUGINS_BINARY")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute() && path.is_file());
+    let binary = configured.or_else(|| {
+        let paths = std::env::var_os("PATH")?;
+        std::env::split_paths(&paths)
+            .filter(|directory| directory.is_absolute())
+            .map(|directory| directory.join("denial-plugins"))
+            .find(|path| path.is_file())
+    })?;
+    Some(vec![
+        binary.into_os_string().into_string().ok()?,
+        "resume".into(),
+    ])
 }
 
 pub(super) struct PluginSelection {
@@ -315,22 +392,15 @@ impl PluginSelection {
     }
 }
 
+/// Sealed bundle fixtures shared by native validation and controller tests.
 #[cfg(test)]
-mod tests {
+pub(crate) mod fixtures {
     use super::*;
-    #[test]
-    #[ignore = "requires an actual manager-built sealed bundle and packaged engine"]
-    fn validates_manager_built_bundle() {
-        let bundle = std::env::var_os("DENIAL_PLUGIN_TEST_BUNDLE").expect("bundle fixture");
-        let official = std::env::var_os("DENIAL_PLUGIN_TEST_OFFICIAL").expect("official fixture");
-        validate(Path::new(&bundle), Path::new(&official)).unwrap();
-    }
-
     use std::sync::atomic::{AtomicU64, Ordering};
     static SEQUENCE: AtomicU64 = AtomicU64::new(0);
-    struct Fixture(PathBuf);
+    pub(crate) struct Fixture(pub(crate) PathBuf);
     impl Fixture {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             let path = std::env::temp_dir().join(format!(
                 "denial-plugin-native-{}-{}",
                 std::process::id(),
@@ -339,10 +409,10 @@ mod tests {
             fs::create_dir_all(&path).unwrap();
             Self(path)
         }
-        fn state(&self) -> PathBuf {
+        pub(crate) fn state(&self) -> PathBuf {
             self.0.join("selection.json")
         }
-        fn bundle(&self) -> (PathBuf, PathBuf) {
+        pub(crate) fn bundle(&self) -> (PathBuf, PathBuf) {
             let bundle = self.0.join("bundle");
             let official = self.0.join("official");
             fs::create_dir_all(bundle.join("lib")).unwrap();
@@ -371,7 +441,7 @@ mod tests {
             (bundle, official)
         }
     }
-    fn seal(path: &Path) {
+    pub(crate) fn seal(path: &Path) {
         if path.is_dir() {
             for entry in fs::read_dir(path).unwrap() {
                 seal(&entry.unwrap().path());
@@ -383,7 +453,7 @@ mod tests {
         )
         .unwrap();
     }
-    fn unseal(path: &Path) {
+    pub(crate) fn unseal(path: &Path) {
         fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
         if path.is_dir() {
             for entry in fs::read_dir(path).unwrap() {
@@ -391,11 +461,34 @@ mod tests {
             }
         }
     }
+    pub(crate) fn set_manifest_field(bundle: &Path, key: &str, value: serde_json::Value) {
+        unseal(bundle);
+        let path = bundle.join("denial-plugin-bundle.json");
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        manifest[key] = value;
+        fs::write(path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        seal(bundle);
+    }
+
     impl Drop for Fixture {
         fn drop(&mut self) {
             unseal(&self.0);
             fs::remove_dir_all(&self.0).unwrap();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fixtures::*;
+    use super::*;
+    #[test]
+    #[ignore = "requires an actual manager-built sealed bundle and packaged engine"]
+    fn validates_manager_built_bundle() {
+        let bundle = std::env::var_os("DENIAL_PLUGIN_TEST_BUNDLE").expect("bundle fixture");
+        let official = std::env::var_os("DENIAL_PLUGIN_TEST_OFFICIAL").expect("official fixture");
+        validate(Path::new(&bundle), Path::new(&official)).unwrap();
     }
 
     #[test]
@@ -460,6 +553,65 @@ mod tests {
                 .unwrap_err()
                 .contains("source does not match")
         );
+    }
+
+    #[test]
+    fn only_another_installed_release_counts_as_an_update() {
+        let fixture = Fixture::new();
+        let (bundle, official) = fixture.bundle();
+        let previous = serde_json::json!({"source_revision": "0.2.1"});
+        set_manifest_field(&bundle, "source_identity", previous.clone());
+        fs::write(
+            official.join(".denial-ui-source.json"),
+            serde_json::to_vec(&previous).unwrap(),
+        )
+        .unwrap();
+        assert!(validate_bundle(&bundle, &official).is_ok());
+
+        // An engine experiment keeps the installed source identity. It must
+        // remain a recovery error rather than start a rebuild for the kit's
+        // pinned engine.
+        fs::write(official.join("lib/libflutter_engine.so"), b"experiment").unwrap();
+        let rejection = validate_bundle(&bundle, &official).unwrap_err();
+        assert!(rejection.message.contains("different engine"));
+        assert_eq!(rejection.update, None);
+
+        fs::write(
+            official.join(".denial-ui-source.json"),
+            b"{\"source_revision\":\"0.3.0\"}",
+        )
+        .unwrap();
+        let rejection = validate_bundle(&bundle, &official).unwrap_err();
+        assert!(rejection.message.contains("source does not match"));
+        assert_eq!(rejection.update, Some(UpdateReason::Source));
+
+        set_manifest_field(
+            &bundle,
+            "flutter_generation",
+            serde_json::json!("3.44.7.denial1"),
+        );
+        assert_eq!(
+            validate_bundle(&bundle, &official).unwrap_err().update,
+            Some(UpdateReason::FlutterGeneration)
+        );
+    }
+
+    #[test]
+    fn damaged_or_unsupported_bundles_are_not_updates() {
+        let fixture = Fixture::new();
+        let (bundle, official) = fixture.bundle();
+        set_manifest_field(&bundle, "mode", serde_json::json!("profile"));
+        assert_eq!(
+            validate_bundle(&bundle, &official).unwrap_err().update,
+            None
+        );
+        set_manifest_field(&bundle, "mode", serde_json::json!("release"));
+        unseal(&bundle);
+        fs::write(bundle.join("lib/libapp.so"), b"changed").unwrap();
+        seal(&bundle);
+        let rejection = validate_bundle(&bundle, &official).unwrap_err();
+        assert!(rejection.message.contains("checksum mismatch"));
+        assert_eq!(rejection.update, None);
     }
 
     #[test]

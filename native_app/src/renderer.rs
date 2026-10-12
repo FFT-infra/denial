@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     ffi::{CStr, c_void},
     sync::Mutex,
 };
@@ -11,7 +12,7 @@ use smithay_client_toolkit::reexports::calloop::channel::Sender;
 use wayland_client::{Connection, Proxy, protocol::wl_surface::WlSurface};
 use wayland_egl::WlEglSurface;
 
-use crate::{app::Event, egl::Egl};
+use crate::{app::Event, egl::Egl, texture::RgbaTexture};
 
 #[allow(
     clippy::all,
@@ -31,6 +32,8 @@ pub struct Renderer {
     state: Mutex<State>,
     events: Sender<Event>,
     _surface: WlSurface,
+    sources: Vec<RgbaTexture>,
+    uploaded: Mutex<HashMap<i64, UploadedTexture>>,
 }
 
 struct State {
@@ -56,6 +59,7 @@ impl Renderer {
         surface: &WlSurface,
         size: (u32, u32),
         events: Sender<Event>,
+        sources: Vec<RgbaTexture>,
     ) -> Result<Self, String> {
         let window = WlEglSurface::new(surface.id(), size.0 as i32, size.1 as i32)
             .map_err(|e| e.to_string())?;
@@ -72,6 +76,8 @@ impl Renderer {
             }),
             events,
             _surface: surface.clone(),
+            sources,
+            uploaded: Mutex::new(HashMap::new()),
         })
     }
 
@@ -150,6 +156,39 @@ impl Renderer {
 }
 
 impl OpenGlHandler for Renderer {
+    fn populate_external_texture(
+        &self,
+        texture_id: i64,
+        _: usize,
+        _: usize,
+        texture: &mut sys::FlutterOpenGLTexture,
+    ) -> bool {
+        let Some((generation, frame)) = self
+            .sources
+            .iter()
+            .find(|source| source.id() == texture_id)
+            .and_then(RgbaTexture::latest)
+        else {
+            return false;
+        };
+        let mut textures = self.uploaded.lock().unwrap();
+        let uploaded = textures.entry(texture_id).or_default();
+        if uploaded.generation != Some(generation)
+            && let Err(error) = uploaded.upload(generation, &frame)
+        {
+            return self.fail(error);
+        }
+        *texture = sys::FlutterOpenGLTexture {
+            target: gl::TEXTURE_2D,
+            name: uploaded.name,
+            format: gl::RGBA8,
+            width: frame.width as usize,
+            height: frame.height as usize,
+            ..Default::default()
+        };
+        uploaded.name != 0
+    }
+
     fn make_current(&self) -> bool {
         self.egl.make_render_current()
     }
@@ -281,7 +320,107 @@ impl OpenGlHandler for Renderer {
         for mut target in self.state.lock().unwrap().targets.drain(..) {
             target.destroy();
         }
+        for (_, texture) in self.uploaded.lock().unwrap().drain() {
+            // SAFETY: the owning render context is current; Flutter has drained
+            // its raster work before invoking this shutdown callback.
+            unsafe { gl::DeleteTextures(1, &texture.name) };
+        }
         self.clear_current()
+    }
+}
+
+#[derive(Default)]
+struct UploadedTexture {
+    name: u32,
+    size: (u32, u32),
+    generation: Option<u64>,
+}
+
+impl UploadedTexture {
+    fn upload(&mut self, generation: u64, frame: &crate::RgbaFrame) -> Result<(), String> {
+        let mut maximum = 0;
+        // SAFETY: Flutter calls with the owning GLES3 context current.
+        unsafe { gl::GetIntegerv(gl::MAX_TEXTURE_SIZE, &mut maximum) };
+        if frame.width > maximum as u32 || frame.height > maximum as u32 {
+            return Err(format!(
+                "external texture exceeds the GPU limit of {maximum}"
+            ));
+        }
+        let (
+            mut texture,
+            mut alignment,
+            mut row_length,
+            mut skip_rows,
+            mut skip_pixels,
+            mut buffer,
+        ) = (0, 0, 0, 0, 0, 0);
+        // SAFETY: Flutter invokes this callback with the owning GLES render
+        // context current. The frame constructor checked dimensions/byte count.
+        // Restore all modified GL state to preserve the engine's state cache.
+        unsafe {
+            gl::GetIntegerv(gl::TEXTURE_BINDING_2D, &mut texture);
+            gl::GetIntegerv(gl::UNPACK_ALIGNMENT, &mut alignment);
+            gl::GetIntegerv(gl::UNPACK_ROW_LENGTH, &mut row_length);
+            gl::GetIntegerv(gl::UNPACK_SKIP_ROWS, &mut skip_rows);
+            gl::GetIntegerv(gl::UNPACK_SKIP_PIXELS, &mut skip_pixels);
+            gl::GetIntegerv(gl::PIXEL_UNPACK_BUFFER_BINDING, &mut buffer);
+            gl::BindBuffer(gl::PIXEL_UNPACK_BUFFER, 0);
+            gl::PixelStorei(gl::UNPACK_ALIGNMENT, 1);
+            gl::PixelStorei(gl::UNPACK_ROW_LENGTH, 0);
+            gl::PixelStorei(gl::UNPACK_SKIP_ROWS, 0);
+            gl::PixelStorei(gl::UNPACK_SKIP_PIXELS, 0);
+            if self.name == 0 {
+                gl::GenTextures(1, &mut self.name);
+                gl::BindTexture(gl::TEXTURE_2D, self.name);
+                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
+                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
+                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as i32);
+                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
+            } else {
+                gl::BindTexture(gl::TEXTURE_2D, self.name);
+            }
+            if self.size != (frame.width, frame.height) {
+                gl::TexImage2D(
+                    gl::TEXTURE_2D,
+                    0,
+                    gl::RGBA8 as i32,
+                    frame.width as i32,
+                    frame.height as i32,
+                    0,
+                    gl::RGBA,
+                    gl::UNSIGNED_BYTE,
+                    frame.pixels.as_ptr().cast(),
+                );
+            } else {
+                gl::TexSubImage2D(
+                    gl::TEXTURE_2D,
+                    0,
+                    0,
+                    0,
+                    frame.width as i32,
+                    frame.height as i32,
+                    gl::RGBA,
+                    gl::UNSIGNED_BYTE,
+                    frame.pixels.as_ptr().cast(),
+                );
+            }
+            gl::BindTexture(gl::TEXTURE_2D, texture as u32);
+            gl::PixelStorei(gl::UNPACK_ALIGNMENT, alignment);
+            gl::PixelStorei(gl::UNPACK_ROW_LENGTH, row_length);
+            gl::PixelStorei(gl::UNPACK_SKIP_ROWS, skip_rows);
+            gl::PixelStorei(gl::UNPACK_SKIP_PIXELS, skip_pixels);
+            gl::BindBuffer(gl::PIXEL_UNPACK_BUFFER, buffer as u32);
+        }
+        // SAFETY: this remains the same current GLES render context.
+        let error = unsafe { gl::GetError() };
+        if error != gl::NO_ERROR {
+            return Err(format!(
+                "external texture upload failed: GLES error {error:#x}"
+            ));
+        }
+        self.size = (frame.width, frame.height);
+        self.generation = Some(generation);
+        Ok(())
     }
 }
 

@@ -221,6 +221,80 @@ fn legacy_system_bar_request_retains_native_work_area_metrics() {
 }
 
 #[test]
+fn mobile_work_area_can_transition_to_desktop_and_back() {
+    let mut bridge = bridge();
+    bridge.work_area.system_bar.side = SystemBarSide::Hidden;
+    bridge.work_area.system_bar.outputs.clear();
+    bridge.work_area.system_bar.thickness = 0.0;
+    bridge.work_area.maximize_padding = 0.0;
+    let desktop = system_bar_request(fb::SystemBarSide::Bottom, &[9], 60.0, 8.0);
+    let response = bridge.handle(&desktop).unwrap().unwrap();
+    let envelope = fb::root_as_envelope(response).unwrap();
+    let layout = envelope
+        .payload_as_window_response()
+        .unwrap()
+        .display_layout()
+        .unwrap();
+    assert_eq!(layout.system_bar_side(), fb::SystemBarSide::Bottom);
+    assert_eq!(layout.system_bar_monitor_id(), 9);
+    assert_eq!(layout.system_bar_thickness(), 60.0);
+    assert_eq!(layout.maximize_padding(), 8.0);
+    let work_area = bridge.take_work_area_update().unwrap();
+    assert_eq!(work_area.system_bar.outputs, ["main"]);
+    assert_eq!(work_area.system_bar.thickness, 60.0);
+    assert_eq!(work_area.maximize_padding, 8.0);
+
+    let mobile = system_bar_request(fb::SystemBarSide::Hidden, &[], 0.0, 0.0);
+    let response = bridge.handle(&mobile).unwrap().unwrap();
+    let envelope = fb::root_as_envelope(response).unwrap();
+    let layout = envelope
+        .payload_as_window_response()
+        .unwrap()
+        .display_layout()
+        .unwrap();
+    assert_eq!(layout.system_bar_side(), fb::SystemBarSide::Hidden);
+    assert_eq!(layout.system_bar_monitor_id(), -1);
+    assert_eq!(layout.system_bar_monitor_ids().unwrap().len(), 0);
+    assert_eq!(layout.system_bar_thickness(), 0.0);
+    assert_eq!(layout.maximize_padding(), 0.0);
+    let work_area = bridge.take_work_area_update().unwrap();
+    assert_eq!(work_area.system_bar.side, SystemBarSide::Hidden);
+    assert!(work_area.system_bar.outputs.is_empty());
+    assert_eq!(work_area.system_bar.thickness, 0.0);
+    assert_eq!(work_area.maximize_padding, 0.0);
+
+    assert!(bridge.handle(&desktop).unwrap().is_some());
+    assert_eq!(
+        bridge.take_work_area_update().unwrap().maximize_padding,
+        8.0
+    );
+}
+
+#[test]
+fn desktop_padding_can_be_configured_without_a_panel() {
+    let mut bridge = bridge();
+    let request = system_bar_request(fb::SystemBarSide::Hidden, &[], 0.0, 12.0);
+    assert!(bridge.handle(&request).unwrap().is_some());
+    let work_area = bridge.take_work_area_update().unwrap();
+    assert_eq!(work_area.system_bar.side, SystemBarSide::Hidden);
+    assert_eq!(work_area.maximize_padding, 12.0);
+}
+
+#[test]
+fn system_bar_request_requires_hosts_and_thickness_only_when_visible() {
+    let mut bridge = bridge();
+    for request in [
+        system_bar_request(fb::SystemBarSide::Hidden, &[9], 0.0, 0.0),
+        system_bar_request(fb::SystemBarSide::Hidden, &[], 32.0, 0.0),
+        system_bar_request(fb::SystemBarSide::Bottom, &[], 32.0, 8.0),
+        system_bar_request(fb::SystemBarSide::Bottom, &[9], 0.0, 8.0),
+    ] {
+        assert!(bridge.handle(&request).is_err());
+        assert!(bridge.take_work_area_update().is_none());
+    }
+}
+
+#[test]
 fn system_bar_request_rejects_invalid_work_area_metrics() {
     let mut bridge = bridge();
     for request in [
@@ -396,6 +470,44 @@ fn workspace_drops_resolve_on_one_output_and_previews_end_without_geometry() {
 }
 
 #[test]
+fn taskbar_minimize_targets_native_window_state_without_geometry() {
+    let mut bridge = bridge();
+    assert!(
+        bridge
+            .handle(&window_request(
+                fb::WindowRequestKind::MinimizeWindow,
+                0,
+                42,
+                None
+            ))
+            .unwrap()
+            .is_none()
+    );
+    let commands = bridge.drain_window_commands().collect::<Vec<_>>();
+    assert_eq!(commands, vec![WindowCommand::Minimize { window_id: 42 }]);
+    assert_eq!(commands[0].window_id(), Some(42));
+}
+
+#[test]
+fn taskbar_minimize_rejects_missing_identity_and_unknown_flags() {
+    assert!(matches!(
+        bridge().handle(&request(fb::WindowRequestKind::MinimizeWindow, 0)),
+        Err(WireError::Identity)
+    ));
+    assert!(matches!(
+        bridge().handle(&window_request_with_flags(
+            fb::WindowRequestKind::MinimizeWindow,
+            0,
+            42,
+            None,
+            4,
+            1,
+        )),
+        Err(WireError::Flags)
+    ));
+}
+
+#[test]
 fn configure_window_distinguishes_layout_drops_from_exact_geometry() {
     let geometry = fb::WireRect::new(100.0, 200.0, 800.0, 600.0);
     let mut bridge = bridge();
@@ -440,12 +552,130 @@ fn configure_window_distinguishes_layout_drops_from_exact_geometry() {
     ));
 }
 
+fn pet_request(args: fb::PetRequestArgs) -> Vec<u8> {
+    let mut builder = FlatBufferBuilder::new();
+    let request = fb::PetRequest::create(&mut builder, &args);
+    let envelope = fb::Envelope::create(
+        &mut builder,
+        &fb::EnvelopeArgs {
+            protocol_version: PROTOCOL_VERSION,
+            sequence: 4,
+            request_id: 0,
+            payload_type: fb::Payload::PetRequest,
+            payload: Some(request.as_union_value()),
+        },
+    );
+    fb::finish_envelope_buffer(&mut builder, envelope);
+    builder.finished_data().to_vec()
+}
+
+#[test]
+fn pet_requests_carry_the_shells_hold_and_velocity() {
+    let mut bridge = bridge();
+    let hold = pet_request(fb::PetRequestArgs {
+        kind: fb::PetRequestKind::Hold,
+        pet_id: 5,
+        window_id: 9,
+        hold: 1,
+        share: 0.25,
+        ..Default::default()
+    });
+    let free = pet_request(fb::PetRequestArgs {
+        kind: fb::PetRequestKind::Hold,
+        pet_id: 5,
+        ..Default::default()
+    });
+    let carried = pet_request(fb::PetRequestArgs {
+        kind: fb::PetRequestKind::Carried,
+        pet_id: 5,
+        velocity_x: -120.0,
+        velocity_y: 30.5,
+        ..Default::default()
+    });
+    for request in [&hold, &free, &carried] {
+        assert!(bridge.handle(request).unwrap().is_none());
+    }
+    assert_eq!(
+        bridge.drain_window_commands().collect::<Vec<_>>(),
+        vec![
+            WindowCommand::HoldPet {
+                pet_id: 5,
+                hold: Some((9, 1, 0.25)),
+            },
+            WindowCommand::HoldPet {
+                pet_id: 5,
+                hold: None,
+            },
+            WindowCommand::CarryPet {
+                pet_id: 5,
+                velocity_x: -120.0,
+                velocity_y: 30.5,
+            },
+        ]
+    );
+}
+
+#[test]
+fn pet_requests_reject_malformed_values() {
+    let mut bridge = bridge();
+    let rejected = [
+        // No pet.
+        fb::PetRequestArgs {
+            kind: fb::PetRequestKind::Carried,
+            ..Default::default()
+        },
+        // A share beyond the edge.
+        fb::PetRequestArgs {
+            kind: fb::PetRequestKind::Hold,
+            pet_id: 5,
+            window_id: 9,
+            hold: 1,
+            share: 1.5,
+            ..Default::default()
+        },
+        // An endless velocity.
+        fb::PetRequestArgs {
+            kind: fb::PetRequestKind::Carried,
+            pet_id: 5,
+            velocity_x: f64::INFINITY,
+            ..Default::default()
+        },
+    ];
+    for args in rejected {
+        assert!(bridge.handle(&pet_request(args)).is_err());
+    }
+    assert_eq!(bridge.drain_window_commands().count(), 0);
+}
+
 fn input_layout(
     shell_regions: &[fb::WireRect],
     windows: &[fb::InputWindowRegion],
     flags: u32,
 ) -> Vec<u8> {
     input_layout_with_visible(shell_regions, windows, &[], flags)
+}
+
+#[test]
+fn input_layout_selects_presentation_without_changing_legacy_defaults() {
+    for (flags, expected) in [
+        (0, None),
+        (INPUT_LAYOUT_MOBILE_PRESENTATION, None),
+        (INPUT_LAYOUT_PRESENTATION_SPECIFIED, Some(false)),
+        (
+            INPUT_LAYOUT_PRESENTATION_SPECIFIED | INPUT_LAYOUT_MOBILE_PRESENTATION,
+            Some(true),
+        ),
+    ] {
+        let mut bridge = bridge();
+        assert!(bridge.handle(&input_layout(&[], &[], flags)).is_ok());
+        assert_eq!(
+            bridge
+                .take_input_layout_update()
+                .unwrap()
+                .mobile_presentation(),
+            expected
+        );
+    }
 }
 
 fn input_layout_with_visible(
@@ -939,6 +1169,7 @@ fn scene_window(id: u64) -> WindowDescription {
         opacity: 1.0,
         content_kind: WindowContentKind::SurfaceTree,
         opacity_class: WindowOpacityClass::FullyOpaque,
+        pet: None,
     }
 }
 
@@ -1127,4 +1358,87 @@ fn plugin_action_transport_preserves_catalog_ids_and_generations() {
     assert_eq!(invocation.generation(), 42);
     assert_eq!(invocation.id(), Some("external.run"));
     assert_eq!(invocation.monitor_id(), 9);
+}
+
+#[test]
+fn reset_width_shortcut_schema_decodes_and_encodes_without_changing_height_id() {
+    assert_eq!(fb::ShortcutActionKind::ResetWindowHeight.0, 58);
+    assert_eq!(fb::ShortcutActionKind::ResetWindowWidth.0, 59);
+    let mut bridge = bridge();
+    let mut builder = FlatBufferBuilder::new();
+    let text = builder.create_string("Super+R");
+    let target = fb::ShortcutDenialActionTarget::create(
+        &mut builder,
+        &fb::ShortcutDenialActionTargetArgs {
+            action: fb::ShortcutActionKind::ResetWindowWidth,
+        },
+    );
+    let binding = fb::ShortcutBinding::create(
+        &mut builder,
+        &fb::ShortcutBindingArgs {
+            shortcut: Some(text),
+            target_type: fb::ShortcutTarget::ShortcutDenialActionTarget,
+            target: Some(target.as_union_value()),
+        },
+    );
+    let request = fb::SettingsRequest::create(
+        &mut builder,
+        &fb::SettingsRequestArgs {
+            kind: fb::SettingsRequestKind::ValidateShortcut,
+            shortcut: Some(binding),
+            ..Default::default()
+        },
+    );
+    let envelope = fb::Envelope::create(
+        &mut builder,
+        &fb::EnvelopeArgs {
+            protocol_version: PROTOCOL_VERSION,
+            sequence: 1,
+            request_id: 17,
+            payload_type: fb::Payload::SettingsRequest,
+            payload: Some(request.as_union_value()),
+        },
+    );
+    fb::finish_envelope_buffer(&mut builder, envelope);
+    assert!(bridge.handle(builder.finished_data()).unwrap().is_none());
+    let binding = ShortcutBinding {
+        shortcut: "Super+R".into(),
+        target: ShortcutTarget::DenialAction {
+            action: ShortcutAction::ResetWindowWidth,
+        },
+    };
+    assert_eq!(
+        bridge.drain_settings_commands().collect::<Vec<_>>(),
+        vec![SettingsCommand::ValidateShortcut {
+            request_id: 17,
+            shortcut: binding.clone(),
+            existing_shortcut: None,
+        }]
+    );
+    let bytes = bridge
+        .encode_shortcut_configuration_response(
+            17,
+            1,
+            &[binding],
+            &[],
+            &crate::plugin_actions::ActionCatalog::default(),
+            None,
+        )
+        .unwrap();
+    let envelope = fb::root_as_envelope(bytes).unwrap();
+    let configuration = envelope
+        .payload_as_settings_response()
+        .unwrap()
+        .shortcuts()
+        .unwrap();
+    assert_eq!(
+        configuration
+            .shortcuts()
+            .unwrap()
+            .get(0)
+            .target_as_shortcut_denial_action_target()
+            .unwrap()
+            .action(),
+        fb::ShortcutActionKind::ResetWindowWidth
+    );
 }

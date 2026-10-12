@@ -29,6 +29,7 @@ final class JobWorker {
           'revert',
           'activate',
           'update',
+          'rebuild',
         }.contains(arguments.first)) {
       throw const CompositionException('Unsupported background operation');
     }

@@ -12,7 +12,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/clipboard_tray.dart';
-import '../widgets/shade/range_bar.dart';
+
+import 'package:denial_flutter_sdk/controls.dart';
+
 import 'desktop_audio_device_dropdown.dart';
 
 class DashboardMixer extends ConsumerStatefulWidget {

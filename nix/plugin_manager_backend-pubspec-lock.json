@@ -1,5 +1,5 @@
 {
-  "source_sha256": "0be636e7b233f4f75e8439b3ca8c509b97aeb235b32c3ca3832a770aed3c41c7",
+  "source_sha256": "390d4de8cbfe820194f5ef29913d44447c040aec8fc44e11e986fa2e014341b3",
   "packages": {
     "_fe_analyzer_shared": {
       "dependency": "transitive",
@@ -101,6 +101,16 @@
       "source": "hosted",
       "version": "3.0.7"
     },
+    "dbus": {
+      "dependency": "direct main",
+      "description": {
+        "name": "dbus",
+        "sha256": "a48d5da28e89bd02196e80d81ed8d7954923d00a0f4a68cc20b575038f023383",
+        "url": "https://pub.dev"
+      },
+      "source": "hosted",
+      "version": "0.7.15"
+    },
     "denial_sdk": {
       "dependency": "direct main",
       "description": {
@@ -109,6 +119,16 @@
       },
       "source": "path",
       "version": "0.0.0"
+    },
+    "ffi": {
+      "dependency": "transitive",
+      "description": {
+        "name": "ffi",
+        "sha256": "6d7fd89431262d8f3125e81b50d3847a091d846eafcd4fdb88dd06f36d705a45",
+        "url": "https://pub.dev"
+      },
+      "source": "hosted",
+      "version": "2.2.0"
     },
     "file": {
       "dependency": "transitive",
@@ -249,6 +269,16 @@
       },
       "source": "hosted",
       "version": "1.9.1"
+    },
+    "petitparser": {
+      "dependency": "transitive",
+      "description": {
+        "name": "petitparser",
+        "sha256": "2f1564aadb14215e478563b5406cb80729d022158c01dc50c96013c2f7eb4790",
+        "url": "https://pub.dev"
+      },
+      "source": "hosted",
+      "version": "7.1.0"
     },
     "pool": {
       "dependency": "transitive",
@@ -479,6 +509,16 @@
       },
       "source": "hosted",
       "version": "1.2.1"
+    },
+    "xml": {
+      "dependency": "transitive",
+      "description": {
+        "name": "xml",
+        "sha256": "67f0aff7be013d107995e9b75bf4e7f2c3ef2dfdb2c8e68024bba0a7fd5756a4",
+        "url": "https://pub.dev"
+      },
+      "source": "hosted",
+      "version": "7.0.1"
     },
     "yaml": {
       "dependency": "direct main",

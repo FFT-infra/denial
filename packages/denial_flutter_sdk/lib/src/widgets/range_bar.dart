@@ -4,8 +4,6 @@ import 'package:flutter/widgets.dart';
 import 'package:denial_flutter_sdk/shell_theme.dart';
 import 'package:denial_flutter_sdk/effects.dart';
 
-import 'shade_reference_geometry.dart';
-
 /// A pill-shaped horizontal slider used for brightness and volume. Tapping or
 /// dragging anywhere along the track sets the value.
 class RangeBar extends StatefulWidget {
@@ -250,6 +248,7 @@ class VerticalRangeBar extends StatefulWidget {
     required this.onChangeEnd,
     this.onChangeStart,
     this.translucentTrack = false,
+    this.iconScale = 1,
   });
 
   final IconData icon;
@@ -260,6 +259,7 @@ class VerticalRangeBar extends StatefulWidget {
   final ValueChanged<double> onChangeEnd;
   final VoidCallback? onChangeStart;
   final bool translucentTrack;
+  final double iconScale;
 
   @override
   State<VerticalRangeBar> createState() => _VerticalRangeBarState();
@@ -358,9 +358,7 @@ class _VerticalRangeBarState extends State<VerticalRangeBar> {
                         bottom: 10,
                         child: Icon(
                           widget.icon,
-                          size:
-                              24 *
-                              ShadeReferenceGeometry.inverseScaleOf(context),
+                          size: 24 * widget.iconScale,
                           color: value >= 0.18
                               ? context.shellTheme.accentPalette.onPrimary
                               : context.shellColors.panelText,

@@ -85,6 +85,8 @@ use flutter_route::process_flutter_input_event;
 use flutter_route::process_wayland_keyboard_transition;
 #[cfg(feature = "flutter")]
 pub(crate) use flutter_route::reconcile_flutter_pointer_route;
+#[cfg(feature = "flutter")]
+pub(super) use flutter_route::release_client_geometry_for_shell_grab;
 use wayland_route::process_wayland_input_event;
 
 fn output_bound_absolute_position<E>(
@@ -438,7 +440,7 @@ impl ClientInputRoute {
         let local_point = self.mapped_position(position);
         let (surface, local_origin) =
             under_from_surface_tree(&self.surface, local_point, (0, 0), WindowSurfaceType::ALL)?;
-        Some((surface, self.global_origin(local_origin)))
+        Some((surface, position - local_point + local_origin.to_f64()))
     }
 
     fn focus_at(&self, position: Point<f64, Logical>) -> (WlSurface, Point<f64, Logical>) {
@@ -446,19 +448,85 @@ impl ClientInputRoute {
         let (surface, local_origin) =
             under_from_surface_tree(&self.surface, local_point, (0, 0), WindowSurfaceType::ALL)
                 .unwrap_or_else(|| (self.surface.clone(), (0, 0).into()));
-        (surface, self.global_origin(local_origin))
+        (surface, position - local_point + local_origin.to_f64())
     }
 
-    fn global_origin(&self, local_origin: Point<i32, Logical>) -> Point<f64, Logical> {
-        let scale_x = self.region.rect.width / self.region.source_rect.width;
-        let scale_y = self.region.rect.height / self.region.source_rect.height;
-        self.scene_origin
-            + Point::from((
-                self.region.rect.x
-                    + (f64::from(local_origin.x) - self.region.source_rect.x) * scale_x,
-                self.region.rect.y
-                    + (f64::from(local_origin.y) - self.region.source_rect.y) * scale_y,
-            ))
+    fn touch_at(
+        &self,
+        position: Point<f64, Logical>,
+    ) -> ((WlSurface, Point<f64, Logical>), Point<f64, Logical>) {
+        let (location, origin) = projected_touch_point(
+            self.region.rect,
+            self.region.source_rect,
+            self.scene_origin,
+            position,
+        );
+        let local_point = location - origin;
+        let (surface, local_origin) =
+            under_from_surface_tree(&self.surface, local_point, (0, 0), WindowSurfaceType::ALL)
+                .unwrap_or_else(|| (self.surface.clone(), (0, 0).into()));
+        // Smithay retains the down event's origin for the whole contact. Feed
+        // it source-space motion around a fixed origin, so scaling/cropping
+        // the texture does not scale input deltas or add the mobile strip.
+        ((surface, origin + local_origin.to_f64()), location)
+    }
+}
+
+#[cfg(feature = "flutter")]
+fn projected_touch_point(
+    rect: super::super::wire::InputRect,
+    source: super::super::wire::InputRect,
+    scene_origin: Point<f64, Logical>,
+    position: Point<f64, Logical>,
+) -> (Point<f64, Logical>, Point<f64, Logical>) {
+    let scene = position - scene_origin;
+    let (x, y) = rect.map_to(source, scene.x, scene.y);
+    let origin = scene_origin
+        + Point::from((
+            rect.x - source.x * rect.width / source.width,
+            rect.y - source.y * rect.height / source.height,
+        ));
+    (origin + Point::from((x, y)), origin)
+}
+
+#[cfg(all(test, feature = "flutter"))]
+mod touch_projection_tests {
+    use super::super::super::wire::InputRect;
+    use super::*;
+
+    #[test]
+    fn captured_touch_tracks_source_pixels_through_scale_crop_and_atlas_offset() {
+        let scene_origin = Point::from((-1920.0, 100.0));
+        let rect = InputRect {
+            x: 100.0,
+            y: 148.0,
+            width: 600.0,
+            height: 352.0,
+        };
+        let source = InputRect {
+            x: 12.0,
+            y: 48.0,
+            width: 1200.0,
+            height: 704.0,
+        };
+        let down = scene_origin + Point::from((250.0, 248.0));
+        let (location, origin) = projected_touch_point(rect, source, scene_origin, down);
+        assert_eq!(location - origin, Point::from((312.0, 248.0)));
+        let captured_origin = origin;
+        let moved = down + Point::from((30.0, 60.0));
+        let (location, origin) = projected_touch_point(rect, source, scene_origin, moved);
+        assert_eq!(origin, captured_origin);
+        assert_eq!(location - captured_origin, Point::from((372.0, 368.0)));
+        // The second contact uses the same source coordinate system, even
+        // while Smithay retains the first contact's down origin.
+        let (second, second_origin) = projected_touch_point(
+            rect,
+            source,
+            scene_origin,
+            down + Point::from((100.0, 20.0)),
+        );
+        assert_eq!(second_origin, captured_origin);
+        assert_eq!(second - captured_origin, Point::from((512.0, 288.0)));
     }
 }
 
@@ -1162,24 +1230,7 @@ fn process_touchpad_gesture_event(
     let gesture_event = match event {
         InputEvent::GestureSwipeBegin { event } => {
             let device = event.device();
-            let scrolling_layout = state
-                .wayland
-                .as_ref()
-                .is_some_and(WaylandFrontend::can_scroll_layout_horizontally);
-            let horizontal_scroll_directions = if scrolling_layout {
-                super::super::touchpad_gestures::HorizontalScrollDirections {
-                    left: state.native_escape_shortcut.gesture_invokes(
-                        ShortcutGesture::ThreeFingerSwipeLeft,
-                        ShortcutAction::WindowSwitcher,
-                    ),
-                    right: state.native_escape_shortcut.gesture_invokes(
-                        ShortcutGesture::ThreeFingerSwipeRight,
-                        ShortcutAction::WindowSwitcher,
-                    ),
-                }
-            } else {
-                super::super::touchpad_gestures::HorizontalScrollDirections::default()
-            };
+            let horizontal_scroll_directions = swipe_scroll_directions(state, None);
             state.touchpad_gestures.begin_swipe(
                 device.sysname(),
                 event.fingers(),
@@ -1205,64 +1256,101 @@ fn process_touchpad_gesture_event(
         _ => return None,
     };
 
-    if let Some(gesture_event) = gesture_event {
-        use super::super::touchpad_gestures::TouchpadGestureEvent;
+    Some(gesture_event.is_some_and(|event| dispatch_swipe_gesture(state, event, None)))
+}
 
-        match gesture_event {
-            TouchpadGestureEvent::HorizontalScrollBegin { delta_x } => {
-                let handled = update_horizontal_layout_scroll(state, delta_x);
-                if handled {
-                    info!("began continuous scrolling-layout touchpad gesture");
-                }
-                return Some(handled);
-            }
-            TouchpadGestureEvent::HorizontalScrollUpdate { delta_x } => {
-                return Some(update_horizontal_layout_scroll(state, delta_x));
-            }
-            TouchpadGestureEvent::HorizontalScrollEnd {
-                cancelled,
-                projected_delta_x,
-            } => {
-                return Some(finish_horizontal_layout_scroll(
-                    state,
-                    cancelled,
-                    Some(projected_delta_x),
-                ));
-            }
-            TouchpadGestureEvent::Trigger(_)
-            | TouchpadGestureEvent::Repeat(_)
-            | TouchpadGestureEvent::End(_) => {}
-        }
-
-        let (gesture, disposition) = match gesture_event {
-            TouchpadGestureEvent::Trigger(gesture) => (
-                gesture,
-                state.native_escape_shortcut.observe_gesture(gesture),
-            ),
-            TouchpadGestureEvent::Repeat(gesture) => (
-                gesture,
-                state.native_escape_shortcut.observe_gesture_repeat(gesture),
-            ),
-            TouchpadGestureEvent::End(gesture) => {
-                (gesture, state.native_escape_shortcut.end_gesture(gesture))
-            }
-            TouchpadGestureEvent::HorizontalScrollBegin { .. }
-            | TouchpadGestureEvent::HorizontalScrollUpdate { .. }
-            | TouchpadGestureEvent::HorizontalScrollEnd { .. } => {
-                unreachable!("continuous scroll events return before shortcut dispatch")
-            }
-        };
-        let handled = execute_shortcut_disposition(state, disposition);
-        if handled {
-            info!(
-                ?gesture,
-                "recognized configured compositor shortcut gesture"
-            );
-        }
-        Some(handled)
-    } else {
-        Some(false)
+#[cfg(feature = "flutter")]
+fn swipe_scroll_directions(
+    state: &RuntimeState,
+    position: Option<Point<f64, Logical>>,
+) -> super::super::touchpad_gestures::HorizontalScrollDirections {
+    use super::super::touchpad_gestures::HorizontalScrollDirections;
+    let scrolling_layout = state
+        .wayland
+        .as_ref()
+        .is_some_and(|frontend| frontend.can_scroll_layout_horizontally_at(position));
+    if !scrolling_layout {
+        return HorizontalScrollDirections::default();
     }
+    HorizontalScrollDirections {
+        left: state.native_escape_shortcut.gesture_invokes(
+            ShortcutGesture::ThreeFingerSwipeLeft,
+            ShortcutAction::WindowSwitcher,
+        ),
+        right: state.native_escape_shortcut.gesture_invokes(
+            ShortcutGesture::ThreeFingerSwipeRight,
+            ShortcutAction::WindowSwitcher,
+        ),
+    }
+}
+
+#[cfg(feature = "flutter")]
+pub(super) fn dispatch_swipe_gesture(
+    state: &mut RuntimeState,
+    gesture_event: super::super::touchpad_gestures::TouchpadGestureEvent,
+    position: Option<Point<f64, Logical>>,
+) -> bool {
+    use super::super::touchpad_gestures::TouchpadGestureEvent;
+
+    if !state.flutter_active || state.secure_session_locked() {
+        if matches!(
+            gesture_event,
+            TouchpadGestureEvent::HorizontalScrollEnd { .. }
+        ) {
+            finish_horizontal_layout_scroll(state, true, None);
+        }
+        state.native_escape_shortcut.cancel_gestures();
+        return false;
+    }
+
+    match gesture_event {
+        TouchpadGestureEvent::HorizontalScrollBegin { delta_x } => {
+            let handled = update_horizontal_layout_scroll(state, delta_x);
+            if handled {
+                info!("began continuous scrolling-layout gesture");
+            }
+            return handled;
+        }
+        TouchpadGestureEvent::HorizontalScrollUpdate { delta_x } => {
+            return update_horizontal_layout_scroll(state, delta_x);
+        }
+        TouchpadGestureEvent::HorizontalScrollEnd {
+            cancelled,
+            projected_delta_x,
+        } => {
+            return finish_horizontal_layout_scroll(state, cancelled, Some(projected_delta_x));
+        }
+        TouchpadGestureEvent::Trigger(_)
+        | TouchpadGestureEvent::Repeat(_)
+        | TouchpadGestureEvent::End(_) => {}
+    }
+
+    let (gesture, disposition) = match gesture_event {
+        TouchpadGestureEvent::Trigger(gesture) => (
+            gesture,
+            state.native_escape_shortcut.observe_gesture(gesture),
+        ),
+        TouchpadGestureEvent::Repeat(gesture) => (
+            gesture,
+            state.native_escape_shortcut.observe_gesture_repeat(gesture),
+        ),
+        TouchpadGestureEvent::End(gesture) => {
+            (gesture, state.native_escape_shortcut.end_gesture(gesture))
+        }
+        TouchpadGestureEvent::HorizontalScrollBegin { .. }
+        | TouchpadGestureEvent::HorizontalScrollUpdate { .. }
+        | TouchpadGestureEvent::HorizontalScrollEnd { .. } => {
+            unreachable!("continuous scroll events return before shortcut dispatch")
+        }
+    };
+    let handled = execute_shortcut_disposition_at(state, disposition, position);
+    if handled {
+        info!(
+            ?gesture,
+            "recognized configured compositor shortcut gesture"
+        );
+    }
+    handled
 }
 
 #[cfg(feature = "flutter")]
@@ -1605,6 +1693,17 @@ pub(in super::super) fn install_keyboard_settings(
 }
 
 fn reset_input_devices(state: &mut RuntimeState, reset: InputDeviceReset) {
+    // End direct-touch shortcut lifecycles before a seat-wide reset clears
+    // their shortcut owner; otherwise the window switcher cannot finish.
+    #[cfg(feature = "flutter")]
+    if reset.touch {
+        let actions = state
+            .wayland
+            .as_mut()
+            .map(|frontend| frontend.touch_gestures.cancel_all())
+            .unwrap_or_default();
+        touch_gestures::apply_actions(state, actions);
+    }
     if reset.keyboard {
         state.native_escape_shortcut.reset();
         #[cfg(feature = "flutter")]
@@ -1616,15 +1715,6 @@ fn reset_input_devices(state: &mut RuntimeState, reset: InputDeviceReset) {
             finish_horizontal_layout_scroll(state, true, None);
         }
         state.native_escape_shortcut.cancel_gestures();
-    }
-    #[cfg(feature = "flutter")]
-    if reset.touch {
-        let actions = state
-            .wayland
-            .as_mut()
-            .map(|frontend| frontend.touch_gestures.cancel_all())
-            .unwrap_or_default();
-        touch_gestures::apply_actions(state, actions);
     }
     #[cfg(feature = "flutter")]
     if state.flutter_active {
@@ -2088,6 +2178,14 @@ pub(super) fn execute_shortcut_disposition(
     state: &mut RuntimeState,
     disposition: ShortcutDisposition,
 ) -> bool {
+    execute_shortcut_disposition_at(state, disposition, None)
+}
+
+fn execute_shortcut_disposition_at(
+    state: &mut RuntimeState,
+    disposition: ShortcutDisposition,
+    _position: Option<Point<f64, Logical>>,
+) -> bool {
     match disposition {
         ShortcutDisposition::Forward => false,
         ShortcutDisposition::Consume => true,
@@ -2136,7 +2234,7 @@ pub(super) fn execute_shortcut_disposition(
         ShortcutDisposition::RequestOverview => {
             #[cfg(feature = "flutter")]
             {
-                let monitor_id = prepare_shell_overlay_action(state);
+                let monitor_id = prepare_shell_overlay_action(state, _position);
                 state.queue_shell_action(super::super::wire::ShellAction::Overview, monitor_id);
             }
             true
@@ -2150,7 +2248,7 @@ pub(super) fn execute_shortcut_disposition(
                 } else {
                     1
                 };
-                let Some(monitor_id) = prepare_shell_overlay_action(state) else {
+                let Some(monitor_id) = prepare_shell_overlay_action(state, _position) else {
                     return false;
                 };
                 let target = state
@@ -2170,7 +2268,7 @@ pub(super) fn execute_shortcut_disposition(
         ShortcutDisposition::RequestSwitchWorkspace(workspace_id) => {
             #[cfg(feature = "flutter")]
             {
-                let Some(monitor_id) = prepare_shell_overlay_action(state) else {
+                let Some(monitor_id) = prepare_shell_overlay_action(state, _position) else {
                     return false;
                 };
                 return super::window_management::switch_monitor_workspace(
@@ -2277,7 +2375,7 @@ pub(super) fn execute_shortcut_disposition(
         ShortcutDisposition::RequestWindowSwitcherNext => {
             #[cfg(feature = "flutter")]
             {
-                let monitor_id = prepare_shell_overlay_action(state);
+                let monitor_id = prepare_shell_overlay_action(state, _position);
                 state.queue_shell_action(
                     super::super::wire::ShellAction::WindowSwitcherNext,
                     monitor_id,
@@ -2288,7 +2386,7 @@ pub(super) fn execute_shortcut_disposition(
         ShortcutDisposition::RequestWindowSwitcherPrevious => {
             #[cfg(feature = "flutter")]
             {
-                let monitor_id = prepare_shell_overlay_action(state);
+                let monitor_id = prepare_shell_overlay_action(state, _position);
                 state.queue_shell_action(
                     super::super::wire::ShellAction::WindowSwitcherPrevious,
                     monitor_id,
@@ -2304,7 +2402,7 @@ pub(super) fn execute_shortcut_disposition(
         ShortcutDisposition::RequestClipboard => {
             #[cfg(feature = "flutter")]
             {
-                let monitor_id = prepare_shell_overlay_action(state);
+                let monitor_id = prepare_shell_overlay_action(state, _position);
                 state.queue_shell_action(super::super::wire::ShellAction::Clipboard, monitor_id);
             }
             true
@@ -2312,7 +2410,7 @@ pub(super) fn execute_shortcut_disposition(
         ShortcutDisposition::RequestScreenshotRegion => {
             #[cfg(feature = "flutter")]
             {
-                let monitor_id = prepare_shell_overlay_action(state);
+                let monitor_id = prepare_shell_overlay_action(state, _position);
                 state.request_screenshot_selection(monitor_id);
             }
             true
@@ -2556,7 +2654,10 @@ fn release_pointer_to_shell(state: &mut RuntimeState) {
 }
 
 #[cfg(feature = "flutter")]
-fn prepare_shell_overlay_action(state: &mut RuntimeState) -> Option<i64> {
+fn prepare_shell_overlay_action(
+    state: &mut RuntimeState,
+    position: Option<Point<f64, Logical>>,
+) -> Option<i64> {
     let pointer = state
         .wayland
         .as_ref()
@@ -2589,7 +2690,17 @@ fn prepare_shell_overlay_action(state: &mut RuntimeState) -> Option<i64> {
         .as_ref()
         .and_then(WaylandFrontend::control_output_under_pointer)
         .map(|(_, monitor_id)| monitor_id);
-    pointer_monitor
+    let touch_monitor = position.and_then(|position| {
+        state
+            .wayland
+            .as_ref()?
+            .outputs
+            .iter()
+            .find(|output| output.logical_geometry.to_f64().contains(position))
+            .and_then(|output| i64::try_from(output.id.0).ok())
+    });
+    touch_monitor
+        .or(pointer_monitor)
         .or_else(|| super::window_management::focused_workspace_window(state).map(|(_, id)| id))
         .or_else(|| {
             let frontend = state.wayland.as_ref()?;

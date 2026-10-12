@@ -92,6 +92,40 @@ class DesktopPresentationOpacity extends StatelessWidget {
   );
 }
 
+/// Animates [DesktopPresentationOpacity] the way [AnimatedOpacity] animates an
+/// opacity group.
+///
+/// An opacity group around a moving or scaling window allocates a new
+/// offscreen layer on every frame. The leaves of this subtree apply the fade
+/// individually through [DesktopVisibilityFade] instead.
+class AnimatedDesktopPresentationOpacity extends StatelessWidget {
+  const AnimatedDesktopPresentationOpacity({
+    required this.opacity,
+    required this.duration,
+    required this.curve,
+    required this.child,
+    super.key,
+  });
+
+  final double opacity;
+  final Duration duration;
+  final Curve curve;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => TweenAnimationBuilder<double>(
+    // Subsequent targets retarget from the in-flight value, without jumps.
+    tween: Tween(begin: opacity, end: opacity),
+    duration: duration,
+    curve: curve,
+    child: child,
+    builder: (context, value, child) => ExcludeSemantics(
+      excluding: value == 0,
+      child: DesktopPresentationOpacity(opacity: value, child: child!),
+    ),
+  );
+}
+
 /// Apply the presentation fade at a single window surface or decoration.
 /// WindowSurfaceLayer can absorb opacity after evaluating its glass material;
 /// it must not share an opacity group with its overlapping shadow picture.

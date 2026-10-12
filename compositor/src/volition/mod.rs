@@ -548,8 +548,10 @@ impl Volition {
     /// Creates one Volition instance for one DRM device.
     ///
     /// `initialize_thread` applies the host compositor's scheduling policy.
-    /// `report_event` must wake the owner because lookahead completion occurs
-    /// after the submission call has returned.
+    /// `report_event` runs on the Volition thread after the submission call
+    /// has returned. It must wake the owner for `Stalled` and `Failed`.
+    /// `Submitted` may wait for the owner's next wake when the owner
+    /// acknowledges it before handling that commit's page flip.
     pub fn new<F>(
         drm: BorrowedFd<'_>,
         lookahead_capacity: usize,

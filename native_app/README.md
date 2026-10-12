@@ -44,8 +44,8 @@ without starting Flutter or opening a window. Impeller is the default.
 This repository builds Slimpeller, so Skia is unavailable in its engine.
 
 The runner supports one window/view and seat, integer display scaling, resize,
-pointer/buttons/scrolling, keyboard layout/compose/repeat, basic text editing,
-cursor shapes and window close. Dart entrypoint arguments follow `--`.
+pointer/buttons/scrolling, multi-touch, keyboard layout/compose/repeat, basic text
+editing, cursor shapes and window close. Dart entrypoint arguments follow `--`.
 Installed `denial-settings` and `denial-plugin-manager` executables find their
 adjacent bundles; Settings also accepts `--welcome`, `--autostart`, and `--page=`.
 Welcome retains its completion-marker check before opening a window.
@@ -54,7 +54,7 @@ Plugin Manager retains its installation descriptor beside the runner.
 Settings file selection uses the external FileChooser portal, and Welcome web
 links use `xdg-open`. The portal backend can be supplied by any desktop toolkit;
 it does not handle Denial application windows or input. Accessibility, external
-IME, clipboard, activation/single-instance handling, touch and platform plugins
+IME, clipboard, activation/single-instance handling and platform plugins
 remain outside this runner's current scope.
 
 Flutter's Linux key-event JSON codec calls its XKB format `gtk`. That protocol
@@ -72,3 +72,31 @@ hard parts. Broader platform-plugin compatibility is a larger follow-up.
 The user validated correct rendering and glass on .188 with framebuffer fetch
 disabled on 2026-09-30. All standalone Denial apps now share that process-local
 workaround through this runner.
+
+## Native application extensions
+
+The `denial_app` library offers `run_with_extension(config, AppExtension)` for
+applications that supply their own native content. The CLI uses an empty
+extension; installed applications retain their existing startup, rendering and
+platform handlers. The engine fork and Denial compositor require no changes.
+
+An extension can register positive, unique `RgbaTexture` IDs and an optional
+`PlatformMessageHandler`. In Dart, display a texture with
+`Texture(textureId: id)`. Native workers publish `RgbaFrame` values containing
+tightly packed, top-to-bottom, premultiplied sRGB RGBA8 pixels. Each dimension
+is limited to 4096 and frames to 64 MiB. Each texture keeps the latest frame
+and coalesces event-loop notifications; publishing never accesses GLES or
+Flutter. The raster thread uploads only new generations, preserves engine GL
+state and releases textures during render-thread shutdown. This initial API
+uses a CPU upload; it does not import DMA-BUF or share Vulkan textures.
+
+Platform handlers receive channel names and codec bytes on the window event
+loop. Return `None` to leave a message unhandled, or encoded reply bytes for
+your application's channel. Built-in text input, cursor, navigation and portal
+plugins run first. Queue expensive work on a worker rather than blocking the
+handler. Call `prepare_graphics_environment()` before starting threads or
+graphics to apply the same Mesa workaround as the CLI.
+
+Synthia uses this API for a Bevy viewport and JSON method-channel settings.
+Texture mailbox bounds, replacement, notification coalescing and detach behavior
+are covered by native unit tests; GUI/rendering validation remains user-owned.

@@ -107,7 +107,7 @@ pub(super) fn synchronize_settings(
     runtime: &mut flutter_runtime::FlutterRuntime,
     events: &mut RuntimeState,
 ) -> Result<(), Box<dyn Error>> {
-    synchronize_external_settings(events);
+    synchronize_external_settings(runtime, events);
     if let Some(accent) = runtime.take_theme_accent() {
         events.resolved_theme_accent = DesktopAccentColor::from_srgb24(accent);
     }
@@ -594,7 +594,10 @@ pub(super) fn synchronize_settings(
 }
 
 #[cfg(feature = "flutter")]
-fn synchronize_external_settings(events: &mut RuntimeState) {
+fn synchronize_external_settings(
+    runtime: &mut flutter_runtime::FlutterRuntime,
+    events: &mut RuntimeState,
+) {
     if !std::mem::take(&mut events.settings_external_change_pending) {
         return;
     }
@@ -707,6 +710,22 @@ fn synchronize_external_settings(events: &mut RuntimeState) {
         path = %frontend.settings.path().display(),
         "applied externally edited Denial settings"
     );
+    // The embedded shell owns the shell sections. Push the committed document
+    // as the control-socket write path does; otherwise the shell keeps its
+    // stale projection and replays it over the edit on its next write.
+    let revision = frontend.settings.revision();
+    let notified = frontend
+        .settings
+        .document_json()
+        .map_err(|error| error.to_string())
+        .and_then(|document| {
+            runtime
+                .send_settings_document_response(0, revision, Some(&document), None)
+                .map_err(|error| error.to_string())
+        });
+    if let Err(error) = notified {
+        warn!(%error, "could not notify the embedded shell of externally edited settings");
+    }
 }
 
 #[cfg(feature = "flutter")]

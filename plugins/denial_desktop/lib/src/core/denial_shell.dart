@@ -1,5 +1,6 @@
 import 'package:denial_desktop/src/state/reference_shell_controller.dart';
 import 'package:denial_desktop/src/state/reference_shell_profile.dart';
+import 'package:denial_desktop/src/state/reference_shell_presentation.dart';
 
 import 'package:denial_flutter_sdk/popups.dart';
 import 'package:denial_flutter_sdk/surfaces.dart';
@@ -10,6 +11,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:denial_flutter_sdk/environment.dart';
 
 import '../desktop/desktop_input_layout_publisher.dart';
+import '../desktop/desktop_pet_holds.dart';
 
 import 'package:denial_flutter_sdk/localization.dart';
 import 'package:denial_flutter_sdk/settings.dart';
@@ -67,6 +69,10 @@ class DenialShell extends ConsumerWidget {
     final effectiveProfile = (displayLayout?.outputs.length ?? 0) > 1
         ? ReferenceShellProfile.desktop
         : profile;
+    final selectedPresentation = ref.watch(referenceShellPresentationProvider);
+    final effectivePresentation = (displayLayout?.outputs.length ?? 0) > 1
+        ? ReferenceShellProfile.desktop
+        : selectedPresentation;
     final presentation = ref.watch(
       shellSettingsProvider.select(
         (settings) => (
@@ -116,8 +122,9 @@ class DenialShell extends ConsumerWidget {
       ),
     );
     final scene = _ProfileScene(
-      profile: effectiveProfile,
-      scene: effectiveProfile == ReferenceShellProfile.mobile
+      profile: effectivePresentation,
+      policyProfile: effectiveProfile,
+      scene: effectivePresentation == ReferenceShellProfile.mobile
           ? mobile
           : desktop,
     );
@@ -130,7 +137,7 @@ class DenialShell extends ConsumerWidget {
       locked: locked,
       onLaidOut: ref.read(fingerprintSceneProvider.notifier).laidOut,
       child: ShellCursorHost(
-        theme: effectiveProfile == ReferenceShellProfile.desktop
+        theme: effectivePresentation == ReferenceShellProfile.desktop
             ? cursorTheme
             : ShellCursorThemes.bibataModernIce,
         platformCursorShapes: bridge.cursorShapes,
@@ -149,7 +156,8 @@ class DenialShell extends ConsumerWidget {
     );
 
     return ShellRuntimeBindings(
-      workArea: effectiveProfile == ReferenceShellProfile.desktop
+      mobilePresentation: effectivePresentation == ReferenceShellProfile.mobile,
+      workArea: effectivePresentation == ReferenceShellProfile.desktop
           ? desktopWorkArea
           : null,
       pairingSurfaceBuilder: pairingSurfaceBuilder,
@@ -162,7 +170,10 @@ class DenialShell extends ConsumerWidget {
         child: DenialLocalizationScope(
           locale: presentation.locale,
           child: LowBatteryNotificationBinding(
-            child: _ShellEnvironment(profile: effectiveProfile, child: content),
+            child: _ShellEnvironment(
+              profile: effectivePresentation,
+              child: content,
+            ),
           ),
         ),
       ),
@@ -171,9 +182,14 @@ class DenialShell extends ConsumerWidget {
 }
 
 class _ProfileScene extends StatelessWidget {
-  const _ProfileScene({required this.profile, required this.scene});
+  const _ProfileScene({
+    required this.profile,
+    required this.policyProfile,
+    required this.scene,
+  });
 
   final ReferenceShellProfile profile;
+  final ReferenceShellProfile policyProfile;
   final DenialShellScene scene;
 
   @override
@@ -185,6 +201,8 @@ class _ProfileScene extends StatelessWidget {
           children: [
             ShellPopupHost(
               child: ShellSecureStage(
+                useConfiguredLockAnimation:
+                    policyProfile == ReferenceShellProfile.desktop,
                 scene: Stack(
                   fit: StackFit.expand,
                   children: [scene.content, ...scene.overlays],
@@ -192,29 +210,41 @@ class _ProfileScene extends StatelessWidget {
                 chrome: scene.chrome,
               ),
             ),
-            const MobileSystemKeyboardLayer(),
+            if (policyProfile == ReferenceShellProfile.mobile)
+              const MobileSystemKeyboardLayer(),
           ],
         ),
       ),
       ReferenceShellProfile.desktop => DesktopInputLayoutPublisher(
-        child: ShellSecureStage(
-          useConfiguredLockAnimation: true,
-          scene: Stack(
+        softwareKeyboardEnabled: policyProfile == ReferenceShellProfile.mobile,
+        child: DesktopPetHoldPublisher(
+          child: Stack(
             fit: StackFit.expand,
             children: [
-              ShellPopupHost(
-                // Keep desktop feature popups inside the scene's paint plane.
-                // The screenshot selection layer remains above this overlay,
-                // so its frozen texture includes open menus while its controls
-                // paint and receive input above them.
-                child: ShellOverlayHost(
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [scene.content, ...scene.overlays],
-                  ),
+              ShellSecureStage(
+                useConfiguredLockAnimation:
+                    policyProfile == ReferenceShellProfile.desktop,
+                scene: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    ShellPopupHost(
+                      // Keep desktop feature popups inside the scene's paint plane.
+                      // The screenshot selection layer remains above this overlay,
+                      // so its frozen texture includes open menus while its controls
+                      // paint and receive input above them.
+                      child: ShellOverlayHost(
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [scene.content, ...scene.overlays],
+                        ),
+                      ),
+                    ),
+                    const ScreenshotSelectionLayer(),
+                  ],
                 ),
               ),
-              const ScreenshotSelectionLayer(),
+              if (policyProfile == ReferenceShellProfile.mobile)
+                const MobileSystemKeyboardLayer(),
             ],
           ),
         ),

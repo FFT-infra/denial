@@ -26,6 +26,7 @@ import '../widgets/desktop_visibility_transition.dart';
 import '../widgets/desktop_window_reveal.dart';
 import '../widgets/desktop_window_switcher.dart';
 import '../widgets/shell_frame_time_overlay.dart';
+import 'desktop_held_layers.dart';
 import 'desktop_home_layout.dart';
 import 'desktop_minimize_layer_handoff.dart';
 import 'desktop_panel_overlay.dart';
@@ -275,8 +276,9 @@ class DesktopScene extends ConsumerStatefulWidget {
     required this.mainOutputRect,
     required this.applicationSearchFocusNode,
     required this.onOpenLauncher,
-    required this.onDismissLauncher,
+    required this.onDismissPanel,
     required this.onOpenDashboard,
+    required this.onToggleDashboard,
     required this.onCloseWallpaperSelector,
     required this.onOpenSettings,
     required this.onOpenPowerSettings,
@@ -313,8 +315,9 @@ class DesktopScene extends ConsumerStatefulWidget {
   final Rect? mainOutputRect;
   final FocusNode applicationSearchFocusNode;
   final VoidCallback onOpenLauncher;
-  final VoidCallback onDismissLauncher;
+  final VoidCallback onDismissPanel;
   final VoidCallback onOpenDashboard;
+  final VoidCallback onToggleDashboard;
   final VoidCallback onCloseWallpaperSelector;
   final VoidCallback onOpenSettings;
   final VoidCallback onOpenPowerSettings;
@@ -359,6 +362,8 @@ class _DesktopSceneState extends ConsumerState<DesktopScene> {
   Map<int, Rect> _overviewEntryFrames = const <int, Rect>{};
   Map<int, Rect> _overviewDepartingFrames = const <int, Rect>{};
   Timer? _overviewDepartureTimer;
+  List<DenialWindow>? _heldLayersSource;
+  Map<int, List<DenialWindow>> _heldLayers = const <int, List<DenialWindow>>{};
 
   @override
   void initState() {
@@ -386,6 +391,18 @@ class _DesktopSceneState extends ConsumerState<DesktopScene> {
             setState(() {});
           },
         );
+  }
+
+  /// Layer surfaces held by windows, which are drawn in their window's slot
+  /// instead of in their layer plane.
+  Map<int, List<DenialWindow>> _cachedHeldLayers(
+    List<DenialWindow> layerSurfaces,
+  ) {
+    if (!identical(_heldLayersSource, layerSurfaces)) {
+      _heldLayersSource = layerSurfaces;
+      _heldLayers = desktopHeldLayersByWindow(layerSurfaces);
+    }
+    return _heldLayers;
   }
 
   _DesktopSceneTopology _cachedTopology({
@@ -683,6 +700,7 @@ class _DesktopSceneState extends ConsumerState<DesktopScene> {
     final viewSize = widget.viewSize;
     final windows = widget.windows;
     final layerSurfaces = widget.layerSurfaces;
+    final heldLayers = _cachedHeldLayers(layerSurfaces);
     final desktop = widget.desktop;
     final windowSwitcher = widget.windowSwitcher;
     final displayLayout = widget.displayLayout;
@@ -693,7 +711,7 @@ class _DesktopSceneState extends ConsumerState<DesktopScene> {
     final mainOutputRect = widget.mainOutputRect;
     final applicationSearchFocusNode = widget.applicationSearchFocusNode;
     final onOpenLauncher = widget.onOpenLauncher;
-    final onDismissLauncher = widget.onDismissLauncher;
+    final onDismissPanel = widget.onDismissPanel;
     final onOpenDashboard = widget.onOpenDashboard;
     final onOpenSettings = widget.onOpenSettings;
     final onOpenPowerSettings = widget.onOpenPowerSettings;
@@ -738,6 +756,7 @@ class _DesktopSceneState extends ConsumerState<DesktopScene> {
         viewSize: viewSize,
         displayLayout: displayLayout,
         layerSurfaces: layerSurfaces,
+        heldLayers: heldLayers,
         desktop: desktop,
         desktopVisible: desktopVisible,
         minimizedWindowPlacement: minimizedWindowPlacement,
@@ -782,7 +801,9 @@ class _DesktopSceneState extends ConsumerState<DesktopScene> {
             workArea: surfaceLayout.workAreaOf(output),
             isMainOutput:
                 output.monitorId == surfaceLayout.mainOutput?.monitorId,
-            defaultOutputSelected: surfaceLayout.hostsSystemBar(output),
+            defaultOutputSelected: surfaceLayout.hostsDefaultShellSurface(
+              output,
+            ),
             workspaceId: desktop.activeWorkspaceFor(output.monitorId),
             fullscreen: fullscreenMonitorIds.contains(output.monitorId),
             overview: desktop.overviewActive,
@@ -799,6 +820,8 @@ class _DesktopSceneState extends ConsumerState<DesktopScene> {
       ref: ref,
       onOpenPowerSettings: onOpenPowerSettings,
       onToggleLauncher: widget.onToggleLauncher,
+      onOpenDashboard: onOpenDashboard,
+      onToggleDashboard: widget.onToggleDashboard,
     );
     Widget surfacePlane(ShellSurfaceLayer layer) => ShellSurfacePlane(
       key: ValueKey(layer),
@@ -841,10 +864,13 @@ class _DesktopSceneState extends ConsumerState<DesktopScene> {
       fit: StackFit.expand,
       children: [
         const ShellWallpaper(),
+        // A held layer is drawn in its window's slot instead.
         for (final surface in layerSurfaces)
-          if (surface.contentKind ==
-                  DenialWindowContentKind.layerShellBackground ||
-              surface.contentKind == DenialWindowContentKind.layerShellBottom)
+          if (!surface.isHeld &&
+              (surface.contentKind ==
+                      DenialWindowContentKind.layerShellBackground ||
+                  surface.contentKind ==
+                      DenialWindowContentKind.layerShellBottom))
             DesktopLayerShellSurface(
               key: ValueKey<String>('layer-shell-${surface.surfaceId}'),
               surface: surface,
@@ -894,6 +920,7 @@ class _DesktopSceneState extends ConsumerState<DesktopScene> {
                         onCancelOverviewDrag: onCancelOverviewDrag,
                         overviewEntryFrames: _overviewEntryFrames,
                         overviewDepartingFrames: _overviewDepartingFrames,
+                        heldLayers: heldLayers,
                       ),
                     ),
                   ),
@@ -957,6 +984,7 @@ class _DesktopSceneState extends ConsumerState<DesktopScene> {
                         onCancelOverviewDrag: onCancelOverviewDrag,
                         overviewEntryFrames: _overviewEntryFrames,
                         overviewDepartingFrames: _overviewDepartingFrames,
+                        heldLayers: heldLayers,
                       ),
                     ),
                   ),
@@ -990,7 +1018,7 @@ class _DesktopSceneState extends ConsumerState<DesktopScene> {
                 panelDurationScale: widget.panelDurationScale,
                 applicationSearchFocusNode: applicationSearchFocusNode,
                 onOpenLauncher: onOpenLauncher,
-                onDismissLauncher: onDismissLauncher,
+                onDismissPanel: onDismissPanel,
                 onOpenDashboard: onOpenDashboard,
                 onOpenSettings: onOpenSettings,
                 onCancelPanelClose: onCancelPanelClose,
@@ -1040,8 +1068,10 @@ class _DesktopSceneState extends ConsumerState<DesktopScene> {
         ),
         surfacePlane(ShellSurfaceLayer.aboveWindows),
         for (final surface in layerSurfaces)
-          if (surface.contentKind == DenialWindowContentKind.layerShellTop ||
-              surface.contentKind == DenialWindowContentKind.layerShellOverlay)
+          if (!surface.isHeld &&
+              (surface.contentKind == DenialWindowContentKind.layerShellTop ||
+                  surface.contentKind ==
+                      DenialWindowContentKind.layerShellOverlay))
             DesktopLayerShellSurface(
               key: ValueKey<String>('layer-shell-${surface.surfaceId}'),
               surface: surface,

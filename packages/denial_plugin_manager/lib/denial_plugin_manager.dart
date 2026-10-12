@@ -19,6 +19,9 @@ export 'src/dart_sdk.dart';
 export 'src/installation.dart';
 
 export 'src/progress.dart';
+export 'src/rebuild.dart';
+export 'src/resume.dart';
+export 'src/notifications.dart';
 export 'src/preflight.dart';
 
 export 'src/selection_edit.dart';

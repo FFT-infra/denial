@@ -371,6 +371,9 @@ fn activate_workspace_fallback(
 #[cfg(feature = "flutter")]
 fn apply_window_command(state: &mut RuntimeState, command: WindowCommand) {
     match command {
+        WindowCommand::Minimize { window_id } => {
+            minimize_toplevel_by_id(state, window_id);
+        }
         WindowCommand::CreateLocal {
             app_id,
             title,
@@ -405,6 +408,22 @@ fn apply_window_command(state: &mut RuntimeState, command: WindowCommand) {
             geometry,
         } => {
             preview_window_drop_on_workspace(state, window_id, monitor_id, workspace_id, geometry);
+        }
+        WindowCommand::HoldPet { pet_id, hold } => {
+            if let Some(frontend) = state.wayland.as_mut()
+                && frontend.hold_pet(pet_id, hold)
+            {
+                state.scene_sync.mark_window_dirty(pet_id);
+            }
+        }
+        WindowCommand::CarryPet {
+            pet_id,
+            velocity_x,
+            velocity_y,
+        } => {
+            if let Some(frontend) = state.wayland.as_mut() {
+                frontend.carry_pet(pet_id, Point::from((velocity_x, velocity_y)));
+            }
         }
         command => apply_targeted_window_command(state, command),
     }
@@ -492,11 +511,14 @@ fn apply_local_window_command(state: &mut RuntimeState, window_id: u64, command:
                 state.scene_sync.mark_dirty();
             }
         }
-        WindowCommand::CreateLocal { .. }
+        WindowCommand::Minimize { .. }
+        | WindowCommand::CreateLocal { .. }
         | WindowCommand::SwitchWorkspace { .. }
         | WindowCommand::MoveToWorkspace { .. }
         | WindowCommand::DropOnWorkspace { .. }
-        | WindowCommand::PreviewWorkspaceDrop { .. } => unreachable!(),
+        | WindowCommand::PreviewWorkspaceDrop { .. }
+        | WindowCommand::HoldPet { .. }
+        | WindowCommand::CarryPet { .. } => unreachable!(),
     }
 }
 
@@ -529,11 +551,14 @@ fn apply_client_window_command(
             exact,
             layout_drop,
         ),
-        WindowCommand::CreateLocal { .. }
+        WindowCommand::Minimize { .. }
+        | WindowCommand::CreateLocal { .. }
         | WindowCommand::SwitchWorkspace { .. }
         | WindowCommand::MoveToWorkspace { .. }
         | WindowCommand::DropOnWorkspace { .. }
-        | WindowCommand::PreviewWorkspaceDrop { .. } => unreachable!(),
+        | WindowCommand::PreviewWorkspaceDrop { .. }
+        | WindowCommand::HoldPet { .. }
+        | WindowCommand::CarryPet { .. } => unreachable!(),
     }
 }
 

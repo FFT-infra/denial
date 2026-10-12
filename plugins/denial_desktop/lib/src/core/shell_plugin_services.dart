@@ -20,6 +20,7 @@ import 'package:denial_flutter_sdk/state.dart';
 
 import '../state/desktop_visibility.dart';
 import '../state/window_emphasis.dart';
+import '../state/quick_settings.dart';
 
 import 'package:denial_flutter_sdk/shell_theme.dart';
 import 'package:denial_flutter_sdk/wallpaper.dart';
@@ -35,6 +36,16 @@ final _monitorBounds = Provider.autoDispose.family<Rect?, int>((ref, id) {
 
 final _accent = Provider.autoDispose(
   (ref) => ref.watch(shellAccentProvider).color,
+);
+final _volume = Provider.autoDispose(
+  (ref) => ref.watch(quickSettingsProvider.select((state) => state.volume)),
+);
+final _connectedWifi = Provider.autoDispose(
+  (ref) => ref.watch(
+    networkConnectivityProvider.select(
+      (state) => state.snapshot.connectedNetwork,
+    ),
+  ),
 );
 final _workspacesEnabled = Provider.autoDispose(
   (ref) => ref.watch(
@@ -105,6 +116,12 @@ final _windows = Provider.autoDispose.family<List<ApplicationWindow>, int>((
   final shell = ref.watch(referenceShellProvider);
   final desktop = ref.watch(desktopWorkspaceProvider);
   final desktopVisible = ref.watch(desktopVisibleProvider);
+  final tiled = ref.watch(
+    shellSettingsProvider.select(
+      (settings) =>
+          settings.layout.windowLayout != DesktopWindowLayout.stacking,
+    ),
+  );
   return List.unmodifiable([
     for (final window in shell.openAppWindows)
       if (window.monitorId == monitorId &&
@@ -120,6 +137,7 @@ final _windows = Provider.autoDispose.family<List<ApplicationWindow>, int>((
               shell.foregroundObjectId == window.objectId &&
               !window.minimized,
           minimized: window.minimized,
+          tiled: tiled,
           previewSize: window.presentationCoordinateRect.size,
         ),
   ]);
@@ -132,10 +150,14 @@ final class DesktopShellServices implements ShellServices {
     required this.ref,
     required this.onOpenPowerSettings,
     required this.onToggleLauncher,
+    required this.onOpenDashboard,
+    required this.onToggleDashboard,
   });
   final WidgetRef ref;
   final VoidCallback onOpenPowerSettings;
   final VoidCallback onToggleLauncher;
+  final VoidCallback onOpenDashboard;
+  final VoidCallback onToggleDashboard;
 
   @override
   ProviderListenable<List<ApplicationWindow>> windows(int monitorId) =>
@@ -199,7 +221,22 @@ final class DesktopShellServices implements ShellServices {
   }
 
   @override
+  void minimizeWindow(int id) {
+    ref.read(windowEmphasisProvider.notifier).clear();
+    for (final window in ref.read(referenceShellProvider).openAppWindows) {
+      if (window.objectId != id) continue;
+      ref.read(denialBridgeProvider).minimizeWindow(window);
+      return;
+    }
+  }
+
+  @override
   void toggleLauncher() => onToggleLauncher();
+
+  @override
+  void openDashboard() => onOpenDashboard();
+  @override
+  void toggleDashboard() => onToggleDashboard();
   @override
   void toggleDesktop() => ref.read(desktopVisibleProvider.notifier).toggle();
   @override
@@ -221,6 +258,19 @@ final class DesktopShellServices implements ShellServices {
 
   @override
   ProviderListenable<BatteryStatus> get battery => batteryProvider;
+  @override
+  ProviderListenable<double> get volume => _volume;
+  @override
+  ProviderListenable<WifiNetwork?> get connectedWifi => _connectedWifi;
+  @override
+  void beginVolumeInteraction() =>
+      ref.read(quickSettingsProvider.notifier).beginVolumeInteraction();
+  @override
+  void setVolume(double value) =>
+      ref.read(quickSettingsProvider.notifier).setDashboardVolume(value);
+  @override
+  void commitVolume(double value) =>
+      ref.read(quickSettingsProvider.notifier).commitDashboardVolume(value);
   @override
   ProviderListenable<LoadSeries> get cpu => cpuUsageProvider;
   @override
@@ -401,6 +451,14 @@ final class _Strings implements ShellStrings {
       context.l10n.workspaceLabel(workspace);
   @override
   String get batteryTitle => context.l10n.batteryTitle;
+  @override
+  String get volumeTitle => context.l10n.commonVolume;
+  @override
+  String get wifiTitle => context.l10n.commonWifi;
+  @override
+  String get notConnected => context.l10n.commonNotConnected;
+  @override
+  String get openDashboard => context.l10n.settingsShortcutActionOpenDashboard;
   @override
   String get percentSign => context.l10n.percentSign;
   @override

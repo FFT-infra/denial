@@ -97,6 +97,8 @@ const KEYBOARD_FLAGS_MASK: u32 = KEYBOARD_CTRL | KEYBOARD_PHASE_MASK;
 pub const INPUT_LAYOUT_KEYBOARD_CAPTURE: u32 = 1 << 0;
 pub const INPUT_LAYOUT_EXCLUSIVE_SHELL: u32 = 1 << 1;
 pub const INPUT_LAYOUT_OBSERVE_CLIENT_POINTER_PRESSES: u32 = 1 << 2;
+pub const INPUT_LAYOUT_PRESENTATION_SPECIFIED: u32 = 1 << 3;
+pub const INPUT_LAYOUT_MOBILE_PRESENTATION: u32 = 1 << 4;
 pub const INPUT_WINDOW_VISIBLE: u32 = 1 << 0;
 pub const INPUT_WINDOW_HIT_TEST_DISABLED: u32 = 1 << 1;
 pub const INPUT_WINDOW_GEOMETRY_LOCKED: u32 = 1 << 2;
@@ -128,6 +130,9 @@ pub enum WindowCommand {
         window_id: u64,
     },
     Focus {
+        window_id: u64,
+    },
+    Minimize {
         window_id: u64,
     },
     Configure {
@@ -162,6 +167,19 @@ pub enum WindowCommand {
         monitor_id: i64,
         workspace_id: u8,
         geometry: Option<WindowGeometry>,
+    },
+    /// The hold a desktop pet the user drags would take if let go now: the
+    /// window's object id, one protocol hold value and the share along an
+    /// edge. None leaves it free.
+    HoldPet {
+        pet_id: u64,
+        hold: Option<(u64, u32, f64)>,
+    },
+    /// A held desktop pet moves on screen at this velocity, logical px/s.
+    CarryPet {
+        pet_id: u64,
+        velocity_x: f64,
+        velocity_y: f64,
     },
 }
 
@@ -251,8 +269,10 @@ impl WindowCommand {
         match self {
             Self::CreateLocal { .. } => None,
             Self::SwitchWorkspace { .. } => None,
+            Self::HoldPet { .. } | Self::CarryPet { .. } => None,
             Self::Close { window_id }
             | Self::Focus { window_id }
+            | Self::Minimize { window_id }
             | Self::Configure { window_id, .. }
             | Self::MoveToWorkspace { window_id, .. }
             | Self::DropOnWorkspace { window_id, .. }
@@ -443,6 +463,11 @@ impl InputLayoutSnapshot {
     pub fn observes_client_pointer_presses(&self) -> bool {
         self.flags & INPUT_LAYOUT_OBSERVE_CLIENT_POINTER_PRESSES != 0
     }
+
+    pub fn mobile_presentation(&self) -> Option<bool> {
+        (self.flags & INPUT_LAYOUT_PRESENTATION_SPECIFIED != 0)
+            .then_some(self.flags & INPUT_LAYOUT_MOBILE_PRESENTATION != 0)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -631,6 +656,27 @@ pub struct WindowDescription {
     pub opacity: f32,
     pub content_kind: WindowContentKind,
     pub opacity_class: WindowOpacityClass,
+    /// What the shell knows of this layer surface if it is a desktop pet
+    /// (denial-pet-v1).
+    pub pet: Option<PetDescription>,
+}
+
+/// A desktop pet (denial-pet-v1) as the shell knows it. A held pet is drawn
+/// and hit with its window. See the pet fields of `Window` in denial.fbs.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PetDescription {
+    /// The protocol holds it accepts, or-ed.
+    pub holds: u32,
+    /// The point it holds on by, in its own logical coordinates.
+    pub anchor_x: f64,
+    pub anchor_y: f64,
+    /// Whether it stacks just below its window while held.
+    pub below: bool,
+    /// Whether the user is dragging it.
+    pub dragged: bool,
+    /// The window holding it, by its object id, the protocol hold value and
+    /// the share along an edge. While dragged, the hold it takes if let go.
+    pub held: Option<(u64, u32, f64)>,
 }
 
 #[derive(Debug)]

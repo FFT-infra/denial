@@ -129,6 +129,20 @@ impl WireBridge {
                     .ok_or(WireError::Payload)?;
                 self.handle_window_request(envelope.request_id(), request)
             }
+            fb::Payload::PetRequest => {
+                if envelope.request_id() != 0 {
+                    return Err(WireError::RequestId);
+                }
+                if self.pending_window_commands.len() >= MAX_PENDING_WINDOW_COMMANDS {
+                    return Err(WireError::Count);
+                }
+                let request = envelope
+                    .payload_as_pet_request()
+                    .ok_or(WireError::Payload)?;
+                self.pending_window_commands
+                    .push_back(decode_pet_request(request)?);
+                Ok(None)
+            }
             fb::Payload::NONE => Err(WireError::Payload),
             payload => Err(WireError::Direction(payload)),
         }
@@ -182,17 +196,27 @@ impl WireBridge {
                     fb::SystemBarSide::Right => SystemBarSide::Right,
                     fb::SystemBarSide::Top => SystemBarSide::Top,
                     fb::SystemBarSide::Bottom => SystemBarSide::Bottom,
-                    fb::SystemBarSide::Hidden => return Err(WireError::Enumeration),
+                    fb::SystemBarSide::Hidden => SystemBarSide::Hidden,
                     _ => return Err(WireError::Enumeration),
                 };
                 let monitor_ids = request.system_bar_monitor_ids().ok_or(WireError::Payload)?;
-                if monitor_ids.is_empty() || monitor_ids.len() > self.snapshot.outputs.len() {
+                let hidden = side == SystemBarSide::Hidden;
+                if (if hidden {
+                    !monitor_ids.is_empty()
+                } else {
+                    monitor_ids.is_empty()
+                }) || monitor_ids.len() > self.snapshot.outputs.len()
+                {
                     return Err(WireError::Count);
                 }
                 let thickness = request.system_bar_thickness();
                 if thickness != -1.0
                     && (!thickness.is_finite()
-                        || thickness <= 0.0
+                        || (if hidden {
+                            thickness != 0.0
+                        } else {
+                            thickness <= 0.0
+                        })
                         || thickness > MAX_SYSTEM_BAR_THICKNESS)
                 {
                     return Err(WireError::Payload);
@@ -323,6 +347,7 @@ impl WireBridge {
             }
             kind @ (fb::WindowRequestKind::CloseWindow
             | fb::WindowRequestKind::FocusWindow
+            | fb::WindowRequestKind::MinimizeWindow
             | fb::WindowRequestKind::ConfigureWindow) => {
                 if self.pending_window_commands.len() >= MAX_PENDING_WINDOW_COMMANDS {
                     return Err(WireError::Count);
@@ -334,6 +359,12 @@ impl WireBridge {
                 let command = match kind {
                     fb::WindowRequestKind::CloseWindow => WindowCommand::Close { window_id },
                     fb::WindowRequestKind::FocusWindow => WindowCommand::Focus { window_id },
+                    fb::WindowRequestKind::MinimizeWindow => {
+                        if request.flags() != 0 {
+                            return Err(WireError::Flags);
+                        }
+                        WindowCommand::Minimize { window_id }
+                    }
                     fb::WindowRequestKind::ConfigureWindow => {
                         const EXACT: u32 = 1 << 0;
                         const LAYOUT_DROP: u32 = 1 << 1;
@@ -823,6 +854,7 @@ fn shortcut_action_from_wire(action: fb::ShortcutActionKind) -> Result<ShortcutA
         fb::ShortcutActionKind::ResizeGrowHeight => Ok(ShortcutAction::ResizeGrowHeight),
         fb::ShortcutActionKind::ResizeShrinkHeight => Ok(ShortcutAction::ResizeShrinkHeight),
         fb::ShortcutActionKind::ResetWindowHeight => Ok(ShortcutAction::ResetWindowHeight),
+        fb::ShortcutActionKind::ResetWindowWidth => Ok(ShortcutAction::ResetWindowWidth),
         fb::ShortcutActionKind::ToggleVerticalMaximize => {
             Ok(ShortcutAction::ToggleVerticalMaximize)
         }
@@ -1141,4 +1173,40 @@ fn decode_input_rect(rect: &fb::WireRect) -> Result<InputRect, WireError> {
         return Err(WireError::Geometry);
     }
     Ok(rect)
+}
+
+/// A shell decision about a desktop pet. Whether the pet accepts it is
+/// native's to check against live state; this checks only its form.
+fn decode_pet_request(request: fb::PetRequest<'_>) -> Result<WindowCommand, WireError> {
+    let pet_id = request.pet_id();
+    if pet_id == 0 {
+        return Err(WireError::Identity);
+    }
+    match request.kind() {
+        fb::PetRequestKind::Hold => {
+            let hold = match request.window_id() {
+                0 => None,
+                window_id => {
+                    let share = request.share();
+                    if !share.is_finite() || !(0.0..=1.0).contains(&share) {
+                        return Err(WireError::Geometry);
+                    }
+                    Some((window_id, request.hold(), share))
+                }
+            };
+            Ok(WindowCommand::HoldPet { pet_id, hold })
+        }
+        fb::PetRequestKind::Carried => {
+            let (velocity_x, velocity_y) = (request.velocity_x(), request.velocity_y());
+            if !velocity_x.is_finite() || !velocity_y.is_finite() {
+                return Err(WireError::Geometry);
+            }
+            Ok(WindowCommand::CarryPet {
+                pet_id,
+                velocity_x,
+                velocity_y,
+            })
+        }
+        _ => Err(WireError::Enumeration),
+    }
 }

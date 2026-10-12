@@ -12,6 +12,12 @@ boundaries may change before 1.0.
   plugins. The optional `denial-plugin-manager` package provides the graphical
   manager, CLI, version-matched compiler kit, validated Apply/recovery flow,
   and Git-based installation without publishing Denial SDKs on pub.dev.
+- After a Denial update, your plugins now come back on their own. Denial keeps
+  them and their settings, rebuilds them for the new release in the
+  background while its standard desktop runs, and switches back at a quiet
+  moment without a logout. One notification follows the rebuild; if it cannot
+  finish, it explains why and offers Try again, Check for updates, and Open
+  Plugins, and it waits for a network connection when downloads are needed.
 - Plugins now discovers the public `denialwm/denial-plugins` collection by
   default. Its first entry is the independently installable Windows-style
   Taskbar; catalog discovery never installs or enables a plugin automatically.

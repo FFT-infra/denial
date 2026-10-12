@@ -40,13 +40,13 @@ use super::window_management::{
 use super::window_management::{
     apply_managed_minimize, queue_restored_window_state, queue_window_placement,
 };
-#[cfg(feature = "flutter")]
-use super::{WindowPlacementChange, WindowPlacementPhase};
 use super::{
     KeyboardFocusTarget, MoveSurfaceGrab, ResizeEdges, ResizeSurfaceGrab, WindowIdentity,
     centered_transient_geometry, clamp_window_geometry, constrain_dimension,
     pointer_grab_drives_window,
 };
+#[cfg(feature = "flutter")]
+use super::{WindowPlacementChange, WindowPlacementPhase};
 
 const XWAYLAND_BASE_DPI: u32 = 96;
 const XWAYLAND_SCALE_MODE_ENV: &str = "DENIAL_XWAYLAND_SCALE_MODE";

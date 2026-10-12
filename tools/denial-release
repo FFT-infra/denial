@@ -615,7 +615,7 @@ source_audit() {
   if jq -e '
       .schema_version == 1
       and .flutter.repository == "https://github.com/denialwm/flutter.git"
-      and .flutter.branch == "denial/3.47.5-r1"
+      and .flutter.branch == "denial/3.47.5"
       and (.flutter.revision | test("^[0-9a-f]{40}$"))
       and (.flutter.upstream_revision | test("^[0-9a-f]{40}$"))
       and .skia.repository == "https://github.com/denialwm/skia.git"
@@ -969,6 +969,7 @@ source_audit() {
     "$ROOT/tools/test-denial-promotion-no-build" \
     "$ROOT/tools/test-denial-repository-generators" \
     "$ROOT/tools/test-denial-repository-setup" \
+    "$ROOT/tools/test-denial-session-launchers" \
     "$ROOT/tools/verify-denial-package-payload" \
     "$ROOT/tools/verify-denial-native-package-metadata" \
     "$ROOT/tools/verify-denial-published-apk-packages" \
@@ -1003,6 +1004,16 @@ source_audit() {
     pass 'native candidate metadata rejects executable and malformed input'
   else
     fail 'native candidate metadata parser test failed'
+  fi
+  if "$ROOT/tools/test-denial-engine-manifests"; then
+    pass 'engine manifest refresh rejects mismatched inputs and preserves legacy provenance'
+  else
+    fail 'engine manifest refresh regression tests failed'
+  fi
+  if "$ROOT/tools/test-denial-session-launchers"; then
+    pass 'session launchers preserve SDDM greeter restart on startup failure and compositor exit'
+  else
+    fail 'session launcher exit handling failed'
   fi
 
   cargo_version="$(

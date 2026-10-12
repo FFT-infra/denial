@@ -448,6 +448,11 @@ impl IdlePolicy {
         }
     }
 
+    /// How long the user has not touched any input device.
+    pub(super) fn idle_for(&self, now: Instant) -> Duration {
+        now.saturating_duration_since(self.last_activity)
+    }
+
     pub(super) fn note_activity(&mut self, now: Instant) -> Vec<IdlePowerRequest> {
         self.reset_idle_interval(now);
         self.wake_blanked_outputs()

@@ -1,3 +1,7 @@
+import 'package:denial_flutter_sdk/localization.dart';
+
+import 'localized_feedback.dart';
+
 import 'package:denial_flutter_sdk/materials.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -91,10 +95,10 @@ class _ManagerPageState extends State<ManagerPage> {
                   onAdd: controller.busy ? null : addPlugin,
                   onRefresh: controller.refresh,
                   onPreferences: controller.busy ? null : preferences,
-                  applyLabel: controller.applyLabel,
-                  onApply: !controller.needsApply || !controller.canApply
+                  applyLabel: applyLabel(context.l10n, controller),
+                  onApply: !controller.canSubmitApply
                       ? null
-                      : () => controller.submit(['apply']),
+                      : () => controller.submit(controller.applyOperation),
                 );
                 final page = controller.loading
                     ? DenialContentPane(

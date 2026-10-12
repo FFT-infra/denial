@@ -122,6 +122,14 @@ class DisplayLayout {
   bool hostsSystemBar(DisplayOutput output) =>
       effectiveSystemBarMonitorIds.contains(output.monitorId);
 
+  /// Default output selection for visual shell surfaces is independent of
+  /// native work-area reservations. Mobile startup has no system-bar host;
+  /// desktop presentation still needs surfaces on the primary output.
+  bool hostsDefaultShellSurface(DisplayOutput output) =>
+      effectiveSystemBarMonitorIds.isEmpty
+      ? output.monitorId == mainOutput?.monitorId
+      : hostsSystemBar(output);
+
   List<DisplayOutput> get systemBarOutputs =>
       List<DisplayOutput>.unmodifiable(outputs.where(hostsSystemBar));
 

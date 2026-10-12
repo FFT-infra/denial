@@ -455,6 +455,56 @@ compiled Flutter shell. Do not introduce runtime plugin scanning, reflection,
 dynamic Dart modules, or a registry that decides which plugins to enable.
 Ordinary dispatch to already selected handlers is fine.
 
+## Animate without per-frame GPU allocations
+
+A partly transparent `Opacity`, `FadeTransition` or `AnimatedOpacity` usually
+renders its subtree into an offscreen layer. Denial reuses that layer while it
+slides or changes size slightly, but a layer that keeps growing allocates new
+GPU memory at each larger size, about 36 bytes per pixel, or 18 MB for a
+640×800 panel. See
+[the known issue](KNOWN_ISSUES.md#growing-animated-layers-allocate-gpu-memory)
+for the details.
+
+- **Fading in place or sliding is fine.** `Transform.translate` keeps the size,
+  and an opacity of exactly 0 or 1 creates no layer.
+- **To fade and scale, use `ShellFadeScale`** from
+  `package:denial_flutter_sdk/rendering.dart` instead of combining `Opacity` or
+  `FadeTransition` with `Transform.scale`, `ScaleTransition` or `AnimatedScale`.
+  It renders the content once at its own size and scales the finished image,
+  so one layer serves the whole animation:
+
+  ```dart
+  AnimatedBuilder(
+    animation: reveal,
+    child: const MyPanelContent(),
+    builder: (context, child) => ShellFadeScale(
+      opacity: reveal.value,
+      scale: 0.95 + 0.05 * reveal.value,
+      child: child!,
+    ),
+  );
+  ```
+
+- **When layout changes the size, fade the paint.** For content in a resizing
+  rectangle or a growing clip, multiply the alpha of its colors instead of
+  wrapping it in `Opacity`:
+
+  ```dart
+  DecoratedBox(
+    decoration: BoxDecoration(
+      color: colors.surfaceContainer.withValues(alpha: 0.42 * t),
+      border: Border.all(
+        color: colors.hairline.withValues(alpha: colors.hairline.a * t),
+      ),
+    ),
+  );
+  ```
+
+- **Keep glass out of fades and `ShellFadeScale`.** Inside such a layer,
+  `ShellBackdropBlur`, other backdrop filters and window surfaces sample the
+  layer instead of the scene behind it. A plain `Transform.scale` or
+  translation keeps them live; fade those leaves individually.
+
 ## Access lower-level platform capabilities
 
 The SDK is the only Denial platform API. Do not depend on `denial_dart_shell`,
@@ -502,10 +552,16 @@ the compositor. See [custom shells](CUSTOM_SHELLS.md) for input, visibility,
 lock-frame and lifetime responsibilities. Bootstrap mounts no hidden default UI.
 
 `services.dart` also exposes focused window, application, desktop, workspace,
-telemetry, media, presentation and tray interfaces. Accept the smallest capability
-in your feature constructors/helpers, such as `ShellWindowServices` for previews
+telemetry, audio, connectivity, media, presentation and tray interfaces. Accept
+the smallest capability in your feature constructors/helpers, such as
+`ShellWindowServices` for previews
 or `ShellMediaServices` for playback controls. The supplied `ShellServices` bundle
 implements all of them, so existing plugin calls remain valid.
+
+`ShellAudioServices` supplies output volume and begin/change/commit interactions;
+`ShellConnectivityServices` supplies the connected Wi-Fi network and its current
+signal strength. `controls.dart` exposes the shared themed `RangeBar`,
+`VerticalRangeBar` and `WifiStatusIcon` for consistent desktop/mobile controls.
 
 `rendering.dart` exposes live window surfaces and the native window-plane layer;
 `input.dart` exposes input regions, coordinate transforms and visibility layout.
@@ -564,6 +620,85 @@ Shell replacement clears old registrations and queued calls. Locked sessions
 cannot dispatch plugin actions, and handlers remain subject to native service
 policy. Reuse this bridge when adding actions; it does not grant new native
 capabilities that the underlying services do not implement.
+
+## Let windows hold desktop pets
+
+Desktop pets are layer surfaces that use the `denial-pet-v1` protocol: the
+user can drop one on a window's edge or corner, and the window carries it.
+[The protocol](protocol/pet-v1.md) keeps every window's geometry from the
+pet's client, but for roughly where a pet lands, which the speed it is
+dragged at tells it from version 3. The shell decides which window holds a dragged pet, and a
+plugin supplies that rule through the optional, exclusive `ShellPetHolds`
+contract (`package:denial_flutter_sdk/pets.dart`).
+
+```dart
+@Provides(ShellPetHolds)
+final class BottomEdgesOnly implements ShellPetHolds {
+  const BottomEdgesOnly();
+
+  @override
+  DenialPetHold? holdFor(PetDrag drag) {
+    if (!(drag.pet.pet?.accepts(DenialWindowHold.bottom) ?? false)) {
+      return null;
+    }
+    for (final (index, target) in drag.targets.indexed) {
+      final frame = target.frame;
+      if (!target.holdsPets || frame == null) continue;
+      final near = (drag.anchor.dy - frame.bottom).abs() < 24 &&
+          drag.anchor.dx >= frame.left &&
+          drag.anchor.dx <= frame.right;
+      final point = Offset(drag.anchor.dx, frame.bottom);
+      if (near && !drag.coveredBefore(index, point) && drag.onScreen(point)) {
+        return DenialPetHold(
+          windowId: target.window!,
+          hold: DenialWindowHold.bottom,
+          share: (drag.anchor.dx - frame.left) / frame.width,
+        );
+      }
+    }
+    return null;
+  }
+}
+```
+
+- While the user drags a pet, the desktop calls `holdFor` whenever the pet or
+  the scene changes.
+- `PetDrag.targets` lists what the user sees, front to back.
+- Return null to leave the pet free.
+- Denial drops a hold the pet does not accept, or one on a window that is
+  fullscreen or maximized. It applies the last hold when the user lets go.
+
+What a held pet casts on its window, such as a shadow, comes from the
+optional, exclusive `ShellPetShadows` contract. The reference desktop asks it
+for each pet stacked above its window, and draws the answer over the pet's
+rectangle, under every pet the window holds, clipped to the window's visible
+frame. `PetShadow.surface` is the pet's surface as drawn, to shape the
+shadow from its pixels; nothing reaches the pet's client.
+
+```dart
+@Provides(ShellPetShadows)
+final class SoftShadows implements ShellPetShadows {
+  const SoftShadows();
+
+  @override
+  Widget? shadowFor(PetShadow shadow) => Transform.translate(
+    offset: const Offset(0, 3),
+    child: ImageFiltered(
+      imageFilter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
+      child: ColorFiltered(
+        colorFilter: const ColorFilter.mode(Color(0x40000000), BlendMode.srcIn),
+        child: shadow.surface,
+      ),
+    ),
+  );
+}
+```
+
+The built-in `denial_pets` plugin provides the default rule and a contact
+shadow. Deselect it before selecting another provider of either. The
+reference desktop draws held pets with their windows and reports their
+on-screen velocity to the pet. A custom shell that hosts pets does that
+itself, through `DenialBridge.holdPet` and `DenialBridge.carryPet`.
 
 ## Install a local plugin and apply edits
 
@@ -637,6 +772,46 @@ generated entry point of an active Plugin Manager composition.
 `tools/denial-pc refresh` reloads its existing bundle; it does not compile checkout
 edits into it. Edit canonical source, never generated workspaces, kit snapshots,
 or sealed candidates.
+
+### Build-input provenance
+
+`denial-pc plugin-manager` selects explicit **development** provenance when
+using the canonical local Flutter/Skia trees. The kit records their actual HEADs
+and SHA-256 hashes of tracked/untracked dirty inputs, Denial's source state,
+release GN arguments, engine ELF architecture/build ID/checksum, generated
+`dart:ui` declarations, Dart frontend and exact release compiler input hashes.
+Flutter's real framework revision is preserved; the unchanged source lock is
+retained only as CI/release reference metadata, not development source authority.
+The generated runtime checksum describes the copied development engine; no
+committed checksum or source metadata is rewritten.
+
+For a separately requested kit-only operation with an already prepared native
+release graph, run (x86-64 example):
+
+```sh
+tools/prepare-denial-plugin-kit --provenance development \
+  --flutter-root /mnt/exty/denial-flutter-fork-3.44.7 \
+  --engine-root "${XDG_CACHE_HOME:-$HOME/.cache}/denial/flutter-engine/build" \
+  --engine-target denial_host_release --platform linux-x64 \
+  --output /ABSOLUTE/NEW-KIT-DIRECTORY
+```
+
+This command never rebuilds prerequisites. It rejects a stale/noncanonical
+graph, wrong architecture/mode, inconsistent local checksum or metadata, and
+source/compiler movement while copying. Relocated Flutter and Skia roots must
+both be declared with the existing source-root environment variables. A stale
+graph requires a scoped prerequisite decision, not a full distribution build.
+
+Composition compilation verifies this explicit identity and compiler inventory,
+including the exact Dart frontend, instead of claiming a dirty fork matches the
+lock. The source identity is preserved in the sealed candidate and remains
+subject to native installed-source, engine-hash and startup-health gates. These
+hashes identify inputs; they are not signatures or proof that plugins are safe.
+
+The default `--provenance locked-release` path keeps the existing source-lock
+and committed release-engine checks, including the Nix packager's explicit
+locked Flutter attestation. Development mode forbids those packager attestations
+and CI use. Existing schema-1 release kits remain supported unchanged.
 
 ## Distribute a plugin through Git
 

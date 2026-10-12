@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:denial_flutter_sdk/localization.dart';
 import 'package:denial_flutter_sdk/motion.dart';
 import 'package:denial_flutter_sdk/settings.dart';
+import 'package:denial_flutter_sdk/state.dart';
 import 'package:denial_flutter_sdk/shell_theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -12,9 +13,13 @@ import '../profile/desktop_profile.dart';
 import '../profile/profile_avatar.dart';
 import '../state/clipboard_tray.dart';
 import '../state/quick_settings.dart';
+import '../state/reference_shell_presentation.dart';
+import '../state/reference_shell_profile.dart';
 import '../widgets/notification_center.dart';
 import '../widgets/session/power_session_surface.dart';
-import '../widgets/shade/range_bar.dart';
+
+import 'package:denial_flutter_sdk/controls.dart';
+
 import 'desktop_app_volume_manager.dart';
 import 'desktop_audio_device_dropdown.dart';
 import 'desktop_dashboard_bluetooth.dart';
@@ -377,11 +382,26 @@ class _DashboardHeader extends ConsumerWidget {
       desktopNotificationsProvider.select((state) => state.unreadCount),
     );
     final l10n = context.l10n;
+    final presentation = ref.watch(referenceShellPresentationProvider);
+    final singleOutput =
+        (ref.watch(displayLayoutProvider)?.outputs.length ?? 0) <= 1;
 
     return Row(
       children: [
         const Expanded(child: _DashboardProfile()),
         const SizedBox(width: 12),
+        if (singleOutput) ...[
+          DashboardIconButton(
+            semanticLabel: l10n.shellPresentationMobile,
+            icon: Icons.smartphone_rounded,
+            active: presentation == ReferenceShellProfile.mobile,
+            onTap: () {
+              ref.read(desktopWorkspaceProvider.notifier).closePanels();
+              ref.read(referenceShellPresentationProvider.notifier).toggle();
+            },
+          ),
+          const SizedBox(width: 7),
+        ],
         DashboardIconButton(
           key: notificationButtonKey,
           focusNode: notificationFocusNode,

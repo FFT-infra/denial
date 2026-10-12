@@ -3,14 +3,14 @@
 use smithay::backend::input::ButtonState;
 use smithay::desktop::Window;
 use smithay::input::Seat;
+#[cfg(feature = "xwayland")]
+use smithay::input::pointer::PointerHandle;
 use smithay::input::pointer::{
     AxisFrame, ButtonEvent, GestureHoldBeginEvent, GestureHoldEndEvent, GesturePinchBeginEvent,
     GesturePinchEndEvent, GesturePinchUpdateEvent, GestureSwipeBeginEvent, GestureSwipeEndEvent,
     GestureSwipeUpdateEvent, GrabStartData, MotionEvent, PointerGrab, PointerInnerHandle,
     RelativeMotionEvent,
 };
-#[cfg(feature = "xwayland")]
-use smithay::input::pointer::PointerHandle;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_server::Resource;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -387,6 +387,85 @@ impl PointerGrab<RuntimeState> for MoveSurfaceGrab {
     }
 }
 
+/// The user dragging a desktop pet (`denial-pet-v1`), from a press on it.
+/// Denial moves the layer itself while the shell names what would hold it;
+/// the pet gets no pointer events until it is let go, and then hears only
+/// where.
+#[cfg(feature = "flutter")]
+pub(super) struct PetMoveGrab {
+    start_data: GrabStartData<RuntimeState>,
+    surface: WlSurface,
+    /// Where the pet is held, from its top left.
+    hold: Point<f64, Logical>,
+}
+
+#[cfg(feature = "flutter")]
+impl PetMoveGrab {
+    pub(super) fn new(
+        start_data: GrabStartData<RuntimeState>,
+        surface: WlSurface,
+        hold: Point<f64, Logical>,
+    ) -> Self {
+        Self {
+            start_data,
+            surface,
+            hold,
+        }
+    }
+}
+
+#[cfg(feature = "flutter")]
+impl PointerGrab<RuntimeState> for PetMoveGrab {
+    fn motion(
+        &mut self,
+        data: &mut RuntimeState,
+        handle: &mut PointerInnerHandle<'_, RuntimeState>,
+        _focus: Option<(WlSurface, Point<f64, Logical>)>,
+        event: &MotionEvent,
+    ) {
+        handle.motion(data, None, event);
+        if !event.location.x.is_finite() || !event.location.y.is_finite() {
+            return;
+        }
+        let dragged = data
+            .wayland
+            .as_mut()
+            .and_then(|frontend| frontend.drag_pet(&self.surface, event.location - self.hold));
+        match dragged {
+            Some(id) => data.scene_sync.mark_window_dirty(id),
+            // No longer a pet, or no longer mapped.
+            None => handle.unset_grab(self, data, event.serial, event.time, true),
+        }
+    }
+
+    fn button(
+        &mut self,
+        data: &mut RuntimeState,
+        handle: &mut PointerInnerHandle<'_, RuntimeState>,
+        event: &ButtonEvent,
+    ) {
+        handle.button(data, event);
+        if event.state == ButtonState::Released
+            && !handle.current_pressed().contains(&self.start_data.button)
+        {
+            handle.unset_grab(self, data, event.serial, event.time, true);
+        }
+    }
+
+    forward_pointer_events!();
+
+    fn start_data(&self) -> &GrabStartData<RuntimeState> {
+        &self.start_data
+    }
+
+    fn unset(&mut self, data: &mut RuntimeState) {
+        if let Some(frontend) = data.wayland.as_mut() {
+            frontend.drop_pet(&self.surface);
+        }
+        data.scene_sync.mark_dirty();
+    }
+}
+
 /// Compositor-owned SUPER+drag for managed layouts.
 ///
 /// The layout leaf remains authoritative while Flutter paints the dragged
@@ -421,6 +500,94 @@ impl TileMoveGrab {
             preview_target: None,
             preview: LayoutPreviewSet::default(),
         }
+    }
+
+    pub(super) fn update(
+        &mut self,
+        data: &mut RuntimeState,
+        position: Point<f64, Logical>,
+    ) -> bool {
+        let managed = data
+            .wayland
+            .as_ref()
+            .is_some_and(|frontend| frontend.window_is_layout_managed(&self.window));
+        if !managed || !window_is_mapped(data, &self.window) {
+            return false;
+        }
+        let Some(location) = translated_move_location(
+            self.initial_geometry.loc,
+            self.start_data.location,
+            position,
+        ) else {
+            return true;
+        };
+        self.last_pointer_location = position;
+        self.last_geometry.loc = location;
+        let drop_location = Point::from((
+            round_to_i32_saturating(position.x, self.initial_geometry.loc.x),
+            round_to_i32_saturating(position.y, self.initial_geometry.loc.y),
+        ));
+        let target = data
+            .wayland
+            .as_ref()
+            .expect("missing Wayland frontend")
+            .layout_drop_target_at(&self.window, drop_location, self.preview_target.as_ref());
+        self.update_preview(data, target);
+        super::wayland_frontend::queue_transient_window_placement(
+            data,
+            &self.window,
+            self.last_geometry,
+            WindowPlacementPhase::Update,
+            WindowPlacementChange::Move,
+        );
+        true
+    }
+
+    pub(super) fn finish(&mut self, data: &mut RuntimeState) {
+        data.wayland
+            .as_mut()
+            .expect("missing Wayland frontend")
+            .set_compositor_pointer_grab_active(false);
+        if !window_is_mapped(data, &self.window) {
+            self.clear_preview(data);
+            return;
+        }
+        // Publish one exact release sample even when the button-up races the
+        // frame sampler. Dart folds it into the retained translation before
+        // consuming the authoritative layout destination below.
+        super::wayland_frontend::queue_transient_window_placement(
+            data,
+            &self.window,
+            self.last_geometry,
+            WindowPlacementPhase::Update,
+            WindowPlacementChange::Move,
+        );
+        let final_geometry = {
+            let frontend = data.wayland.as_mut().expect("missing Wayland frontend");
+            if frontend.window_is_layout_managed(&self.window) {
+                let location = Point::from((
+                    round_to_i32_saturating(
+                        self.last_pointer_location.x,
+                        self.initial_geometry.loc.x,
+                    ),
+                    round_to_i32_saturating(
+                        self.last_pointer_location.y,
+                        self.initial_geometry.loc.y,
+                    ),
+                ));
+                frontend.apply_layout_drop(&self.window, location, self.preview_target.clone());
+            }
+            frontend.window_geometry_target(&self.window)
+        };
+        self.clear_preview(data);
+        super::wayland_frontend::queue_transient_window_placement(
+            data,
+            &self.window,
+            final_geometry,
+            WindowPlacementPhase::End,
+            WindowPlacementChange::Move,
+        );
+        data.scene_sync.mark_dirty();
     }
 
     fn update_preview(&mut self, data: &mut RuntimeState, target: Option<LayoutDropTarget>) {
@@ -539,40 +706,9 @@ impl PointerGrab<RuntimeState> for TileMoveGrab {
         event: &MotionEvent,
     ) {
         handle.motion(data, None, event);
-        let managed = data
-            .wayland
-            .as_ref()
-            .is_some_and(|frontend| frontend.window_is_layout_managed(&self.window));
-        if !managed || !window_is_mapped(data, &self.window) {
+        if !self.update(data, event.location) {
             handle.unset_grab(self, data, event.serial, event.time, true);
-            return;
         }
-        let Some(location) = translated_move_location(
-            self.initial_geometry.loc,
-            self.start_data.location,
-            event.location,
-        ) else {
-            return;
-        };
-        self.last_pointer_location = event.location;
-        self.last_geometry.loc = location;
-        let drop_location = Point::from((
-            round_to_i32_saturating(event.location.x, self.initial_geometry.loc.x),
-            round_to_i32_saturating(event.location.y, self.initial_geometry.loc.y),
-        ));
-        let target = data
-            .wayland
-            .as_ref()
-            .expect("missing Wayland frontend")
-            .layout_drop_target_at(&self.window, drop_location, self.preview_target.as_ref());
-        self.update_preview(data, target);
-        super::wayland_frontend::queue_transient_window_placement(
-            data,
-            &self.window,
-            self.last_geometry,
-            WindowPlacementPhase::Update,
-            WindowPlacementChange::Move,
-        );
     }
 
     fn button(
@@ -595,50 +731,7 @@ impl PointerGrab<RuntimeState> for TileMoveGrab {
     }
 
     fn unset(&mut self, data: &mut RuntimeState) {
-        data.wayland
-            .as_mut()
-            .expect("missing Wayland frontend")
-            .set_compositor_pointer_grab_active(false);
-        if !window_is_mapped(data, &self.window) {
-            self.clear_preview(data);
-            return;
-        }
-        // Publish one exact release sample even when the button-up races the
-        // frame sampler. Dart folds it into the retained translation before
-        // consuming the authoritative layout destination below.
-        super::wayland_frontend::queue_transient_window_placement(
-            data,
-            &self.window,
-            self.last_geometry,
-            WindowPlacementPhase::Update,
-            WindowPlacementChange::Move,
-        );
-        let final_geometry = {
-            let frontend = data.wayland.as_mut().expect("missing Wayland frontend");
-            if frontend.window_is_layout_managed(&self.window) {
-                let location = Point::from((
-                    round_to_i32_saturating(
-                        self.last_pointer_location.x,
-                        self.initial_geometry.loc.x,
-                    ),
-                    round_to_i32_saturating(
-                        self.last_pointer_location.y,
-                        self.initial_geometry.loc.y,
-                    ),
-                ));
-                frontend.apply_layout_drop(&self.window, location, self.preview_target.clone());
-            }
-            frontend.window_geometry_target(&self.window)
-        };
-        self.clear_preview(data);
-        super::wayland_frontend::queue_transient_window_placement(
-            data,
-            &self.window,
-            final_geometry,
-            WindowPlacementPhase::End,
-            WindowPlacementChange::Move,
-        );
-        data.scene_sync.mark_dirty();
+        self.finish(data);
     }
 }
 

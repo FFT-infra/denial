@@ -949,6 +949,8 @@ selection. Do not offer Apply solely because startup fell back to the packaged
 shell. A subsequent selection change or newly built candidate can still require
 Apply. Engine compatibility failures must remain enforced; a session using an
 experimental engine cannot load a bundle built for a different engine hash.
+A composition rejected because Denial itself was updated is not a recovery
+error; section 21 rebuilds it instead.
 
 `SelectionPreflight.describe` collects normalized declaration facts and dependency
 edges for disabled as well as enabled installed/catalog packages. Status and
@@ -1137,3 +1139,124 @@ path dependency, and passes lock consistency plus full flake evaluation. The UI
 development workspace performs the equivalent vendoring from Pub's exact resolved
 Git package, so local, packaged, and Nix builds no longer depend on an adjacent
 standalone taskbar checkout.
+
+## 21. Restoring plugins after a Denial update
+
+Every Denial release changes the installed source identity. At the next login
+deniald therefore rejects the composition it last confirmed and starts the
+packaged shell. Previously nothing explained the change: the selection stayed
+saved but inactive until the user opened Plugins and applied it again. A
+package hook cannot rebuild for the user: it runs as root, outside the session,
+possibly without Dart. The rebuild happens in the user's session after login,
+while the packaged shell keeps the desktop usable.
+
+Accepted behavior (2026-10-03):
+
+- deniald treats a rejection as an update only for the selected composition it
+  had confirmed before, and only when validation rejects it for a different
+  Flutter generation or installed source identity. An engine-only mismatch with
+  the same source identity is an engine experiment, not an update. Seal,
+  checksum, manifest, interrupted-start and repeated-start rejections keep the
+  section 17 recovery error.
+- For an update, deniald keeps the selection, reports no error, and publishes
+  `plugin_rebuild: {reason, bundle, version, installed_source}` in its UI
+  state. `reason` is `source` or `flutter_generation`; `version` is the
+  installed release from `share/denial/version`, or the build identity of a
+  development build; `installed_source` is the packaged shell's
+  `.denial-ui-source.json`, absent for a development bundle without one. The
+  field clears when a composition is confirmed or the packaged shell is
+  explicitly restored.
+- deniald starts `denial-plugins resume` once per compositor start when it
+  reports `plugin_rebuild` and the Plugin Manager is installed. The packaged
+  session exports `DENIAL_PLUGINS_BINARY`; otherwise deniald searches `PATH`.
+- `resume` posts a notification at once, submits one detached `rebuild` job,
+  and mirrors only its outcome. The job is visible in Plugins with its stages:
+  preparing, checking compatibility, compiling, verifying, switching when you
+  pause, and applying. A single `resume.lock` keeps one notifier per session.
+- `rebuild` restores the composition deniald was running: that candidate's
+  roots, provider selections, ordering, Pub lock and Git revisions, with
+  built-in sources from the installed release. It never fetches newer plugin
+  revisions; **Check for updates** remains the explicit update operation. When
+  the saved selection is the same composition, the candidate carries the saved
+  revision and nothing remains pending. Otherwise the saved selection stays
+  pending for Apply after the restored composition returns. Built-in roots are
+  the same intent across releases by name; Git and local roots must keep their
+  source. Local plugins are read from their folders as they are now, like
+  Apply.
+- Before compiling, `rebuild` requires the prepared build kit's runtime identity
+  to equal the installed one that deniald reports. A mismatch means the Plugin
+  Manager package and Denial differ; nothing is compiled.
+- An automatic rebuild switches the shell only at a quiet moment: the session is
+  unlocked, no input arrived for 2.5 seconds, the shell does not capture the
+  keyboard, no visible application inhibits idling (a playing video, for
+  example), and no runtime transition is running. deniald reports these facts
+  as `session_activity: {locked, input_idle_ms, shell_captures_keyboard,
+  idle_inhibited}` in every `ui status` reply; the policy lives in the backend,
+  which asks again just after the idle threshold would pass. The manager lock
+  is released while waiting, so Plugins stays usable. Someone watching the
+  rebuild in Plugins is rarely idle, so Plugins offers **Switch now** while it
+  waits (`denial-plugins rebuild-now`). `rebuild --now`, used by Plugins'
+  **Rebuild plugins** and the **Try again** action, switches as soon as it is
+  built, like Apply.
+- Activating a rebuild candidate requires that deniald still waits for the same
+  composition. If the user restored the packaged shell or applied another
+  composition meanwhile, the rebuild finishes without switching.
+- Automatic rebuilding runs once per installed build kit and composition,
+  recorded in `resume.json`. A failed attempt is not repeated at later logins;
+  each later login posts a reminder instead. **Try again** and Plugins'
+  **Rebuild plugins** remain available. A download failure is not a failed
+  attempt: the rebuild continues when NetworkManager reports the connection
+  back, or after 30 seconds, 2 and 5 minutes when nobody can tell, and the
+  next login tries again.
+
+The user sees one notification that changes at most twice. Replacing a
+notification raises its banner again, so stage changes are not published; the
+stage-by-stage progress stays in Plugins.
+
+| State | Title | Actions | Expires |
+| --- | --- | --- | --- |
+| Rebuilding | Bringing back your plugins | Open Plugins | when replaced |
+| Restored | Your plugins are back | What's new (release versions only) | normally |
+| Failed | Your plugins couldn't be rebuilt | Try again, Check for updates, Open Plugins | never |
+| Offline | Your plugins are waiting for a connection | Try again, Open Plugins | never |
+| Later login | Your plugins are still paused | Try again, Check for updates, Open Plugins | normally |
+
+**Check for updates** appears only when the composition has Git plugins.
+The texts say that the plugins and their settings are kept, that no logout is
+needed, and which release the desktop was rebuilt for. They do not mention
+bundles, compositions or source identities.
+
+`resume` stays until the rebuild finishes, even when its progress notification
+was dismissed, because the outcome still matters. Afterwards it keeps running
+only while its notification can still be acted on: it exits when that closes,
+and closes a failure notification itself once deniald no longer reports
+`plugin_rebuild`, because the user fixed it in Plugins or chose the packaged
+shell. A session that stays unavailable for a minute ends it. When the user
+restores the packaged shell during a rebuild, the notification closes quietly.
+Plugins is opened through its desktop entry, with the activation token that
+came with the action; the action is offered only when that entry is
+installed. deniald launches `resume` before its event loop serves
+notifications and control requests, so `resume` waits for both. It never
+D-Bus-activates the notification service: that could start another daemon in
+place of Denial's. Without a notification server the rebuild still runs.
+
+Example copy for Denial 0.3.0:
+
+- Rebuilding: "Denial 0.3.0 is installed. Your plugins and their settings are
+  safe: they're being rebuilt in the background and will come back on their
+  own. No need to log out."
+- Restored: "Everything is as you left it, now on Denial 0.3.0. Thanks for
+  waiting."
+- Failed: "One of them may need an update for Denial 0.3.0. Meanwhile, Denial
+  uses its standard desktop. Your plugins and their settings are safe."
+
+A development build is described as "Denial was updated" or "this Denial
+build", never as a release, and gets no **What's new** action.
+
+Follow-up, not implemented: building the new composition before the next login.
+The old session keeps running after a package upgrade, so the manager could
+notice the new build kit, rebuild in the background, and stage the result for
+deniald to try first at the next login with the usual startup confirmation.
+This needs a staged-candidate field that the old compositor never rewrites, and
+must not activate a candidate in the old session: that compositor still maps the
+old engine while validating against the new files on disk.

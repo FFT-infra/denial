@@ -8,6 +8,8 @@ import 'package:denial_flutter_sdk/shell_color_scheme.dart';
 import 'package:denial_flutter_sdk/shell_theme.dart';
 import 'package:denial_flutter_sdk/rendering.dart';
 
+import 'desktop_visibility_transition.dart';
+
 /// Plays a desktop window's terminal visual without retaining native input.
 ///
 /// [child] contains the compositor-leased final external texture until
@@ -129,7 +131,10 @@ class _DesktopWindowCloseAnimationState
                         cornerRadiusScale: theme.cornerRadiusScale,
                       )
                     : null,
-                child: Opacity(
+                // The shadow and surface fade individually. An opacity group
+                // here would allocate a new offscreen layer for every frame of
+                // the shrinking, rotating window.
+                child: DesktopPresentationOpacity(
                   opacity: transform.opacity,
                   child: Transform.rotate(
                     angle: transform.rotation,

@@ -20,7 +20,7 @@ class DesktopPanelOverlay extends ConsumerStatefulWidget {
     required this.panelDurationScale,
     required this.applicationSearchFocusNode,
     required this.onOpenLauncher,
-    required this.onDismissLauncher,
+    required this.onDismissPanel,
     required this.onOpenDashboard,
     required this.onOpenSettings,
     required this.onCancelPanelClose,
@@ -36,7 +36,7 @@ class DesktopPanelOverlay extends ConsumerStatefulWidget {
   final double panelDurationScale;
   final FocusNode applicationSearchFocusNode;
   final VoidCallback onOpenLauncher;
-  final VoidCallback onDismissLauncher;
+  final VoidCallback onDismissPanel;
   final VoidCallback onOpenDashboard;
   final VoidCallback onOpenSettings;
   final VoidCallback onCancelPanelClose;
@@ -60,7 +60,7 @@ class _DesktopPanelOverlayState extends ConsumerState<DesktopPanelOverlay> {
         identical(cached.searchFocusNode, widget.applicationSearchFocusNode) &&
         cached.onEnter == widget.onCancelPanelClose &&
         cached.onExit == widget.onSchedulePanelClose &&
-        cached.onDismiss == widget.onDismissLauncher &&
+        cached.onDismiss == widget.onDismissPanel &&
         cached.onLaunch == widget.onLaunchApp &&
         cached.onLaunchLocal == widget.onLaunchLocalApp) {
       return cached;
@@ -69,7 +69,7 @@ class _DesktopPanelOverlayState extends ConsumerState<DesktopPanelOverlay> {
       searchFocusNode: widget.applicationSearchFocusNode,
       onEnter: widget.onCancelPanelClose,
       onExit: widget.onSchedulePanelClose,
-      onDismiss: widget.onDismissLauncher,
+      onDismiss: widget.onDismissPanel,
       onLaunch: widget.onLaunchApp,
       onLaunchLocal: widget.onLaunchLocalApp,
     );
@@ -124,22 +124,23 @@ class _DesktopPanelOverlayState extends ConsumerState<DesktopPanelOverlay> {
     final launcherOpen =
         hasLauncher && panelState.panel == DesktopPanel.launcher;
     final dashboardOpen = panelState.panel == DesktopPanel.dashboard;
+    final panelOpen = launcherOpen || dashboardOpen;
 
     return Stack(
       fit: StackFit.expand,
       children: <Widget>[
         Positioned.fill(
-          key: const ValueKey<String>('desktop-launcher-dismiss-barrier'),
+          key: const ValueKey<String>('desktop-panel-dismiss-barrier'),
           child: ShellInputRegion(
-            debugLabel: 'Desktop launcher dismiss barrier',
-            active: launcherOpen,
+            debugLabel: 'Desktop panel dismiss barrier',
+            active: panelOpen,
             pointerPolicy: ShellPointerPolicy.fullScene,
             keyboardPolicy: ShellKeyboardPolicy.none,
             child: IgnorePointer(
-              ignoring: !launcherOpen,
+              ignoring: !panelOpen,
               child: GestureDetector(
                 behavior: HitTestBehavior.opaque,
-                onTap: widget.onDismissLauncher,
+                onTap: widget.onDismissPanel,
               ),
             ),
           ),

@@ -9,7 +9,7 @@ use denial_flutter_engine::{EngineEvent, EngineHost, ScheduledTask, sys};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_pointer,
-    delegate_registry, delegate_seat, delegate_xdg_shell, delegate_xdg_window,
+    delegate_registry, delegate_seat, delegate_touch, delegate_xdg_shell, delegate_xdg_window,
     output::{OutputHandler, OutputState},
     reexports::{
         calloop::{EventLoop, LoopHandle, channel},
@@ -27,6 +27,7 @@ use smithay_client_toolkit::{
             AxisScroll, PointerEvent, PointerEventKind, PointerHandler,
             cursor_shape::CursorShapeManager,
         },
+        touch::TouchHandler,
     },
     shell::{
         WaylandSurface,
@@ -43,19 +44,21 @@ use smithay_client_toolkit::{
 use wayland_client::{
     Connection, QueueHandle,
     globals::registry_queue_init,
-    protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface},
+    protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface, wl_touch},
 };
 
-use crate::{config::Config, platform::Platform, renderer::Renderer};
+use crate::touch::{TouchEvent, TouchInput};
+use crate::{AppExtension, config::Config, platform::Platform, renderer::Renderer};
 
 pub enum Event {
     Engine(EngineEvent),
     Presented,
     Error(String),
     PlatformReply(denial_flutter_engine::PlatformMessage, Vec<u8>),
+    TextureAvailable(i64),
 }
 
-pub fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run(config: Config, extension: AppExtension) -> Result<(), Box<dyn std::error::Error>> {
     let connection = Connection::connect_to_env()?;
     let (globals, queue) = registry_queue_init(&connection)?;
     let qh = queue.handle();
@@ -105,6 +108,8 @@ pub fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         cursor_device: None,
         keyboard: None,
         pointer: None,
+        touch: None,
+        touch_input: TouchInput::default(),
         input_seat: None,
         loop_handle: handle,
         qh,
@@ -115,6 +120,7 @@ pub fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         scale: 1,
         config,
         platform: Platform::default(),
+        extension,
         tasks: BTreeMap::new(),
         task_sequence: 0,
         vsync: Vec::new(),
@@ -150,6 +156,9 @@ pub fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     })();
     // Shutdown joins engine workers before releasing EGL or Wayland resources,
     // including when event dispatch or a native callback reports an error.
+    for texture in &app.extension.textures {
+        texture.set_notifier(None);
+    }
     let shutdown = app.host.take().map(EngineHost::shutdown).transpose();
     app.renderer.take();
     result?;
@@ -191,6 +200,8 @@ struct App {
     cursor_device: Option<WpCursorShapeDeviceV1>,
     keyboard: Option<wl_keyboard::WlKeyboard>,
     pointer: Option<wl_pointer::WlPointer>,
+    touch: Option<wl_touch::WlTouch>,
+    touch_input: TouchInput,
     input_seat: Option<wl_seat::WlSeat>,
     loop_handle: LoopHandle<'static, App>,
     qh: QueueHandle<App>,
@@ -201,6 +212,7 @@ struct App {
     height: u32,
     scale: u32,
     platform: Platform,
+    extension: AppExtension,
     tasks: BTreeMap<(u64, u64), ScheduledTask>,
     task_sequence: u64,
     vsync: Vec<isize>,
@@ -232,6 +244,7 @@ impl App {
             self.surface.wl_surface(),
             self.physical_size(),
             self.events.clone(),
+            self.extension.textures.clone(),
         )?);
         let host = EngineHost::start_with_dart_arguments(
             &self.config.project,
@@ -240,6 +253,17 @@ impl App {
         )?;
         self.renderer = Some(renderer);
         self.host = Some(host);
+        for texture in &self.extension.textures {
+            self.host
+                .as_ref()
+                .unwrap()
+                .engine()
+                .register_external_texture(texture.id())?;
+            let events = self.events.clone();
+            texture.set_notifier(Some(Arc::new(move |id| {
+                let _ = events.send(Event::TextureAvailable(id));
+            })));
+        }
         self.metrics()?;
         let engine = self.host.as_ref().unwrap().engine();
         engine.send_platform_message(
@@ -337,7 +361,15 @@ impl App {
                     });
                     return;
                 }
-                let reply = self.platform.handle(&message.channel, &message.data);
+                let mut reply = self.platform.handle(&message.channel, &message.data);
+                if reply.data.is_empty()
+                    && !reply.close
+                    && reply.cursor.is_none()
+                    && let Some(handler) = &self.extension.platform_handler
+                    && let Some(data) = handler.handle(&message.channel, &message.data)
+                {
+                    reply.data = data;
+                }
                 if let Some(cursor) = reply.cursor {
                     self.cursor = cursor;
                     self.apply_cursor();
@@ -356,6 +388,21 @@ impl App {
                     && let Err(error) = host.respond(&mut message, &data)
                 {
                     self.fail(error);
+                }
+            }
+            Event::TextureAvailable(id) => {
+                if let Some(texture) = self
+                    .extension
+                    .textures
+                    .iter()
+                    .find(|texture| texture.id() == id)
+                {
+                    texture.acknowledge_notification();
+                    if let Some(host) = &self.host
+                        && let Err(error) = host.engine().mark_external_texture_frame_available(id)
+                    {
+                        self.fail(error);
+                    }
                 }
             }
         }
@@ -509,6 +556,23 @@ impl App {
             ..Default::default()
         };
         if let Err(error) = host.engine().send_pointer_events(&[event]) {
+            self.fail(error);
+        }
+    }
+
+    fn touch_events(&mut self, events: Vec<TouchEvent>) {
+        let Some(host) = &self.host else {
+            return;
+        };
+        if events.is_empty() {
+            return;
+        }
+        let timestamp = (host.engine().current_time_nanos() / 1000) as usize;
+        let events = events
+            .into_iter()
+            .map(|event| event.into_flutter(self.scale, timestamp))
+            .collect::<Vec<_>>();
+        if let Err(error) = host.engine().send_pointer_events(&events) {
             self.fail(error);
         }
     }
@@ -667,6 +731,12 @@ impl SeatHandler for App {
                     Err(error) => self.fail(error),
                 }
             }
+            Capability::Touch if self.touch.is_none() => {
+                match self.seat_state.get_touch(qh, &seat) {
+                    Ok(touch) => self.touch = Some(touch),
+                    Err(error) => self.fail(error),
+                }
+            }
             _ => {}
         }
     }
@@ -699,12 +769,20 @@ impl SeatHandler for App {
                 self.buttons = 0;
                 self.enter_serial = None;
             }
+            Capability::Touch => {
+                let events = self.touch_input.cancel();
+                self.touch_events(events);
+                if let Some(touch) = self.touch.take() {
+                    touch.release();
+                }
+            }
             _ => {}
         }
     }
     fn remove_seat(&mut self, conn: &Connection, qh: &QueueHandle<Self>, seat: wl_seat::WlSeat) {
         self.remove_capability(conn, qh, seat.clone(), Capability::Keyboard);
         self.remove_capability(conn, qh, seat.clone(), Capability::Pointer);
+        self.remove_capability(conn, qh, seat.clone(), Capability::Touch);
         if self.input_seat.as_ref() == Some(&seat) {
             self.input_seat = None;
         }
@@ -792,6 +870,77 @@ impl KeyboardHandler for App {
         _: u32,
     ) {
         self.modifiers = modifiers;
+    }
+}
+
+impl TouchHandler for App {
+    fn down(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_touch::WlTouch,
+        _: u32,
+        _: u32,
+        surface: wl_surface::WlSurface,
+        id: i32,
+        position: (f64, f64),
+    ) {
+        if &surface == self.surface.wl_surface() {
+            let events = self.touch_input.down(id, position);
+            self.touch_events(events);
+        }
+    }
+
+    fn up(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_touch::WlTouch,
+        _: u32,
+        _: u32,
+        id: i32,
+    ) {
+        let events = self.touch_input.up(id);
+        self.touch_events(events);
+    }
+
+    fn motion(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_touch::WlTouch,
+        _: u32,
+        id: i32,
+        position: (f64, f64),
+    ) {
+        let events = self.touch_input.motion(id, position);
+        self.touch_events(events);
+    }
+
+    fn cancel(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_touch::WlTouch) {
+        let events = self.touch_input.cancel();
+        self.touch_events(events);
+    }
+
+    fn shape(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_touch::WlTouch,
+        _: i32,
+        _: f64,
+        _: f64,
+    ) {
+    }
+
+    fn orientation(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_touch::WlTouch,
+        _: i32,
+        _: f64,
+    ) {
     }
 }
 
@@ -940,6 +1089,7 @@ delegate_output!(App);
 delegate_seat!(App);
 delegate_keyboard!(App);
 delegate_pointer!(App);
+delegate_touch!(App);
 delegate_xdg_shell!(App);
 delegate_xdg_window!(App);
 delegate_layer!(App);

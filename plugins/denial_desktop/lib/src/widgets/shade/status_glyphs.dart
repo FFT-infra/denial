@@ -1,3 +1,4 @@
+import 'package:denial_flutter_sdk/controls.dart';
 import 'package:flutter/material.dart' show Icons;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -178,40 +179,6 @@ class BatteryIconMark extends StatelessWidget {
   }
 }
 
-/// Wi-Fi status icon.
-class WifiMark extends StatelessWidget {
-  const WifiMark({
-    super.key,
-    required this.active,
-    this.strength = 0,
-    this.size = 17,
-    this.color,
-  });
-
-  final bool active;
-  final int strength;
-  final double size;
-  final Color? color;
-
-  @override
-  Widget build(BuildContext context) {
-    final foreground = color ?? context.shellColors.textPrimary;
-    return Icon(
-      !active
-          ? Icons.wifi_off_rounded
-          : strength == 0
-          ? Icons.signal_wifi_0_bar
-          : strength < 34
-          ? Icons.network_wifi_1_bar
-          : strength < 67
-          ? Icons.network_wifi_2_bar
-          : Icons.wifi_rounded,
-      color: active ? foreground : foreground.withValues(alpha: 0.35),
-      size: size,
-    );
-  }
-}
-
 /// Four ascending pill bars.
 class SignalGlyph extends StatelessWidget {
   const SignalGlyph({
@@ -318,35 +285,45 @@ class MobileConnectivityMarks extends ConsumerWidget {
         .watch(networkConnectivityProvider)
         .snapshot
         .connectedNetwork;
-    final mobile =
-        ref.watch(mobileNetworkProvider).value ?? const MobileNetworkSnapshot();
+    final discovery = ref.watch(mobileNetworkProvider);
+    final lastMobile = discovery.value ?? const MobileNetworkSnapshot();
+    final mobile = discovery.isLoading || discovery.hasError
+        ? lastMobile.unavailable()
+        : lastMobile;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Semantics(
-          label: mobile.connected
-              ? context.l10n.mobileConnected
-              : context.l10n.mobileDisconnected,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              SignalGlyph(
-                active: mobile.registered,
-                strength: mobile.strength,
-                scale: 1.25 * scale,
-                color: color,
-              ),
-              if (!mobile.connected)
-                Icon(
-                  Icons.priority_high_rounded,
-                  size: 12 * scale,
+        // Hide only a confirmed absent SIM. Discovery/loading failure remains
+        // visible as unavailable; modem and WWAN policy are not SIM presence.
+        if (mobile.showCellular) ...[
+          Semantics(
+            label: mobile.cellularWorking
+                ? context.l10n.mobileConnected
+                : mobile.simPresence == MobileSimPresence.unknown ||
+                      !mobile.managerAvailable
+                ? context.l10n.mobileUnavailable
+                : context.l10n.mobileDisconnected,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SignalGlyph(
+                  active: mobile.cellularWorking,
+                  strength: mobile.strength,
+                  scale: 1.25 * scale,
                   color: color,
                 ),
-            ],
+                if (!mobile.cellularWorking)
+                  Icon(
+                    Icons.priority_high_rounded,
+                    size: 12 * scale,
+                    color: color,
+                  ),
+              ],
+            ),
           ),
-        ),
-        SizedBox(width: 7 * scale),
-        WifiMark(
+          SizedBox(width: 7 * scale),
+        ],
+        WifiStatusIcon(
           active: wifi != null,
           strength: wifi?.strength ?? 0,
           size: 20 * scale,

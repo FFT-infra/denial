@@ -10,9 +10,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:denial_flutter_sdk/localization.dart';
 import 'package:denial_flutter_sdk/system_services.dart';
+import 'package:denial_flutter_sdk/settings.dart';
 import 'package:denial_flutter_sdk/state.dart';
 
 import '../../state/quick_settings.dart';
+import '../../state/reference_shell_presentation.dart';
+import '../../state/reference_shell_profile.dart';
 
 import 'package:denial_flutter_sdk/motion.dart';
 import 'package:denial_flutter_sdk/shell_theme.dart';
@@ -26,7 +29,9 @@ import '../session/power_session_surface.dart';
 import 'package:denial_flutter_sdk/effects.dart';
 
 import 'quick_settings_tiles.dart';
-import 'range_bar.dart';
+
+import 'package:denial_flutter_sdk/controls.dart';
+
 import 'mobile_notification_history.dart';
 import 'shade_backdrop_scene.dart';
 import 'shade_dismiss_gesture.dart';
@@ -574,47 +579,98 @@ class _QuickSettingsTilesSection extends ConsumerWidget {
         bluetooth.serviceAvailable &&
         bluetooth.available &&
         !bluetooth.powerChanging;
-    return QuickSettingsTiles(
-      expansionProgress: progress,
-      mobileDataTile: const MobileDataTile(),
-      brightnessControl: const _BrightnessRangeBar(),
-      volumeControl: const _VolumeRangeBar(),
-      wifi:
-          networkSnapshot.wirelessEnabled &&
-          networkSnapshot.wifiDeviceAvailable,
-      wifiSubtitle: wifiStatusLabel(network, l10n),
-      wifiEnabled: wifiToggleEnabled,
-      wifiBusy: network.radioChanging,
-      bluetooth: bluetooth.powered && bluetooth.available,
-      bluetoothSubtitle: bluetoothStatusLabel(bluetooth, l10n),
-      bluetoothEnabled: bluetoothToggleEnabled,
-      bluetoothBusy: bluetooth.powerChanging,
-      dnd: notificationPolicy.doNotDisturb,
-      dndReady: notificationPolicy.loaded,
-      profile: profile,
-      onToggleWifi: networkController.toggleWireless,
-      onOpenWifi: () {
-        ref
-            .read(shellPopupControllerProvider.notifier)
-            .show(
-              keyName: 'wifi-details',
-              debugLabel: 'Wi-Fi details',
-              builder: (_, handle) => WifiDetailSurface(onClose: handle.close),
-            );
-      },
-      onToggleBluetooth: bluetoothController.togglePower,
-      onOpenBluetooth: () {
-        ref
-            .read(shellPopupControllerProvider.notifier)
-            .show(
-              keyName: 'bluetooth-details',
-              debugLabel: 'Bluetooth details',
-              builder: (_, handle) =>
-                  BluetoothDetailSurface(onClose: handle.close),
-            );
-      },
-      onToggleDnd: notificationController.toggleDoNotDisturb,
-      onCycleProfile: quickSettingsController.cycleProfile,
+    final rotationLock = ref.watch(rotationLockProvider);
+    final presentation = ref.watch(referenceShellPresentationProvider);
+    final singleOutput =
+        (ref.watch(displayLayoutProvider)?.outputs.length ?? 0) <= 1;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        QuickSettingsTiles(
+          expansionProgress: progress,
+          mobileDataTile: const MobileDataTile(),
+          brightnessControl: const _BrightnessRangeBar(),
+          volumeControl: const _VolumeRangeBar(),
+          wifi:
+              networkSnapshot.wirelessEnabled &&
+              networkSnapshot.wifiDeviceAvailable,
+          wifiSubtitle: wifiStatusLabel(network, l10n),
+          wifiEnabled: wifiToggleEnabled,
+          wifiBusy: network.radioChanging,
+          bluetooth: bluetooth.powered && bluetooth.available,
+          bluetoothSubtitle: bluetoothStatusLabel(bluetooth, l10n),
+          bluetoothEnabled: bluetoothToggleEnabled,
+          bluetoothBusy: bluetooth.powerChanging,
+          dnd: notificationPolicy.doNotDisturb,
+          dndReady: notificationPolicy.loaded,
+          profile: profile,
+          onToggleWifi: networkController.toggleWireless,
+          onOpenWifi: () {
+            ref
+                .read(shellPopupControllerProvider.notifier)
+                .show(
+                  keyName: 'wifi-details',
+                  debugLabel: 'Wi-Fi details',
+                  builder: (_, handle) =>
+                      WifiDetailSurface(onClose: handle.close),
+                );
+          },
+          onToggleBluetooth: bluetoothController.togglePower,
+          onOpenBluetooth: () {
+            ref
+                .read(shellPopupControllerProvider.notifier)
+                .show(
+                  keyName: 'bluetooth-details',
+                  debugLabel: 'Bluetooth details',
+                  builder: (_, handle) =>
+                      BluetoothDetailSurface(onClose: handle.close),
+                );
+          },
+          onToggleDnd: notificationController.toggleDoNotDisturb,
+          onCycleProfile: quickSettingsController.cycleProfile,
+        ),
+        if (rotationLock.supported) ...[
+          const SizedBox(height: QuickSettingsGridMetrics.gutter),
+          SizedBox(
+            height: QuickSettingsGridMetrics.capsule,
+            child: QuickTile(
+              icon: rotationLock.locked
+                  ? Icons.screen_lock_rotation_rounded
+                  : Icons.screen_rotation_rounded,
+              title: l10n.quickSettingsRotation,
+              subtitle: rotationLock.error != null
+                  ? l10n.commonError
+                  : (rotationLock.locked
+                        ? l10n.quickSettingsLocked
+                        : l10n.quickSettingsAutomatic),
+              active: rotationLock.locked,
+              enabled: !rotationLock.busy,
+              busy: rotationLock.busy,
+              wide: true,
+              onTap: () => ref.read(rotationLockProvider.notifier).toggle(),
+            ),
+          ),
+        ],
+        if (singleOutput) ...[
+          const SizedBox(height: QuickSettingsGridMetrics.gutter),
+          SizedBox(
+            height: QuickSettingsGridMetrics.capsule,
+            child: QuickTile(
+              icon: Icons.desktop_windows_rounded,
+              title: l10n.shellPresentationDesktop,
+              subtitle: presentation == ReferenceShellProfile.desktop
+                  ? l10n.commonOn
+                  : l10n.commonOff,
+              active: presentation == ReferenceShellProfile.desktop,
+              wide: true,
+              onTap: () {
+                ref.read(referenceShellProvider.notifier).closeQuickSettings();
+                ref.read(referenceShellPresentationProvider.notifier).toggle();
+              },
+            ),
+          ),
+        ],
+      ],
     );
   }
 }
@@ -635,6 +691,7 @@ class _BrightnessRangeBar extends ConsumerWidget {
     final controller = ref.read(displayBrightnessProvider.notifier);
     return VerticalRangeBar(
       translucentTrack: true,
+      iconScale: ShadeReferenceGeometry.inverseScaleOf(context),
       icon: Icons.brightness_6_rounded,
       value: brightness,
       activeColor: ShellTheme.of(context).accent,
@@ -660,6 +717,7 @@ class _VolumeRangeBar extends ConsumerWidget {
     final controller = ref.read(quickSettingsProvider.notifier);
     return VerticalRangeBar(
       translucentTrack: true,
+      iconScale: ShadeReferenceGeometry.inverseScaleOf(context),
       icon: Icons.volume_up_rounded,
       value: volume,
       activeColor: ShellTheme.of(context).accent,

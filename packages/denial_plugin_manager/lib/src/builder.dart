@@ -6,8 +6,10 @@ import 'package:path/path.dart' as p;
 import 'model.dart';
 import 'progress.dart';
 import 'build_cache.dart';
+import 'build_provenance.dart';
 import 'source.dart';
 import 'store.dart';
+import 'workspace.dart';
 
 /// Builds only the generated Flutter application using existing pinned release
 /// engine artifacts. It never rebuilds Rust/the engine or modifies active files.
@@ -42,11 +44,7 @@ final class CompositionBuilder {
         'A successful, unbuilt plan is required',
       );
     }
-    if (plan['selectionRevision'] != store.selection['revision']) {
-      throw const CompositionException(
-        'Selection changed since this plan; plan again',
-      );
-    }
+    requireCurrentPlan(store, plan);
     if (plan['inputDigest'] !=
         treeDigest(Directory(p.join(candidate, 'packages')))) {
       throw const CompositionException(
@@ -98,14 +96,7 @@ final class CompositionBuilder {
     final version = jsonDecode(
       await run(flutter, ['--version', '--machine']),
     ) as Map<String, Object?>;
-    final locked = plan['engineSourceLock'] as Map<String, Object?>?;
-    if (locked == null ||
-        version['frameworkRevision'] !=
-            (locked['flutter']! as Map)['revision']) {
-      throw const CompositionException(
-        'Flutter toolchain does not match the runtime source lock',
-      );
-    }
+    verifyBuildProvenance(plan, version, engineRoot, engineTarget, platform);
     final runtimeRoot = plan['runtimeRoot']! as String;
     final engine = p.join(
       runtimeRoot,
@@ -131,7 +122,7 @@ final class CompositionBuilder {
         ) !=
         checksum) {
       throw const CompositionException(
-        'Compiler output root does not contain the pinned release engine',
+        'Compiler output root does not contain the attested release engine',
       );
     }
     final output = p.join(candidate, 'assembly');

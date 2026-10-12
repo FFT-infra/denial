@@ -35,7 +35,10 @@ class WelcomeApplication extends ConsumerStatefulWidget {
 }
 
 class _WelcomeApplicationState extends ConsumerState<WelcomeApplication> {
-  static const _channel = MethodChannel('denial/settings_activation');
+  static const _channel = MethodChannel(
+    'denial/settings_activation',
+    JSONMethodCodec(),
+  );
   final _store = WelcomeStore();
   int _step = 0;
   bool _finishing = false;

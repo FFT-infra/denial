@@ -24,6 +24,7 @@ class ReferenceInputLayoutCoordinator {
     required ReferenceShellState state,
     required Size viewSize,
     required ShellInteractionSnapshot interactions,
+    double topInset = 0.0,
   }) {
     if (viewSize.width <= 0 || viewSize.height <= 0) {
       return;
@@ -104,6 +105,7 @@ class ReferenceInputLayoutCoordinator {
             viewSize: viewSize,
             contentOffset: contentOffset,
             inputBottom: inputBottom,
+            topInset: topInset,
           );
 
     _publishInputLayout(
@@ -121,6 +123,7 @@ class ReferenceInputLayoutCoordinator {
     required Size viewSize,
     required double contentOffset,
     required double inputBottom,
+    required double topInset,
   }) {
     final frame = window.presentationCoordinateRect;
     final content = window.contentCoordinateRect;
@@ -130,10 +133,11 @@ class ReferenceInputLayoutCoordinator {
     // Match the texture's top-centred BoxFit.cover, including the interval
     // between an output configure and the client's replacement buffer.
     final widthScale = viewSize.width / frame.width;
-    final heightScale = viewSize.height / frame.height;
+    final heightScale =
+        (viewSize.height - topInset).clamp(0.0, viewSize.height) / frame.height;
     final scale = widthScale > heightScale ? widthScale : heightScale;
     final frameLeft = (viewSize.width - frame.width * scale) / 2.0;
-    final frameTop = -contentOffset;
+    final frameTop = topInset - contentOffset;
     final fullContentRect = Rect.fromLTWH(
       frameLeft,
       frameTop,
@@ -146,7 +150,7 @@ class ReferenceInputLayoutCoordinator {
       content.width * scale,
       content.height * scale,
     );
-    final clip = Rect.fromLTRB(0, 0, viewSize.width, inputBottom);
+    final clip = Rect.fromLTRB(0, topInset, viewSize.width, inputBottom);
     final rect = clientRect.intersect(clip);
     if (rect.isEmpty) {
       return const <InputWindowRegion>[];
@@ -229,6 +233,7 @@ class ReferenceInputLayoutCoordinator {
       visibleSurfaceIds: visibleSurfaceIds.toList(growable: false),
       keyboardCapture: keyboardCapture,
       exclusiveShellMode: exclusiveShellMode,
+      mobilePresentation: true,
     );
     if (_lastInputLayoutSnapshot?.hasSameRoutingAs(snapshot) ?? false) {
       return;

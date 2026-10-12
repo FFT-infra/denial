@@ -926,9 +926,13 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
           ),
         )
         .windows;
-    final layerSurfaces = ref.watch(
-      referenceShellProvider.select((state) => state.layerSurfaces),
-    );
+    final layerSurfaces = ref
+        .watch(
+          referenceShellProvider.select(
+            (state) => DesktopSceneLayerSurfaces(state.layerSurfaces),
+          ),
+        )
+        .layerSurfaces;
     final animations = ref.watch(
       shellSettingsProvider.select((settings) => settings.animations),
     );
@@ -985,8 +989,9 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
               mainOutputRect: mainOutput?.logicalRect,
               applicationSearchFocusNode: _applicationSearchFocusNode,
               onOpenLauncher: _openLauncher,
-              onDismissLauncher: _closePanels,
+              onDismissPanel: _closePanels,
               onOpenDashboard: _openDashboard,
+              onToggleDashboard: _toggleDashboard,
               onCloseWallpaperSelector: _closeWallpaperSelector,
               onOpenSettings: _openSettings,
               onOpenPowerSettings: _openPowerSettings,
@@ -1020,6 +1025,8 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
         ref: ref,
         onOpenPowerSettings: _openPowerSettings,
         onToggleLauncher: _toggleLauncher,
+        onOpenDashboard: _openDashboard,
+        onToggleDashboard: _toggleDashboard,
       ),
       child: scene,
     );
