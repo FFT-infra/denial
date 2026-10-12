@@ -2,8 +2,8 @@
   "schema": 1,
   "upstream_repository": "https://github.com/denialwm/denial.git",
   "upstream_branch": "dev",
-  "upstream_revision": "874602e3e67b8c8de457a464baf6e0ee30fc54ef",
-  "engine_source_lock_sha256": "13bd80e89eeec9139c44043cfb1b0f8f0f0b1db7d11e13969838a35e52c7dd3c",
+  "upstream_revision": "31c95badf872fe63c3418e34ef33d056053b0168",
+  "engine_source_lock_sha256": "fe890823a8c86ec41815f9a5994335a7f9a12d440aeab0e229c1d13022e2e47f",
   "flutter_version": "3.47.5",
   "dart_version": "3.13.4",
   "taskbar": {
