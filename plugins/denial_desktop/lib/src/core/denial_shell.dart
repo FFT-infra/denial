@@ -11,6 +11,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:denial_flutter_sdk/environment.dart';
 
 import '../desktop/desktop_input_layout_publisher.dart';
+import '../diagnostics/desktop_benchmark_binding.dart';
 import '../desktop/desktop_pet_holds.dart';
 
 import 'package:denial_flutter_sdk/localization.dart';
@@ -25,6 +26,7 @@ import '../widgets/low_battery_notification_binding.dart';
 import 'package:denial_flutter_sdk/rendering.dart';
 
 import '../widgets/edge_panel_layer.dart';
+import '../widgets/input_deck/input_deck_layer.dart';
 import '../widgets/screenshot_selection_layer.dart';
 
 import 'package:denial_flutter_sdk/shell.dart';
@@ -172,7 +174,7 @@ class DenialShell extends ConsumerWidget {
           child: LowBatteryNotificationBinding(
             child: _ShellEnvironment(
               profile: effectivePresentation,
-              child: content,
+              child: DesktopBenchmarkBinding(child: content),
             ),
           ),
         ),
@@ -210,13 +212,14 @@ class _ProfileScene extends StatelessWidget {
                 chrome: scene.chrome,
               ),
             ),
-            if (policyProfile == ReferenceShellProfile.mobile)
-              const MobileSystemKeyboardLayer(),
+            const SystemKeyboardLayer(),
           ],
         ),
       ),
       ReferenceShellProfile.desktop => DesktopInputLayoutPublisher(
-        softwareKeyboardEnabled: policyProfile == ReferenceShellProfile.mobile,
+        // The startup profile controls automatic pop-up, not access to the
+        // manual edge gesture. Desktop-first touch devices need it too.
+        softwareKeyboardEnabled: true,
         child: DesktopPetHoldPublisher(
           child: Stack(
             fit: StackFit.expand,
@@ -239,12 +242,12 @@ class _ProfileScene extends StatelessWidget {
                         ),
                       ),
                     ),
+                    const InputDeckLayer(),
                     const ScreenshotSelectionLayer(),
                   ],
                 ),
               ),
-              if (policyProfile == ReferenceShellProfile.mobile)
-                const MobileSystemKeyboardLayer(),
+              const SystemKeyboardLayer(),
             ],
           ),
         ),

@@ -178,24 +178,7 @@ impl InputQueue {
             SmithayInputEvent::PointerMotion { .. }
             | SmithayInputEvent::PointerMotionAbsolute { .. } => {}
             SmithayInputEvent::PointerButton { event, .. } => {
-                let Some(mask) = mouse_button_mask(event.button_code()) else {
-                    return;
-                };
-                self.ensure_mouse_added();
-                let was_pressed = self.pointer_buttons != 0;
-                match event.state() {
-                    ButtonState::Pressed => self.pointer_buttons |= mask,
-                    ButtonState::Released => self.pointer_buttons &= !mask,
-                }
-                let is_pressed = self.pointer_buttons != 0;
-                self.push_mouse(
-                    match (was_pressed, is_pressed) {
-                        (false, true) => sys::FlutterPointerPhase_kDown,
-                        (true, false) => sys::FlutterPointerPhase_kUp,
-                        _ => sys::FlutterPointerPhase_kMove,
-                    },
-                    false,
-                );
+                self.handle_pointer_button(event.button_code(), event.state())
             }
             SmithayInputEvent::PointerAxis { event, .. } => {
                 if event.source() == AxisSource::Finger {
@@ -296,6 +279,31 @@ impl InputQueue {
     /// desktop pixels. Output rotation is owned by the compositor, so passing
     /// libinput's native-axis coordinates through `position_transformed`
     /// would make Flutter disagree with Wayland hit testing.
+    pub fn pointer_button_held(&self, button: u32) -> bool {
+        mouse_button_mask(button).is_some_and(|mask| self.pointer_buttons & mask != 0)
+    }
+
+    pub fn handle_pointer_button(&mut self, button_code: u32, button_state: ButtonState) {
+        let Some(mask) = mouse_button_mask(button_code) else {
+            return;
+        };
+        self.ensure_mouse_added();
+        let was_pressed = self.pointer_buttons != 0;
+        match button_state {
+            ButtonState::Pressed => self.pointer_buttons |= mask,
+            ButtonState::Released => self.pointer_buttons &= !mask,
+        }
+        let is_pressed = self.pointer_buttons != 0;
+        self.push_mouse(
+            match (was_pressed, is_pressed) {
+                (false, true) => sys::FlutterPointerPhase_kDown,
+                (true, false) => sys::FlutterPointerPhase_kUp,
+                _ => sys::FlutterPointerPhase_kMove,
+            },
+            false,
+        );
+    }
+
     pub fn handle_touch_at(
         &mut self,
         event: &SmithayInputEvent<LibinputInputBackend>,
@@ -481,7 +489,7 @@ impl InputQueue {
         }));
     }
 
-    pub(super) fn handle_touchpad_pan_sample(
+    pub(crate) fn handle_touchpad_pan_sample(
         &mut self,
         horizontal: Option<f64>,
         vertical: Option<f64>,

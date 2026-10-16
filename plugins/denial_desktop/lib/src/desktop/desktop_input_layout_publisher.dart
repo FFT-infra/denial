@@ -10,6 +10,7 @@ import 'package:denial_flutter_sdk/models.dart';
 
 import '../state/desktop_window_switcher.dart';
 import '../state/desktop_visibility.dart';
+import '../state/input_deck.dart';
 import '../state/reference_shell_metrics.dart';
 
 import 'package:denial_flutter_sdk/state.dart';
@@ -64,6 +65,7 @@ class _DesktopInputLayoutPublisherState
     );
     ref.watch(desktopWindowSwitcherProvider);
     ref.watch(desktopVisibleProvider);
+    ref.watch(inputDeckProvider.select((deck) => deck.activeOutput != null));
     ref.watch(
       shellSettingsProvider.select(
         (settings) => (
@@ -122,6 +124,8 @@ class _DesktopInputLayoutPublisherState
             snapshotSequence: shell.windowSnapshotSequence,
             windowLayout: settings.windowLayout,
           );
+      final deckActive =
+          !shell.locked && ref.read(inputDeckProvider).activeOutput != null;
       final source = _DesktopInputLayoutSource(
         desktopVisible: ref.read(desktopVisibleProvider),
         viewSize: viewSize,
@@ -138,9 +142,11 @@ class _DesktopInputLayoutPublisherState
         windowLayout: settings.windowLayout,
         softwareKeyboard: (
           enabled:
-              widget.softwareKeyboardEnabled && !shell.launchTransitionActive,
-          visible: shell.edgePanelVisible,
-          progress: shell.edgePanelDragProgress,
+              widget.softwareKeyboardEnabled &&
+              !shell.launchTransitionActive &&
+              !deckActive,
+          visible: !deckActive && shell.edgePanelVisible,
+          progress: deckActive ? 0 : shell.edgePanelDragProgress,
         ),
       );
       if (_lastSource?.hasSameInputsAs(source) ?? false) {

@@ -7,6 +7,8 @@ Flutter channels are outside this inventory.
 | --- | --- | --- | --- |
 | `denial/wire/to_native` | Dart → native | FlatBuffers `DENW` | Input layout, window requests, OSK keys, notification commands, revisioned settings requests |
 | `denial/wire/to_flutter` | Native → Dart | FlatBuffers `DENW` or fixed `DENP` | Window/display state, actions, cursor state, notifications, settings state, ordered placement |
+| `denial/input_deck` | Dart → native | UTF-8 JSON, at most 1 KiB | Embedded-shell input display selection, raw evdev keys, relative motion, buttons, finger axes and touch-cancellation acknowledgements |
+| `denial/input_deck_state` | Native → Dart | UTF-8 JSON | Mapped touch outputs, availability, active reservation and current XKB key legends |
 | `denial/haptics` | Dart → native | 1 byte | Prewarm or tap through the optional hapticd system D-Bus service |
 | `denial/audio` | Dart → native | bounded fixed packet | Read/set default output and enumerate/control application streams |
 | `denial/audio_state` | Native → Dart | 5 bytes | Level and request serial |

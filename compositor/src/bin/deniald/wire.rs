@@ -615,12 +615,41 @@ impl SurfaceRoleDescription {
     }
 }
 
+/// A native merged main-surface image; popups and input retain the real tree.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ClientTextureDescription {
+    pub texture_id: u64,
+    pub width: u32,
+    pub height: u32,
+    pub source_width: f64,
+    pub source_height: f64,
+}
+
+impl ClientTextureDescription {
+    fn valid(self) -> bool {
+        self.texture_id > 0
+            && self.texture_id <= i64::MAX as u64
+            && self.width > 0
+            && self.width <= 8192
+            && self.height > 0
+            && self.height <= 8192
+            && u64::from(self.width) * u64::from(self.height) <= 32 * 1024 * 1024
+            && self.source_width.is_finite()
+            && self.source_height.is_finite()
+            && self.source_width > 0.0
+            && self.source_width <= f64::from(self.width)
+            && self.source_height > 0.0
+            && self.source_height <= f64::from(self.height)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct WindowDescription {
     pub object_id: u64,
     pub surface_id: u64,
     pub window_id: u64,
     pub texture_id: u64,
+    pub client_texture: Option<ClientTextureDescription>,
     pub title: String,
     pub app_id: String,
     pub width: u32,
@@ -962,6 +991,12 @@ fn validate_windows(windows: &[WindowDescription]) -> Result<(), WireError> {
         if window.content_kind == WindowContentKind::LocalFlutter
             && (window.texture_id != 0 || !window.surfaces.is_empty())
         {
+            return Err(WireError::Payload);
+        }
+
+        if window.client_texture.is_some_and(|texture| {
+            !texture.valid() || window.content_kind != WindowContentKind::SurfaceTree
+        }) {
             return Err(WireError::Payload);
         }
 

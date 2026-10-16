@@ -154,12 +154,20 @@ disabled, and lets that client capture the pointer again only after a plain
 click on its window.
 
 Direct touch uses a small compositor-owned gesture vocabulary over normal
-windows. Dragging within the top 48 logical pixels moves the window, pinching
-anywhere resizes it about its center, a two-finger downward swipe begun in that
-top strip minimizes it, and three simultaneous contacts close it. Recognition
+windows. Dragging from a 64-logical-pixel corner moves the window, pinching
+resizes it, and a two-finger downward swipe begun in the bottom 48 logical pixels
+minimizes it. Three- and four-finger swipes use the shared shortcut bindings;
+a four-finger inward crush closes the target window. Recognition
 is resolved before ordinary touch routing; when a later finger promotes a
 client touch to a window gesture, Denial cancels that client sequence and emits
 the same placement, minimize, and close actions used by non-touch controls.
+
+A window pinch requires both contacts to move at least 8 logical pixels, with
+opposing motion and a separation change of at least 16 pixels. Repeated motion
+samples from a resting finger do not establish pinch intent. Once a normal
+one-finger app drag has crossed the drag threshold, adding another finger keeps
+that sequence in the app until release; explicit corner movement and bottom-strip
+window gestures still use their dedicated routes.
 
 `--frames` and `--commit-seconds` remain available for bounded diagnostics.
 

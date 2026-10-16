@@ -69,6 +69,16 @@ fn await_presentable_outputs(
     }
 }
 
+/// Card and render-node aliases share one physical sysfs device. Paths and
+/// DRM minor numbers identify nodes, not GPU ownership.
+fn physical_drm_identity(path: &Path) -> Result<std::path::PathBuf, Box<dyn Error>> {
+    let device = std::fs::metadata(path)?.rdev();
+    let (major, minor) = (libc::major(device), libc::minor(device));
+    Ok(std::fs::canonicalize(format!(
+        "/sys/dev/char/{major}:{minor}/device"
+    ))?)
+}
+
 pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
     #[cfg(not(feature = "flutter"))]
     if options.flutter_bundle.is_some() {
@@ -209,7 +219,9 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
                     let raw_sequence = metadata.as_ref().map(|metadata| metadata.sequence);
                     let now = monotonic_now();
                     let (clock, last_report, warned) = presentation_clocks.entry(crtc).or_default();
-                    let feedback = clock.observe(now, raw_timestamp, raw_sequence);
+                    let blanking_limit = state.presentation_blanking_limits
+                        .get(&crtc).copied().unwrap_or_default();
+                    let feedback = clock.observe(now, raw_timestamp, raw_sequence, blanking_limit);
                     if raw_timestamp.is_some() && feedback.timestamp.is_none() && !*warned {
                         warn!(?crtc, ?raw_timestamp, ?raw_sequence,
                             reason = feedback.timestamp_status,
@@ -225,6 +237,7 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
                             ?raw_sequence, timestamp_status = feedback.timestamp_status,
                             physical_timestamp = feedback.timestamp.is_some(),
                             valid_sequence = feedback.sequence.is_some(),
+                            blanking_limit_us = blanking_limit.as_micros(),
                             "DRM completion metadata audit");
                         *last_report = Some(delivered_at);
                     }
@@ -445,7 +458,12 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
         });
     }
 
-    let cross_device_rendering = render_device != options.device;
+    let cross_device_rendering =
+        physical_drm_identity(render_device)? != physical_drm_identity(&options.device)?;
+    #[cfg(feature = "flutter")]
+    let scene_transfer = options.flutter_bundle.is_some();
+    #[cfg(not(feature = "flutter"))]
+    let scene_transfer = false;
     let gbm = GbmDevice::new(render_fd.clone()).map_err(|error| {
         // This fd is already open. GBM can return ENOENT when loading its
         // backend fails, so its errno must not imply a missing DRM node.
@@ -462,10 +480,18 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
     })?;
     let gbm_flags = GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT;
     let mut allocator = GbmAllocator::new(gbm.clone(), gbm_flags);
+    let scanout_gbm = if scene_transfer {
+        GbmDevice::new(drm_fd.clone())?
+    } else {
+        gbm.clone()
+    };
     let mut scanout_allocator = ScanoutAllocator::gbm(
-        GbmAllocator::new(gbm.clone(), scanout_gbm_flags(cross_device_rendering)),
+        GbmAllocator::new(
+            scanout_gbm,
+            scanout_gbm_flags(cross_device_rendering && !scene_transfer),
+        ),
         drm_fd.clone(),
-        cross_device_rendering,
+        !scene_transfer && render_fd.as_raw_fd() != drm_fd.as_raw_fd(),
     );
     // SAFETY: the GBM device outlives the EGL display, context, renderer and
     // every imported dmabuf created below. All of them are dropped in this
@@ -476,6 +502,25 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
             render_device.display()
         )
     })?;
+    #[cfg(feature = "flutter")]
+    if scene_transfer {
+        scanout_allocator.enable_scene_transfer(gbm.clone(), render_fd.clone(), &egl_display)?;
+    }
+    if let Ok(Some(node)) = smithay::backend::egl::EGLDevice::device_for_display(&egl_display)
+        .and_then(|device| device.try_get_render_node())
+        && let Some(path) = node.dev_path()
+    {
+        let actual = physical_drm_identity(&path)?;
+        if actual != physical_drm_identity(render_device)? {
+            return Err(format!(
+                "EGL selected {} instead of requested scene GPU {}",
+                path.display(),
+                render_device.display()
+            )
+            .into());
+        }
+        info!(node=%path.display(), device=%actual.display(), "verified scene EGL device identity");
+    }
     let mut swapchains = if options.flutter_bundle.is_some() {
         #[cfg(feature = "flutter")]
         {
@@ -526,9 +571,9 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
             .ok_or("Flutter output pools were not allocated")?
             .outputs
         {
-            render_blank_target(
+            kms_render::render_blank_output_buffer(
                 &mut renderer,
-                &mut pool.buffers[pool.current].dmabuf,
+                &mut pool.buffers[pool.current],
                 pool.size,
             )?;
         }

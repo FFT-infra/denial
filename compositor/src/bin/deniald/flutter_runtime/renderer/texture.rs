@@ -5,6 +5,13 @@ use super::*;
 #[path = "handler.rs"]
 mod handler;
 
+#[path = "mapped_shm.rs"]
+mod mapped_shm;
+#[path = "native_window_pool.rs"]
+mod native_window_pool;
+use mapped_shm::{MappedShmPool, MappedShmStorage, PendingMappedShm};
+use native_window_pool::NativeWindowStorage;
+
 pub(in crate::flutter_runtime) use handler::FlutterGlHandler;
 
 #[derive(Debug, Default)]
@@ -44,6 +51,9 @@ pub(in crate::flutter_runtime) struct ExternalTextureBinding {
     // The dma-buf file descriptors must remain live for the EGLImage lifetime.
     pub(in crate::flutter_runtime) dmabuf_image: Option<(Dmabuf, usize)>,
     pub(in crate::flutter_runtime) texture: u32,
+    // Cached EGL imports also pin compositor-owned mapped backing storage.
+    pub(in crate::flutter_runtime) _owned_shm: Option<ShmTextureFrame>,
+    _owned_native: Option<Arc<NativeWindowStorage>>,
     pub(in crate::flutter_runtime) _resource_permit: ExternalTextureResourcePermit,
 }
 
@@ -102,6 +112,14 @@ pub(in crate::flutter_runtime) enum ExternalTextureLeaseResource {
     },
 }
 
+impl ExternalTextureLeaseResource {
+    fn binding(&self) -> Arc<CachedTextureBinding> {
+        match self {
+            Self::Dmabuf { _binding, .. } | Self::Shm { _binding, .. } => Arc::clone(_binding),
+        }
+    }
+}
+
 struct PreparedExternalTexture {
     texture_id: i64,
     source_generation: u64,
@@ -111,6 +129,7 @@ struct PreparedExternalTexture {
     name: u32,
     resource: ExternalTextureLeaseResource,
     sampled_buffer: Option<ExternalBufferGuard>,
+    native_samples: Vec<handler::native_client::NativeInputSample>,
 }
 
 type ExternalTextureLeasePool = Mutex<Vec<Box<ExternalTextureLease>>>;
@@ -217,6 +236,30 @@ impl<K: Eq, V: Clone> RecencyCache<K, V> {
         )
     }
 
+    /// Retain the most recently used matching entries without changing the
+    /// global capacity or evicting another owner's current source.
+    pub(in crate::flutter_runtime) fn trim_matching_to(
+        &mut self,
+        capacity: usize,
+        matches: impl Fn(&K) -> bool,
+    ) -> Vec<V> {
+        assert!(capacity > 0, "matching cache capacity must be positive");
+        let mut excess = self
+            .entries
+            .iter()
+            .filter(|entry| matches(&entry.key))
+            .count()
+            .saturating_sub(capacity);
+        self.remove_where(|key| {
+            if excess != 0 && matches(key) {
+                excess -= 1;
+                true
+            } else {
+                false
+            }
+        })
+    }
+
     pub(in crate::flutter_runtime) fn remove_where(
         &mut self,
         mut predicate: impl FnMut(&K) -> bool,
@@ -312,6 +355,7 @@ struct ShmSnapshotPoolState {
 
 pub(crate) struct ShmSnapshotPool {
     state: Mutex<ShmSnapshotPoolState>,
+    mapped: Option<Arc<MappedShmPool>>,
 }
 
 impl ShmSnapshotPool {
@@ -321,6 +365,35 @@ impl ShmSnapshotPool {
                 buffers: Vec::with_capacity(MAX_RECYCLED_SHM_BUFFERS),
                 retained_bytes: 0,
             }),
+            mapped: None,
+        }
+    }
+
+    pub(crate) fn new_for_device(device: smithay::backend::drm::DrmDeviceFd) -> Self {
+        let mut pool = Self::new();
+        match MappedShmPool::new(device) {
+            Ok(mapped) => pool.mapped = Some(Arc::new(mapped)),
+            Err(error) => warn!(%error, "mapped SHM GBM initialization unavailable"),
+        }
+        pool
+    }
+
+    pub(crate) fn enable_mapped(
+        &self,
+        renderer: &mut smithay::backend::renderer::gles::GlesRenderer,
+    ) {
+        if let Some(pool) = &self.mapped {
+            pool.enable(renderer);
+        }
+    }
+
+    pub(crate) fn acquire_mapped(&self, width: u32, height: u32) -> Option<PendingMappedShm> {
+        self.mapped.as_ref()?.acquire(width, height)
+    }
+
+    pub(crate) fn disable_mapped(&self, error: &std::io::Error) {
+        if let Some(pool) = &self.mapped {
+            pool.disable(error);
         }
     }
 
@@ -364,6 +437,8 @@ impl ShmSnapshotPool {
 struct ShmPixelStorage {
     pixels: Option<Vec<u8>>,
     pool: Weak<ShmSnapshotPool>,
+    mapped: Option<Arc<MappedShmStorage>>,
+    fully_transparent: bool,
 }
 
 impl Drop for ShmPixelStorage {
@@ -431,8 +506,31 @@ impl ShmTextureFrame {
             rgba: Arc::new(ShmPixelStorage {
                 pixels: Some(rgba),
                 pool,
+                mapped: None,
+                fully_transparent: false,
             }),
         })
+    }
+
+    pub(crate) fn new_mapped(
+        width: u32,
+        height: u32,
+        revision: u64,
+        mapped: Arc<MappedShmStorage>,
+        fully_transparent: bool,
+    ) -> Self {
+        Self {
+            width,
+            height,
+            revision,
+            feedback: None,
+            rgba: Arc::new(ShmPixelStorage {
+                pixels: None,
+                pool: Weak::new(),
+                mapped: Some(mapped),
+                fully_transparent,
+            }),
+        }
     }
 
     pub(in crate::flutter_runtime) fn pixels(&self) -> &[u8] {
@@ -459,6 +557,9 @@ impl ShmTextureFrame {
     }
 
     pub(crate) fn is_fully_transparent(&self) -> bool {
+        if self.rgba.mapped.is_some() {
+            return self.rgba.fully_transparent;
+        }
         self.pixels()
             .as_chunks::<4>()
             .0
@@ -470,6 +571,24 @@ impl ShmTextureFrame {
 #[derive(Clone)]
 pub(in crate::flutter_runtime) enum ExternalBufferGuard {
     Wayland { _guard: RendererBufferGuard },
+    OwnedShm { frame: ShmTextureFrame },
+    OwnedNative { storage: Arc<NativeWindowStorage> },
+}
+
+impl ExternalBufferGuard {
+    fn owned_native(&self) -> Option<&Arc<NativeWindowStorage>> {
+        match self {
+            Self::OwnedNative { storage } => Some(storage),
+            _ => None,
+        }
+    }
+
+    pub(in crate::flutter_runtime) fn owned_shm(&self) -> Option<&ShmTextureFrame> {
+        match self {
+            Self::OwnedShm { frame } => Some(frame),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -845,10 +964,20 @@ impl ExternalTextureFrame {
     }
 
     pub(crate) fn from_shm(texture_id: i64, frame: ShmTextureFrame, expects_sample: bool) -> Self {
+        let source = if let Some(storage) = &frame.rgba.mapped {
+            ExternalTextureSource::Dmabuf {
+                dmabuf: storage.dmabuf().clone(),
+                revision: frame.revision,
+                feedback: frame.feedback.clone(),
+                buffer_guard: Some(ExternalBufferGuard::OwnedShm { frame }),
+            }
+        } else {
+            ExternalTextureSource::Shm(frame)
+        };
         Self {
             texture_id,
             presentation: None,
-            source: ExternalTextureSource::Shm(frame),
+            source,
             expects_sample,
         }
     }
@@ -892,5 +1021,115 @@ pub(in crate::flutter_runtime) fn contain_ffi_unwind(callback: impl FnOnce()) ->
             mem::forget(payload);
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod cache_retirement_tests {
+    use super::*;
+
+    #[test]
+    fn owned_snapshot_survives_cache_eviction_retirement_and_reader_fence() {
+        let frame = ShmTextureFrame::new_owned(1, 1, 9, vec![1, 2, 3, 4]).unwrap();
+        let storage = Arc::downgrade(&frame.rgba);
+        let guard = ExternalBufferGuard::OwnedShm {
+            frame: frame.clone(),
+        };
+        let reader_fence = guard.clone();
+        assert_eq!(guard.owned_shm().unwrap().revision, 9);
+        let budget = Arc::new(ExternalTextureResourceBudget::default());
+        let retirements = Arc::new(RetiredExternalBindingQueue::new());
+        let binding = Arc::new(CachedTextureBinding {
+            binding: Some(ExternalTextureBinding {
+                dmabuf_image: None,
+                texture: 43,
+                _owned_shm: Some(frame),
+                _owned_native: None,
+                _resource_permit: budget.try_acquire().unwrap(),
+            }),
+            retirements: Arc::clone(&retirements),
+        });
+        let image_lease = Arc::clone(&binding);
+        let mut cache = RecencyCache::new(1);
+        cache.insert((7, 9), binding);
+        drop(cache.drain());
+        drop(guard);
+        assert!(storage.upgrade().is_some());
+        drop(image_lease);
+        assert_eq!(lock(&retirements.bindings).len(), 1);
+        assert!(storage.upgrade().is_some());
+        // Real retirement deletes the GL texture/EGLImage before dropping
+        // this ownership record. A sampled-reader fence remains independent.
+        lock(&retirements.bindings).clear();
+        assert!(storage.upgrade().is_some());
+        drop(reader_fence);
+        assert!(storage.upgrade().is_none());
+        assert_eq!(budget.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn obsolete_shm_revision_retires_only_after_its_last_image_lease() {
+        let retirements = Arc::new(RetiredExternalBindingQueue::new());
+        let budget = Arc::new(ExternalTextureResourceBudget::default());
+        let binding = Arc::new(CachedTextureBinding {
+            binding: Some(ExternalTextureBinding {
+                dmabuf_image: None,
+                _owned_shm: None,
+                _owned_native: None,
+                texture: 41,
+                _resource_permit: budget.try_acquire().unwrap(),
+            }),
+            retirements: Arc::clone(&retirements),
+        });
+        let image_lease = Arc::clone(&binding);
+        let mut cache = RecencyCache::new(MAX_CACHED_SHM_BINDINGS);
+        cache.insert((1, 1), binding);
+        // Reusing this stand-in also ensures removal does not destroy another
+        // surface's cache entry while pruning the busy surface's revisions.
+        let other = Arc::new(CachedTextureBinding {
+            binding: Some(ExternalTextureBinding {
+                dmabuf_image: None,
+                _owned_shm: None,
+                _owned_native: None,
+                texture: 42,
+                _resource_permit: budget.try_acquire().unwrap(),
+            }),
+            retirements: Arc::clone(&retirements),
+        });
+        cache.insert((2, 1), Arc::clone(&other));
+        for revision in 2..=4 {
+            cache.insert((1, revision), Arc::clone(&other));
+        }
+        drop(
+            cache.trim_matching_to(MAX_CACHED_SHM_REVISIONS_PER_TEXTURE, |(owner, _)| {
+                *owner == 1
+            }),
+        );
+        assert!(cache.get_by(|key| *key == (1, 1)).is_none());
+        assert!(cache.get_by(|key| *key == (2, 1)).is_some());
+        assert!(!retirements.pending.load(Ordering::Relaxed));
+        assert_eq!(budget.live.load(Ordering::Relaxed), 2);
+        drop(image_lease);
+        assert!(retirements.pending.load(Ordering::Relaxed));
+        let mut pending = lock(&retirements.bindings);
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].texture, 41);
+        pending.clear(); // Stand-in GL reclamation releases its permit.
+        assert_eq!(budget.live.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn matching_limit_preserves_recency_and_global_capacity() {
+        let mut cache = RecencyCache::new(5);
+        for revision in 1..=4 {
+            cache.insert((1, revision), revision);
+        }
+        cache.insert((2, 1), 9);
+        assert_eq!(cache.get_by(|key| *key == (1, 1)), Some(1));
+        assert_eq!(cache.trim_matching_to(3, |(owner, _)| *owner == 1), vec![2]);
+        assert_eq!(cache.get_by(|key| *key == (2, 1)), Some(9));
+        cache.insert((3, 1), 10);
+        assert_eq!(cache.insert((4, 1), 11), Some(3));
+        assert_eq!(cache.entries.len(), 5);
     }
 }

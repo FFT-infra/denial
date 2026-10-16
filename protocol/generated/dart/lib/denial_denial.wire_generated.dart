@@ -1882,6 +1882,113 @@ class SurfaceLayerObjectBuilder extends fb.ObjectBuilder {
     return fbBuilder.buffer;
   }
 }
+class ClientTexture {
+  ClientTexture._(this._bc, this._bcOffset);
+  factory ClientTexture(List<int> bytes) {
+    final rootRef = fb.BufferContext.fromBytes(bytes);
+    return reader.read(rootRef, 0);
+  }
+
+  static const fb.Reader<ClientTexture> reader = _ClientTextureReader();
+
+  final fb.BufferContext _bc;
+  final int _bcOffset;
+
+  int get textureId => const fb.Uint64Reader().vTableGet(_bc, _bcOffset, 4, 0);
+  int get width => const fb.Uint32Reader().vTableGet(_bc, _bcOffset, 6, 0);
+  int get height => const fb.Uint32Reader().vTableGet(_bc, _bcOffset, 8, 0);
+  double get sourceWidth => const fb.Float64Reader().vTableGet(_bc, _bcOffset, 10, 0.0);
+  double get sourceHeight => const fb.Float64Reader().vTableGet(_bc, _bcOffset, 12, 0.0);
+
+  @override
+  String toString() {
+    return 'ClientTexture{textureId: ${textureId}, width: ${width}, height: ${height}, sourceWidth: ${sourceWidth}, sourceHeight: ${sourceHeight}}';
+  }
+}
+
+class _ClientTextureReader extends fb.TableReader<ClientTexture> {
+  const _ClientTextureReader();
+
+  @override
+  ClientTexture createObject(fb.BufferContext bc, int offset) => 
+    ClientTexture._(bc, offset);
+}
+
+class ClientTextureBuilder {
+  ClientTextureBuilder(this.fbBuilder);
+
+  final fb.Builder fbBuilder;
+
+  void begin() {
+    fbBuilder.startTable(5);
+  }
+
+  int addTextureId(int? textureId) {
+    fbBuilder.addUint64(0, textureId);
+    return fbBuilder.offset;
+  }
+  int addWidth(int? width) {
+    fbBuilder.addUint32(1, width);
+    return fbBuilder.offset;
+  }
+  int addHeight(int? height) {
+    fbBuilder.addUint32(2, height);
+    return fbBuilder.offset;
+  }
+  int addSourceWidth(double? sourceWidth) {
+    fbBuilder.addFloat64(3, sourceWidth);
+    return fbBuilder.offset;
+  }
+  int addSourceHeight(double? sourceHeight) {
+    fbBuilder.addFloat64(4, sourceHeight);
+    return fbBuilder.offset;
+  }
+
+  int finish() {
+    return fbBuilder.endTable();
+  }
+}
+
+class ClientTextureObjectBuilder extends fb.ObjectBuilder {
+  final int? _textureId;
+  final int? _width;
+  final int? _height;
+  final double? _sourceWidth;
+  final double? _sourceHeight;
+
+  ClientTextureObjectBuilder({
+    int? textureId,
+    int? width,
+    int? height,
+    double? sourceWidth,
+    double? sourceHeight,
+  })
+      : _textureId = textureId,
+        _width = width,
+        _height = height,
+        _sourceWidth = sourceWidth,
+        _sourceHeight = sourceHeight;
+
+  /// Finish building, and store into the [fbBuilder].
+  @override
+  int finish(fb.Builder fbBuilder) {
+    fbBuilder.startTable(5);
+    fbBuilder.addUint64(0, _textureId);
+    fbBuilder.addUint32(1, _width);
+    fbBuilder.addUint32(2, _height);
+    fbBuilder.addFloat64(3, _sourceWidth);
+    fbBuilder.addFloat64(4, _sourceHeight);
+    return fbBuilder.endTable();
+  }
+
+  /// Convenience method to serialize to byte list.
+  @override
+  Uint8List toBytes([String? fileIdentifier]) {
+    final fbBuilder = fb.Builder(deduplicateTables: false);
+    fbBuilder.finish(finish(fbBuilder), fileIdentifier);
+    return fbBuilder.buffer;
+  }
+}
 class Window {
   Window._(this._bc, this._bcOffset);
   factory Window(List<int> bytes) {
@@ -1945,10 +2052,11 @@ class Window {
   bool get pet => const fb.BoolReader().vTableGet(_bc, _bcOffset, 100, false);
   int get petHolds => const fb.Uint32Reader().vTableGet(_bc, _bcOffset, 102, 0);
   bool get petDragged => const fb.BoolReader().vTableGet(_bc, _bcOffset, 104, false);
+  ClientTexture? get clientTexture => ClientTexture.reader.vTableGetNullable(_bc, _bcOffset, 106);
 
   @override
   String toString() {
-    return 'Window{objectId: ${objectId}, objectKind: ${objectKind}, surfaceId: ${surfaceId}, windowId: ${windowId}, textureId: ${textureId}, title: ${title}, appId: ${appId}, width: ${width}, height: ${height}, surfaceX: ${surfaceX}, surfaceY: ${surfaceY}, surfaceWidth: ${surfaceWidth}, surfaceHeight: ${surfaceHeight}, textureSourceX: ${textureSourceX}, textureSourceY: ${textureSourceY}, textureSourceWidth: ${textureSourceWidth}, textureSourceHeight: ${textureSourceHeight}, geometryX: ${geometryX}, geometryY: ${geometryY}, geometryWidth: ${geometryWidth}, geometryHeight: ${geometryHeight}, monitorId: ${monitorId}, transform: ${transform}, scale120: ${scale120}, statusColorArgb: ${statusColorArgb}, hasStatusColor: ${hasStatusColor}, contentX: ${contentX}, contentY: ${contentY}, contentWidth: ${contentWidth}, contentHeight: ${contentHeight}, surfaces: ${surfaces}, pinned: ${pinned}, suppressAnimations: ${suppressAnimations}, serverSideDecorated: ${serverSideDecorated}, opacity: ${opacity}, contentKind: ${contentKind}, opacityClass: ${opacityClass}, workspaceId: ${workspaceId}, minimized: ${minimized}, fullscreen: ${fullscreen}, maximized: ${maximized}, transientParentId: ${transientParentId}, heldByWindowId: ${heldByWindowId}, heldHold: ${heldHold}, heldShare: ${heldShare}, petAnchorX: ${petAnchorX}, petAnchorY: ${petAnchorY}, petBelow: ${petBelow}, pet: ${pet}, petHolds: ${petHolds}, petDragged: ${petDragged}}';
+    return 'Window{objectId: ${objectId}, objectKind: ${objectKind}, surfaceId: ${surfaceId}, windowId: ${windowId}, textureId: ${textureId}, title: ${title}, appId: ${appId}, width: ${width}, height: ${height}, surfaceX: ${surfaceX}, surfaceY: ${surfaceY}, surfaceWidth: ${surfaceWidth}, surfaceHeight: ${surfaceHeight}, textureSourceX: ${textureSourceX}, textureSourceY: ${textureSourceY}, textureSourceWidth: ${textureSourceWidth}, textureSourceHeight: ${textureSourceHeight}, geometryX: ${geometryX}, geometryY: ${geometryY}, geometryWidth: ${geometryWidth}, geometryHeight: ${geometryHeight}, monitorId: ${monitorId}, transform: ${transform}, scale120: ${scale120}, statusColorArgb: ${statusColorArgb}, hasStatusColor: ${hasStatusColor}, contentX: ${contentX}, contentY: ${contentY}, contentWidth: ${contentWidth}, contentHeight: ${contentHeight}, surfaces: ${surfaces}, pinned: ${pinned}, suppressAnimations: ${suppressAnimations}, serverSideDecorated: ${serverSideDecorated}, opacity: ${opacity}, contentKind: ${contentKind}, opacityClass: ${opacityClass}, workspaceId: ${workspaceId}, minimized: ${minimized}, fullscreen: ${fullscreen}, maximized: ${maximized}, transientParentId: ${transientParentId}, heldByWindowId: ${heldByWindowId}, heldHold: ${heldHold}, heldShare: ${heldShare}, petAnchorX: ${petAnchorX}, petAnchorY: ${petAnchorY}, petBelow: ${petBelow}, pet: ${pet}, petHolds: ${petHolds}, petDragged: ${petDragged}, clientTexture: ${clientTexture}}';
   }
 }
 
@@ -1966,7 +2074,7 @@ class WindowBuilder {
   final fb.Builder fbBuilder;
 
   void begin() {
-    fbBuilder.startTable(51);
+    fbBuilder.startTable(52);
   }
 
   int addObjectId(int? objectId) {
@@ -2173,6 +2281,10 @@ class WindowBuilder {
     fbBuilder.addBool(50, petDragged);
     return fbBuilder.offset;
   }
+  int addClientTextureOffset(int? offset) {
+    fbBuilder.addOffset(51, offset);
+    return fbBuilder.offset;
+  }
 
   int finish() {
     return fbBuilder.endTable();
@@ -2231,6 +2343,7 @@ class WindowObjectBuilder extends fb.ObjectBuilder {
   final bool? _pet;
   final int? _petHolds;
   final bool? _petDragged;
+  final ClientTextureObjectBuilder? _clientTexture;
 
   WindowObjectBuilder({
     int? objectId,
@@ -2284,6 +2397,7 @@ class WindowObjectBuilder extends fb.ObjectBuilder {
     bool? pet,
     int? petHolds,
     bool? petDragged,
+    ClientTextureObjectBuilder? clientTexture,
   })
       : _objectId = objectId,
         _objectKind = objectKind,
@@ -2335,7 +2449,8 @@ class WindowObjectBuilder extends fb.ObjectBuilder {
         _petBelow = petBelow,
         _pet = pet,
         _petHolds = petHolds,
-        _petDragged = petDragged;
+        _petDragged = petDragged,
+        _clientTexture = clientTexture;
 
   /// Finish building, and store into the [fbBuilder].
   @override
@@ -2346,7 +2461,8 @@ class WindowObjectBuilder extends fb.ObjectBuilder {
         : fbBuilder.writeString(_appId!);
     final int? surfacesOffset = _surfaces == null ? null
         : fbBuilder.writeList(_surfaces!.map((b) => b.getOrCreateOffset(fbBuilder)).toList());
-    fbBuilder.startTable(51);
+    final int? clientTextureOffset = _clientTexture?.getOrCreateOffset(fbBuilder);
+    fbBuilder.startTable(52);
     fbBuilder.addUint64(0, _objectId);
     fbBuilder.addUint8(1, _objectKind?.value);
     fbBuilder.addUint64(2, _surfaceId);
@@ -2398,6 +2514,7 @@ class WindowObjectBuilder extends fb.ObjectBuilder {
     fbBuilder.addBool(48, _pet);
     fbBuilder.addUint32(49, _petHolds);
     fbBuilder.addBool(50, _petDragged);
+    fbBuilder.addOffset(51, clientTextureOffset);
     return fbBuilder.endTable();
   }
 

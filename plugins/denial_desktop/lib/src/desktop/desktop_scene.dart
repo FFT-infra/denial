@@ -798,6 +798,10 @@ class _DesktopSceneState extends ConsumerState<DesktopScene> {
         for (final output in surfaceLayout.outputs)
           ShellSurfaceEnvironment(
             output: output,
+            inputOnlyOutputNames: [
+              for (final entry in surfaceLayout.outputs)
+                if (entry.inputOnly) entry.name,
+            ],
             workArea: surfaceLayout.workAreaOf(output),
             isMainOutput:
                 output.monitorId == surfaceLayout.mainOutput?.monitorId,

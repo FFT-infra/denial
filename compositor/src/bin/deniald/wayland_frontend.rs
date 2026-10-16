@@ -160,6 +160,11 @@ mod idle_inhibit;
 mod idle_notify;
 #[path = "wayland_frontend/input.rs"]
 mod input;
+#[cfg(feature = "flutter")]
+#[path = "wayland_frontend/input_deck.rs"]
+mod input_deck;
+#[cfg(feature = "flutter")]
+pub(super) use input_deck::{synchronize_input_deck, snapshot as input_deck_snapshot};
 #[path = "wayland_frontend/input_method.rs"]
 pub(super) mod input_method;
 #[cfg(feature = "flutter")]
@@ -636,6 +641,8 @@ pub(super) struct WaylandFrontend {
     damage_tracker: OutputDamageTracker,
     next_window_offset: i32,
     desktop_bounds: smithay::utils::Rectangle<i32, Logical>,
+    #[cfg(feature = "flutter")]
+    input_deck_output: Option<OutputId>,
     touch_bounds: smithay::utils::Rectangle<i32, Logical>,
     touch_transform: OutputTransform,
     tablet_output_mappings: HashMap<String, String>,

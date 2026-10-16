@@ -11,6 +11,11 @@ mod output_projection;
 #[path = "renderer/texture.rs"]
 mod texture;
 
+#[path = "renderer/native_window.rs"]
+pub(super) mod native_window;
+#[path = "renderer/native_window_gl.rs"]
+pub(super) mod native_window_gl;
+
 use gl_resources::{
     ContextBinding, GlApi, GlTarget, ShaderBlit, copy_to_scanout, create_shader_blit,
     destroy_depth_stencils, destroy_shader_blit, destroy_targets,

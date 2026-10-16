@@ -77,6 +77,11 @@ impl FlutterRuntime {
         // a lock request cannot be followed by one last unredacted read.
         self.clipboard
             .set_locked(self.authentication.security_gate_locked());
+        if message.channel == crate::input_deck::CONTROL_CHANNEL {
+            crate::input_deck::enqueue(&mut self.input_deck_commands, &message.data);
+            self.host().respond(&mut message, &[])?;
+            return Ok(());
+        }
         if message.channel == "denial/haptics" {
             let result = self.authentication.handle_haptics_packet(&message.data);
             self.host().respond(&mut message, &[])?;

@@ -350,6 +350,17 @@ table SurfaceLayer {
   window_geometry:WireRect;
 }
 
+// Optional native composition of the main client surface tree. Source extents
+// exclude the padding from ceil allocation at fractional output scales.
+// Original surface metadata remains authoritative for input and popup trees.
+table ClientTexture {
+  texture_id:ulong;
+  width:uint;
+  height:uint;
+  source_width:double;
+  source_height:double;
+}
+
 table Window {
   object_id:ulong;
   object_kind:ObjectKind = RootSurface;
@@ -438,6 +449,8 @@ table Window {
   pet:bool;
   pet_holds:uint;
   pet_dragged:bool;
+  // Appended for compatibility; absence keeps the original surface-tree path.
+  client_texture:ClientTexture;
 }
 
 table WindowSnapshot {

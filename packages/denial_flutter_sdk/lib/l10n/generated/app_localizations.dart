@@ -8721,6 +8721,144 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Desktop'**
   String get pluginsDesktopFeature;
+
+  /// Touch display keyboard and touchpad mode.
+  ///
+  /// In en, this message translates to:
+  /// **'Keyboard & touchpad display'**
+  String get inputDeckTitle;
+
+  /// Touch display keyboard and touchpad mode.
+  ///
+  /// In en, this message translates to:
+  /// **'Keyboard & touchpad'**
+  String get inputDeckHeading;
+
+  /// Touch display keyboard and touchpad mode.
+  ///
+  /// In en, this message translates to:
+  /// **'Use touch display as keyboard and touchpad'**
+  String get inputDeckEnable;
+
+  /// Touch display keyboard and touchpad mode.
+  ///
+  /// In en, this message translates to:
+  /// **'Connect a touch display to configure this mode.'**
+  String get inputDeckUnavailable;
+
+  /// Touch display keyboard and touchpad mode.
+  ///
+  /// In en, this message translates to:
+  /// **'Use {output} for input whenever another display is available. Disconnect the external display to return to tablet mode.'**
+  String inputDeckEnableDescription(String output);
+
+  /// Touch display keyboard and touchpad mode.
+  ///
+  /// In en, this message translates to:
+  /// **'Ready when a second display is connected and powered on.'**
+  String get inputDeckWaiting;
+
+  /// Touch display keyboard and touchpad mode.
+  ///
+  /// In en, this message translates to:
+  /// **'Touch display'**
+  String get inputDeckTouchDisplay;
+
+  /// Touch display keyboard and touchpad mode.
+  ///
+  /// In en, this message translates to:
+  /// **'Display to use for keyboard and touchpad input.'**
+  String get inputDeckTouchDisplayDescription;
+
+  /// Touch display keyboard and touchpad mode.
+  ///
+  /// In en, this message translates to:
+  /// **'Keyboard size'**
+  String get inputDeckKeyboardSize;
+
+  /// Touch display keyboard and touchpad mode.
+  ///
+  /// In en, this message translates to:
+  /// **'Touchpad width'**
+  String get inputDeckTouchpadWidth;
+
+  /// Touch display keyboard and touchpad mode.
+  ///
+  /// In en, this message translates to:
+  /// **'Touchpad height'**
+  String get inputDeckTouchpadHeight;
+
+  /// Touch display keyboard and touchpad mode.
+  ///
+  /// In en, this message translates to:
+  /// **'Pointer speed'**
+  String get inputDeckPointerSpeed;
+
+  /// Touch display keyboard and touchpad mode.
+  ///
+  /// In en, this message translates to:
+  /// **'Natural scrolling'**
+  String get inputDeckNaturalScroll;
+
+  /// Touch display keyboard and touchpad mode.
+  ///
+  /// In en, this message translates to:
+  /// **'Content follows the movement of your fingers.'**
+  String get inputDeckNaturalScrollDescription;
+
+  /// Touch display keyboard and touchpad mode.
+  ///
+  /// In en, this message translates to:
+  /// **'CPU chart'**
+  String get inputDeckCpuChart;
+
+  /// Touch display keyboard and touchpad mode.
+  ///
+  /// In en, this message translates to:
+  /// **'Show processor usage above the keyboard.'**
+  String get inputDeckCpuDescription;
+
+  /// Touch display keyboard and touchpad mode.
+  ///
+  /// In en, this message translates to:
+  /// **'GPU charts'**
+  String get inputDeckGpuCharts;
+
+  /// Touch display keyboard and touchpad mode.
+  ///
+  /// In en, this message translates to:
+  /// **'Show usage for GPUs that report it.'**
+  String get inputDeckGpuDescription;
+
+  /// Touch display keyboard and touchpad mode.
+  ///
+  /// In en, this message translates to:
+  /// **'Use as display'**
+  String get inputDeckUseAsDisplay;
+
+  /// Touch display keyboard and touchpad mode.
+  ///
+  /// In en, this message translates to:
+  /// **'Touchpad'**
+  String get inputDeckTouchpad;
+
+  /// Touch display keyboard and touchpad mode.
+  ///
+  /// In en, this message translates to:
+  /// **'Touchpad. One finger moves the pointer. Tap to click. Two fingers scroll or tap for right click. Double tap and hold to drag.'**
+  String get inputDeckTouchpadHint;
+
+  /// Touch display keyboard and touchpad mode.
+  ///
+  /// In en, this message translates to:
+  /// **'Left click'**
+  String get inputDeckLeftClick;
+
+  /// Touch display keyboard and touchpad mode.
+  ///
+  /// In en, this message translates to:
+  /// **'Right click'**
+  String get inputDeckRightClick;
 }
 
 class _AppLocalizationsDelegate

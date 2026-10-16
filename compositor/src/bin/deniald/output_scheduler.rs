@@ -19,6 +19,10 @@ use super::{
     DPMS_WAKE_TOPOLOGY_GRACE, PresentedOutput, RuntimeState, cpu_scheduling, render_audit_enabled,
 };
 
+#[path = "output_scheduler/delivery_trace.rs"]
+mod delivery_trace;
+use delivery_trace::{DeliveryFrame, DeliveryTrace, Outcome as DeliveryOutcome};
+
 const OUTPUT_SCHEDULER_AUDIT_INTERVAL: Duration = Duration::from_secs(1);
 /// A nonblocking atomic commit should retire on the next display edge.  Give
 /// slow modesets and scheduler jitter ample room, but never retain a wedged
@@ -36,6 +40,16 @@ const DPMS_WAKE_RECOVERY_TIMEOUT: Duration = DPMS_WAKE_TOPOLOGY_GRACE;
 const ELAPSED_READY_TARGET_TOLERANCE: Duration = Duration::from_millis(1);
 static NEXT_READY_FENCE_TOKEN: AtomicU64 = AtomicU64::new(1);
 
+fn kms_submit_lead(blanking: Duration, nominal_interval: Duration) -> Duration {
+    // A progressive DRM timestamp can name the end of blanking, while the
+    // driver's atomic latch closes earlier. Preserve the existing 2 ms driver
+    // margin before the earliest mode-bounded blanking edge. Never approach
+    // the preceding opportunity, including on very high refresh outputs.
+    Duration::from_millis(2)
+        .saturating_add(blanking)
+        .min(nominal_interval / 2)
+}
+
 fn next_ready_fence_token() -> u64 {
     loop {
         let token = NEXT_READY_FENCE_TOKEN.fetch_add(1, Ordering::Relaxed);
@@ -47,6 +61,7 @@ fn next_ready_fence_token() -> u64 {
 
 #[derive(Debug)]
 struct OutputFrame {
+    delivery: Option<DeliveryFrame>,
     index: usize,
     capture_revision: u64,
     screenshot_request_id: Option<u64>,
@@ -109,14 +124,21 @@ impl OutputPipelineFrames {
         Ok(())
     }
 
-    fn schedule_ready(&mut self, commit: CommitId) -> Result<(), &'static str> {
+    fn schedule_ready(
+        &mut self,
+        commit: CommitId,
+        queued_at: Option<Instant>,
+    ) -> Result<(), &'static str> {
         if self.in_flight.is_some() {
             return Err("an output generation is already in Volition or KMS");
         }
-        let frame = self
+        let mut frame = self
             .ready
             .take()
             .ok_or("an output successor is not ready")?;
+        if let Some(delivery) = frame.delivery.as_mut() {
+            delivery.queued_at = queued_at;
+        }
         self.in_flight = Some(InFlightFrame::Scheduled(ScheduledFrame { commit, frame }));
         Ok(())
     }
@@ -137,6 +159,9 @@ impl OutputPipelineFrames {
         match in_flight {
             Some(InFlightFrame::Scheduled(mut scheduled)) if scheduled.commit == commit => {
                 scheduled.frame.submitted_at = submitted_at;
+                if let Some(delivery) = scheduled.frame.delivery.as_mut() {
+                    delivery.submitted_at = Some(submitted_at);
+                }
                 let index = scheduled.frame.index;
                 self.in_flight = Some(InFlightFrame::Submitted(scheduled.frame));
                 Ok(index)
@@ -974,6 +999,7 @@ pub(super) struct OutputScheduler {
     /// parking it also gives the first waking output a truthful framebuffer.
     parked: Vec<(OutputId, usize)>,
     presented_frames: u64,
+    delivery_trace: Option<DeliveryTrace>,
 }
 
 impl OutputScheduler {
@@ -1076,6 +1102,7 @@ impl OutputScheduler {
             audit,
             parked,
             presented_frames: 0,
+            delivery_trace: DeliveryTrace::from_environment(),
         })
     }
 
@@ -1135,6 +1162,10 @@ impl OutputScheduler {
             });
 
         runtime.publish_output(&output)?;
+        let delivery = self
+            .delivery_trace
+            .as_mut()
+            .map(|trace| trace.publish(token, &output));
         let ReadyOutputFrame {
             output_id,
             render_view_id: _,
@@ -1145,6 +1176,7 @@ impl OutputScheduler {
             capture_revision,
             screenshot_request_id,
             rendered_at,
+            raster_transaction: _,
             request,
             feedback,
         } = output;
@@ -1167,6 +1199,7 @@ impl OutputScheduler {
             pipeline
                 .frames
                 .install_ready(OutputFrame {
+                    delivery,
                     index,
                     capture_revision,
                     screenshot_request_id,
@@ -1175,11 +1208,16 @@ impl OutputScheduler {
                     feedback,
                 })
                 .expect("prevalidated output Ready slot changed during publication");
-        } else if slot.signaled {
-            runtime.release_output(output_id, index)?;
-            slot.release_user()?;
         } else {
-            slot.discard_user_when_signaled()?;
+            if let Some(trace) = self.delivery_trace.as_mut() {
+                trace.finish(delivery, DeliveryOutcome::UnpoweredOutput, None, None, None);
+            }
+            if slot.signaled {
+                runtime.release_output(output_id, index)?;
+                slot.release_user()?;
+            } else {
+                slot.discard_user_when_signaled()?;
+            }
         }
         Ok(watch)
     }
@@ -1204,6 +1242,16 @@ impl OutputScheduler {
             if let Some(slot) = self.ready_fences[pool_index].slots.get_mut(signal.index) {
                 let signaled = slot.mark_signaled(signal.token);
                 if signaled {
+                    if self.delivery_trace.is_some() {
+                        for pipeline in &mut self.pipelines {
+                            if pipeline.output_id == signal.output
+                                && let Some(frame) = pipeline.frames.ready.as_mut()
+                                && let Some(delivery) = frame.delivery.as_mut()
+                            {
+                                delivery.fence_signal(signal.token, Instant::now());
+                            }
+                        }
+                    }
                     let discard_users = slot.discard_users_on_signal;
                     slot.discard_users_on_signal = 0;
                     for _ in 0..discard_users {
@@ -1281,11 +1329,12 @@ impl OutputScheduler {
         events: &mut RuntimeState,
     ) -> Result<(), Box<dyn Error>> {
         let audit_stride = self.audit_stride;
-        let (pipelines, ready_fences, presentation, audit) = (
+        let (pipelines, ready_fences, presentation, audit, delivery_trace) = (
             &mut self.pipelines,
             &mut self.ready_fences,
             &mut self.volition,
             &mut self.audit,
+            &mut self.delivery_trace,
         );
         let mut directly_submitted = Vec::new();
         for (pipeline_index, pipeline) in pipelines.iter_mut().enumerate() {
@@ -1315,6 +1364,15 @@ impl OutputScheduler {
                     .frames
                     .take_ready()
                     .expect("checked wake frame disappeared");
+                if let Some(trace) = delivery_trace.as_mut() {
+                    trace.finish(
+                        stale.delivery,
+                        DeliveryOutcome::InvalidWakeOrFingerprint,
+                        None,
+                        None,
+                        None,
+                    );
+                }
                 discard_ready_frame(
                     runtime,
                     pipeline.output_id,
@@ -1356,6 +1414,7 @@ impl OutputScheduler {
                     .for_output(pipeline.output_id)
                     .ok_or("DPMS wake output lost its native buffer pool")?;
                 let state = output_plane_state(scanout, framebuffer, pool.size);
+                let queued_at = frame.delivery.is_some().then(Instant::now);
                 let transition = scanout
                     .surface
                     .test_state([state.clone()], true)
@@ -1387,7 +1446,7 @@ impl OutputScheduler {
                 }
 
                 let submitted_at = Instant::now();
-                pipeline.frames.schedule_ready(commit)?;
+                pipeline.frames.schedule_ready(commit, queued_at)?;
                 let submitted_frame = pipeline
                     .frames
                     .acknowledge_submission(commit, submitted_at)?;
@@ -1414,14 +1473,22 @@ impl OutputScheduler {
                 continue;
             }
 
-            let submission = presentation.submit_for_target(
+            let blanking = events
+                .presentation_blanking_limits
+                .get(&scanouts[pipeline.scanout_index].output.crtc)
+                .copied()
+                .unwrap_or_default();
+            let submit_lead = kms_submit_lead(blanking, frame.request.tick.nominal_interval);
+            let queued_at = frame.delivery.is_some().then(Instant::now);
+            let submission = presentation.submit_for_target_with_lead(
                 commit,
                 &pipeline.request,
                 framebuffer,
                 presentation_target,
+                submit_lead,
             )?;
             if submission == Submission::Queued {
-                pipeline.frames.schedule_ready(commit)?;
+                pipeline.frames.schedule_ready(commit, queued_at)?;
                 ready_fence.release_user()?;
                 if ready_fence.users == 0 {
                     debug_assert!(ready_fence.fence.is_none());
@@ -1552,6 +1619,15 @@ impl OutputScheduler {
                     .iter_mut()
                     .find(|pool| pool.output_id == pipeline.output_id)
                     .ok_or("elapsed output successor lost its render-fence pool")?;
+                if let Some(trace) = self.delivery_trace.as_mut() {
+                    trace.finish(
+                        stale.delivery,
+                        DeliveryOutcome::ElapsedSuccessor,
+                        None,
+                        None,
+                        None,
+                    );
+                }
                 discard_ready_frame(runtime, pipeline.output_id, &mut fences.slots, stale)?;
                 if let Some(audit) = self.audit.as_mut() {
                     audit.stale_ready_drops = audit.stale_ready_drops.saturating_add(1);
@@ -1584,6 +1660,15 @@ impl OutputScheduler {
             }
             if let Some(frontend) = events.wayland.as_mut() {
                 frontend.sampled_frame_presented(presentation, &presented.feedback)?;
+            }
+            if let Some(trace) = self.delivery_trace.as_mut() {
+                trace.finish(
+                    presented.delivery,
+                    DeliveryOutcome::Presented,
+                    Some(completion.observed_at),
+                    completion.presented_at,
+                    completion.sequence,
+                );
             }
             self.presented_outputs.push(presentation);
             self.presented_frames = self.presented_frames.saturating_add(1);
@@ -1720,6 +1805,9 @@ impl OutputScheduler {
                 .iter_mut()
                 .find(|pool| pool.output_id == output)
                 .ok_or("power-off output lost its render-fence pool")?;
+            if let Some(trace) = self.delivery_trace.as_mut() {
+                trace.finish(ready.delivery, DeliveryOutcome::PowerOff, None, None, None);
+            }
             discard_ready_frame(runtime, output, &mut fences.slots, ready)?;
         }
         let submitted = pipeline.frames.in_flight.is_some();
@@ -1773,6 +1861,9 @@ impl OutputScheduler {
                 .iter_mut()
                 .find(|pool| pool.output_id == output)
                 .ok_or("power-off output lost its render-fence pool")?;
+            if let Some(trace) = self.delivery_trace.as_mut() {
+                trace.finish(ready.delivery, DeliveryOutcome::PowerOff, None, None, None);
+            }
             discard_ready_frame(runtime, output, &mut fences.slots, ready)?;
         }
         self.parked.push((output, pipeline.scanning));
@@ -1876,6 +1967,26 @@ impl OutputScheduler {
         Ok(())
     }
 
+    pub(super) fn delivery_trace_snapshot(&self) -> serde_json::Value {
+        let Some(trace) = self.delivery_trace.as_ref() else {
+            return serde_json::json!({"enabled": false});
+        };
+        trace.snapshot(self.pipelines.iter().flat_map(|pipeline| {
+            let in_flight = match pipeline.frames.in_flight.as_ref() {
+                Some(InFlightFrame::Scheduled(frame)) => frame.frame.delivery.as_ref(),
+                Some(InFlightFrame::Submitted(frame)) => frame.delivery.as_ref(),
+                None => None,
+            };
+            pipeline
+                .frames
+                .ready
+                .as_ref()
+                .and_then(|frame| frame.delivery.as_ref())
+                .into_iter()
+                .chain(in_flight)
+        }))
+    }
+
     pub(super) fn presented_frames(&self) -> u64 {
         self.presented_frames
     }
@@ -1918,5 +2029,37 @@ mod feedback_audit_tests {
         assert_eq!(audit.missed_vblanks, 0);
         assert_eq!(audit.presentation_interval.samples, 0);
         assert_eq!(audit.completion_interval.samples, 2);
+    }
+}
+
+#[cfg(test)]
+mod submit_lead_tests {
+    use super::*;
+
+    #[test]
+    fn known_blanking_preserves_driver_margin_before_its_earliest_edge() {
+        let blanking = Duration::from_nanos(925_926);
+        let period = Duration::from_nanos(8_333_333);
+        assert_eq!(
+            kms_submit_lead(blanking, period),
+            Duration::from_nanos(2_925_926)
+        );
+        assert_eq!(
+            kms_submit_lead(Duration::ZERO, period),
+            Duration::from_millis(2)
+        );
+    }
+
+    #[test]
+    fn high_refresh_and_invalid_periods_cannot_select_an_earlier_edge() {
+        for period in [
+            Duration::ZERO,
+            Duration::from_nanos(1),
+            Duration::from_nanos(2_083_333),
+            Duration::from_millis(4),
+        ] {
+            let lead = kms_submit_lead(Duration::MAX, period);
+            assert_eq!(lead, period / 2);
+        }
     }
 }

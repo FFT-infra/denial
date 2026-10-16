@@ -275,11 +275,26 @@ pub(super) struct UiDevelopmentState {
     #[serde(skip_serializing_if = "Option::is_none")]
     session_activity: Option<SessionActivity>,
     capabilities: Vec<&'static str>,
+    // Query-only JSON telemetry; not part of the Dart UI state packet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    native_client_composition: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_frame_delivery: Option<serde_json::Value>,
 }
 
 impl UiDevelopmentState {
     pub(super) fn error_message(&self) -> Option<&str> {
         (!self.error.is_empty()).then_some(&self.error)
+    }
+
+    pub(super) fn with_output_frame_delivery(mut self, trace: serde_json::Value) -> Self {
+        self.output_frame_delivery = Some(trace);
+        self
+    }
+
+    pub(super) fn with_native_client_composition(mut self, stats: serde_json::Value) -> Self {
+        self.native_client_composition = Some(stats);
+        self
     }
 
     pub(super) fn with_session_activity(mut self, activity: SessionActivity) -> Self {
@@ -561,6 +576,8 @@ impl UiDevelopmentController {
                 plugin_healthy: false,
                 plugin_rebuild,
                 session_activity: None,
+                native_client_composition: None,
+                output_frame_delivery: None,
                 capabilities: vec!["pluginActionsV1"],
             },
         }

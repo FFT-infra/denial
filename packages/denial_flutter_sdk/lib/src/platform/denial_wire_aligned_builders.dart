@@ -641,7 +641,10 @@ bool _validXkbOption(String value) {
 }
 
 bool _finiteWindow(DenialWindow window) {
-  return window.surfaceX.isFinite &&
+  return (window.clientTexture == null ||
+          (window.clientTexture!.isValid &&
+              window.contentKind == DenialWindowContentKind.surfaceTree)) &&
+      window.surfaceX.isFinite &&
       window.surfaceY.isFinite &&
       window.surfaceWidth.isFinite &&
       window.surfaceHeight.isFinite &&

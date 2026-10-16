@@ -693,6 +693,8 @@ impl WaylandFrontend {
 
         #[cfg(feature = "flutter")]
         self.init_screencopy_worker(renderer)?;
+        #[cfg(feature = "flutter")]
+        self.shm_snapshot_pool.enable_mapped(renderer);
 
         let render_node = match EGLDevice::device_for_display(renderer.egl_context().display())
             .and_then(|device| device.try_get_render_node())
@@ -1437,6 +1439,7 @@ impl WaylandFrontend {
             let description = WindowDescription {
                 object_id: stable_id,
                 surface_id: stable_id,
+                client_texture: None,
                 window_id: stable_id,
                 texture_id,
                 title,
@@ -1548,6 +1551,7 @@ impl WaylandFrontend {
             let description = WindowDescription {
                 object_id: local_window.id,
                 surface_id: local_window.id,
+                client_texture: None,
                 window_id: local_window.id,
                 texture_id: 0,
                 title,
@@ -1733,6 +1737,7 @@ impl WaylandFrontend {
                 let description = WindowDescription {
                     object_id: stable_id,
                     surface_id: stable_id,
+                    client_texture: None,
                     window_id: stable_id,
                     texture_id,
                     title,
@@ -1875,6 +1880,7 @@ impl WaylandFrontend {
                 let description = WindowDescription {
                     object_id: stable_id,
                     surface_id: stable_id,
+                    client_texture: None,
                     window_id: stable_id,
                     texture_id,
                     title,

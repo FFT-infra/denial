@@ -4,8 +4,11 @@ use super::*;
 
 #[path = "handler/gpu_deadline.rs"]
 mod gpu_deadline;
+#[path = "handler/native_client.rs"]
+pub(super) mod native_client;
 #[path = "handler/open_gl.rs"]
 mod open_gl;
+use native_client::NativeClientState;
 
 #[derive(Clone, Copy, Debug)]
 struct PendingOutputPresentation {
@@ -20,12 +23,16 @@ pub(in crate::flutter_runtime) struct FlutterGlHandler {
     display: Arc<EGLDisplayHandle>,
     gl: GlApi,
     targets: Mutex<Vec<GlTarget>>,
+    transfers: HashMap<u32, Arc<crate::gpu_transfer::TransferTarget>>,
+    pub(in crate::flutter_runtime) completion_owner: Mutex<Weak<FlutterGlHandler>>,
     shader_blit: Mutex<Option<ShaderBlit>>,
     depth_stencils: Mutex<Vec<u32>>,
     broker: Mutex<OutputBufferBroker>,
     pending_output_presentation: Mutex<Option<PendingOutputPresentation>>,
     gpu_deadline_hints: gpu_deadline::GpuDeadlineHints,
     external_texture_sources: Mutex<HashMap<i64, ExternalTextureSlot>>,
+    native_clients: Mutex<NativeClientState>,
+    native_fallback_pending: AtomicBool,
     raster_sampled_buffers: Mutex<Vec<SampledBufferHold>>,
     raster_sampled_feedback: Mutex<Vec<crate::surface_feedback::SurfaceFeedback>>,
     sampled_buffer_release_fence: Mutex<Option<OwnedFd>>,
@@ -84,6 +91,7 @@ impl FlutterGlHandler {
         );
         let mut targets = Vec::new();
         let mut broker_descriptors = Vec::new();
+        let mut transfers = HashMap::new();
 
         for pool in output_pools {
             let width =
@@ -382,6 +390,9 @@ impl FlutterGlHandler {
                 } else {
                     target.render_framebuffer = target.scanout_framebuffer;
                 }
+                if let Some(Some(transfer)) = pool.transfers.get(buffer_index) {
+                    transfers.insert(target.render_framebuffer, Arc::clone(transfer));
+                }
                 targets.push(target);
             }
             let framebuffers = targets[target_start..]
@@ -468,18 +479,30 @@ impl FlutterGlHandler {
             Mutex::new(RenderDamageAudit::new())
         });
 
+        // Capability probing happens before Flutter owns this context. Later
+        // composition uses this same raster context and its reader fences.
+        unsafe { render_context.make_current()? };
+        let mut native_clients = NativeClientState::new(&render_context, gl, &display);
+        if let Err(error) = render_context.unbind() {
+            native_clients.destroy();
+            return Err(error.into());
+        }
         Ok(Arc::new(Self {
             render_context: Mutex::new(ContextBinding::new(render_context)),
             resource_context: Mutex::new(ContextBinding::new(resource_context)),
             display,
             gl,
             targets: Mutex::new(targets),
+            transfers,
+            completion_owner: Mutex::new(Weak::new()),
             shader_blit: Mutex::new(shader_blit),
             depth_stencils: Mutex::new(depth_stencils),
             broker: Mutex::new(broker),
             pending_output_presentation: Mutex::new(None),
             gpu_deadline_hints: gpu_deadline::GpuDeadlineHints::default(),
             external_texture_sources: Mutex::new(HashMap::new()),
+            native_clients: Mutex::new(native_clients),
+            native_fallback_pending: AtomicBool::new(false),
             raster_sampled_buffers: Mutex::new(Vec::new()),
             raster_sampled_feedback: Mutex::new(Vec::new()),
             sampled_buffer_release_fence: Mutex::new(None),
@@ -790,6 +813,7 @@ impl FlutterGlHandler {
     }
 
     pub(in crate::flutter_runtime) fn remove_external_texture_source(&self, texture_id: i64) {
+        self.remove_native_window(texture_id);
         lock(&self.external_texture_sources).remove(&texture_id);
         let retired_dmabufs = lock(&self.dmabuf_texture_cache).remove(&texture_id);
         let retired_shm =
@@ -833,8 +857,19 @@ impl FlutterGlHandler {
         revision: u64,
         binding: Arc<CachedTextureBinding>,
     ) {
-        let retired = lock(&self.shm_texture_cache).insert((texture_id, revision), binding);
-        drop(retired);
+        let (retired, obsolete) = {
+            let mut cache = lock(&self.shm_texture_cache);
+            let retired = cache.insert((texture_id, revision), binding);
+            let obsolete = cache
+                .trim_matching_to(MAX_CACHED_SHM_REVISIONS_PER_TEXTURE, |(owner, _)| {
+                    *owner == texture_id
+                });
+            (retired, obsolete)
+        };
+        // Eviction releases only the cache's Arc. Flutter's live image leases
+        // still own their bindings; GL deletion remains deferred until their
+        // final release and a callback with the render context current.
+        drop((retired, obsolete));
     }
 
     pub(in crate::flutter_runtime) fn lease_external_texture(
@@ -1005,6 +1040,7 @@ impl FlutterGlHandler {
             return false;
         }
         context.owner = Some(thread::current().id());
+        lock(&self.native_clients).destroy();
         let cached_dmabufs = lock(&self.dmabuf_texture_cache).drain();
         let cached_shm = lock(&self.shm_texture_cache).drain();
         drop((cached_dmabufs, cached_shm));
@@ -1042,7 +1078,28 @@ impl FlutterGlHandler {
             let mut pending = lock(&self.retired_external_bindings.bindings);
             mem::swap(&mut *retired, &mut *pending);
         }
+        let shutting_down = self.shutdown_started.load(Ordering::Acquire);
+        if shutting_down
+            && retired
+                .iter()
+                .any(|binding| binding._owned_native.is_some())
+        {
+            // Teardown only: no future present can supply a reader fence.
+            unsafe { (self.gl.finish)() };
+        }
         for binding in retired.drain(..) {
+            if !shutting_down && let Some(storage) = &binding._owned_native {
+                // The engine can release an image after its last draw was
+                // queued. Delay BO reuse until a fence after that last reader,
+                // even if its initial composition fence completed long ago.
+                self.record_sampled_buffer(
+                    i64::MIN,
+                    storage.allocation_id,
+                    ExternalBufferGuard::OwnedNative {
+                        storage: Arc::clone(storage),
+                    },
+                );
+            }
             // SAFETY: this is called only with the Flutter render context
             // current, and every object was created by that context.
             unsafe {
@@ -1079,6 +1136,10 @@ impl FlutterGlHandler {
         {
             return false;
         }
+        if self.uses_native_window_texture(texture_id) {
+            *prepared_slot = self.prepare_native_without_gl(texture_id);
+            return prepared_slot.is_some();
+        }
         let Some(source) = self.current_external_texture(texture_id) else {
             return false;
         };
@@ -1098,7 +1159,16 @@ impl FlutterGlHandler {
                 let dmabuf_height = dmabuf.height();
                 let width = usize::try_from(dmabuf_width).unwrap_or_default();
                 let height = usize::try_from(dmabuf_height).unwrap_or_default();
-                let Some(binding) = self.cached_dmabuf_binding(texture_id, &dmabuf) else {
+                let cached = if buffer_guard
+                    .as_ref()
+                    .and_then(ExternalBufferGuard::owned_shm)
+                    .is_some()
+                {
+                    self.cached_shm_binding(texture_id, source_generation)
+                } else {
+                    self.cached_dmabuf_binding(texture_id, &dmabuf)
+                };
+                let Some(binding) = cached else {
                     return false;
                 };
                 let sampled_buffer = buffer_guard.clone();
@@ -1135,6 +1205,7 @@ impl FlutterGlHandler {
             name,
             resource,
             sampled_buffer,
+            native_samples: Vec::new(),
         });
         true
     }

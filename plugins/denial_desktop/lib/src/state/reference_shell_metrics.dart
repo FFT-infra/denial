@@ -83,6 +83,10 @@ class ReferenceShellMetrics {
   }) {
     final panel = edgePanelRect(viewSize, progress);
     return <Rect>[
+      // The opening swipe belongs to the keyboard too: keep the current
+      // editor focused before any part of the keyboard is on screen.
+      if (!scrollStripVisible)
+        edgePanelGestureRect(viewSize).intersect(Offset.zero & viewSize),
       if (panel.height > 0.0) panel,
       if (scrollStripVisible) edgePanelScrollStripRect(viewSize),
     ];

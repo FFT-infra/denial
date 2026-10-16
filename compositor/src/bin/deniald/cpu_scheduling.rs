@@ -14,6 +14,8 @@
 
 #[path = "cpu_scheduling/capacity.rs"]
 mod capacity;
+#[path = "cpu_scheduling/hints.rs"]
+mod hints;
 #[path = "cpu_scheduling/placement.rs"]
 mod placement;
 
@@ -200,7 +202,20 @@ impl Drop for ThreadRegistration {
 /// RTKit, graphics drivers, Flutter, and Denial's persistent workers must be
 /// allowed to create their helper threads before the compositor is elevated.
 pub(super) fn initialize() {
-    INITIALIZE.call_once(initialize_once);
+    INITIALIZE.call_once(|| {
+        initialize_once();
+        hints::start();
+    });
+}
+
+/// Keyboard focus moved to the Wayland client with this PID, or to no client.
+pub(super) fn focus_changed(pid: Option<libc::pid_t>) {
+    hints::focus_changed(pid);
+}
+
+/// The user produced an input event.
+pub(super) fn note_interaction() {
+    hints::note_interaction();
 }
 
 fn initialize_once() {
@@ -436,6 +451,7 @@ pub(super) fn normalize_current_worker(role: &'static str) {
             | "xembed tray"
             | "child-reaper"
             | "clipboard-dnd"
+            | "cpu-hints"
     ));
     if let Err(error) = normalize_current_thread() {
         warn!(

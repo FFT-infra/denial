@@ -661,3 +661,16 @@ impl FlutterRuntime {
         Ok(())
     }
 }
+
+impl FlutterRuntime {
+    pub(crate) fn publish_input_deck(
+        &self,
+        snapshot: &crate::input_deck::Snapshot,
+    ) -> Result<(), Box<dyn Error>> {
+        self.host().engine().send_platform_message(
+            crate::input_deck::STATE_CHANNEL,
+            &serde_json::to_vec(snapshot)?,
+        )?;
+        Ok(())
+    }
+}

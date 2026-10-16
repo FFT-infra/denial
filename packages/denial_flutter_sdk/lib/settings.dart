@@ -1,6 +1,8 @@
 /// Public Denial settings APIs.
 library;
 
+export 'src/settings/input_deck_settings.dart' show InputDeckSettings;
+
 export 'src/settings/color_format.dart'
     show formatOpaqueColorHex, opaqueColorRgb, parseOpaqueColorHex;
 export 'src/settings/fingerprint/fingerprint_service.dart'

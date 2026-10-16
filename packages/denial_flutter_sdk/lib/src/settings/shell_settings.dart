@@ -1,5 +1,8 @@
 import 'dart:ui';
 
+import 'input_deck_settings.dart';
+export 'input_deck_settings.dart';
+
 import 'package:flutter/foundation.dart';
 
 import '../core/utf8_size.dart';
@@ -864,6 +867,7 @@ bool _applicationEnvironmentMapsEqual(
 @immutable
 class ShellSettings {
   const ShellSettings({
+    this.inputDeck = const InputDeckSettings(),
     this.localization = const ShellLocalizationSettings(),
     this.appearance = const ShellAppearanceSettings(),
     this.layout = const ShellLayoutSettings(),
@@ -876,8 +880,9 @@ class ShellSettings {
 
   // Blur levels are additive in schema 9. Keep emitting the derived legacy
   // sigma so older shells can read settings written by this version.
-  static const int schemaVersion = 28;
+  static const int schemaVersion = 29;
 
+  final InputDeckSettings inputDeck;
   final ShellLocalizationSettings localization;
   final ShellAppearanceSettings appearance;
   final ShellLayoutSettings layout;
@@ -888,6 +893,7 @@ class ShellSettings {
   final ShellApplicationEnvironmentSettings applicationEnvironment;
 
   ShellSettings copyWith({
+    InputDeckSettings? inputDeck,
     ShellLocalizationSettings? localization,
     ShellAppearanceSettings? appearance,
     ShellLayoutSettings? layout,
@@ -898,6 +904,7 @@ class ShellSettings {
     ShellApplicationEnvironmentSettings? applicationEnvironment,
   }) {
     return ShellSettings(
+      inputDeck: inputDeck ?? this.inputDeck,
       localization: localization ?? this.localization,
       appearance: appearance ?? this.appearance,
       layout: layout ?? this.layout,
@@ -918,6 +925,9 @@ class ShellSettings {
   /// event.
   Map<String, Object?> differenceFrom(ShellSettings previous) {
     final patch = <String, Object?>{};
+    if (inputDeck != previous.inputDeck) {
+      patch['inputDeck'] = inputDeck.toJson();
+    }
 
     if (localization != previous.localization) {
       final section = <String, Object?>{};
@@ -1230,6 +1240,7 @@ class ShellSettings {
         'idleSuspendTimeoutMinutes': power.idleSuspendTimeoutMinutes,
         'suspendMode': power.suspendMode.name,
       },
+      'inputDeck': inputDeck.toJson(),
       'applicationEnvironment': applicationEnvironment.toJson(),
     };
   }
@@ -1591,6 +1602,7 @@ class ShellSettings {
           defaults.power.suspendMode,
         ),
       ),
+      inputDeck: InputDeckSettings.fromJson(json['inputDeck']),
       applicationEnvironment: ShellApplicationEnvironmentSettings.fromJson(
         json['applicationEnvironment'],
       ),
@@ -1600,6 +1612,7 @@ class ShellSettings {
   @override
   bool operator ==(Object other) {
     return other is ShellSettings &&
+        other.inputDeck == inputDeck &&
         other.localization == localization &&
         other.appearance == appearance &&
         other.layout == layout &&
@@ -1612,6 +1625,7 @@ class ShellSettings {
 
   @override
   int get hashCode => Object.hash(
+    inputDeck,
     localization,
     appearance,
     layout,

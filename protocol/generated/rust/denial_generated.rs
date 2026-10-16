@@ -4161,6 +4161,171 @@ impl core::fmt::Debug for SurfaceLayer<'_> {
       ds.finish()
   }
 }
+pub enum ClientTextureOffset {}
+#[derive(Copy, Clone, PartialEq)]
+
+pub struct ClientTexture<'a> {
+  pub _tab: flatbuffers::Table<'a>,
+}
+
+impl<'a> flatbuffers::Follow<'a> for ClientTexture<'a> {
+  type Inner = ClientTexture<'a>;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: unsafe { flatbuffers::Table::new(buf, loc) } }
+  }
+}
+
+impl<'a> ClientTexture<'a> {
+  pub const VT_TEXTURE_ID: flatbuffers::VOffsetT = 4;
+  pub const VT_WIDTH: flatbuffers::VOffsetT = 6;
+  pub const VT_HEIGHT: flatbuffers::VOffsetT = 8;
+  pub const VT_SOURCE_WIDTH: flatbuffers::VOffsetT = 10;
+  pub const VT_SOURCE_HEIGHT: flatbuffers::VOffsetT = 12;
+
+  #[inline]
+  pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
+    ClientTexture { _tab: table }
+  }
+  #[allow(unused_mut)]
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: flatbuffers::Allocator + 'bldr>(
+    _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr, A>,
+    args: &'args ClientTextureArgs
+  ) -> flatbuffers::WIPOffset<ClientTexture<'bldr>> {
+    let mut builder = ClientTextureBuilder::new(_fbb);
+    builder.add_source_height(args.source_height);
+    builder.add_source_width(args.source_width);
+    builder.add_texture_id(args.texture_id);
+    builder.add_height(args.height);
+    builder.add_width(args.width);
+    builder.finish()
+  }
+
+
+  #[inline]
+  pub fn texture_id(&self) -> u64 {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<u64>(ClientTexture::VT_TEXTURE_ID, Some(0)).unwrap()}
+  }
+  #[inline]
+  pub fn width(&self) -> u32 {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<u32>(ClientTexture::VT_WIDTH, Some(0)).unwrap()}
+  }
+  #[inline]
+  pub fn height(&self) -> u32 {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<u32>(ClientTexture::VT_HEIGHT, Some(0)).unwrap()}
+  }
+  #[inline]
+  pub fn source_width(&self) -> f64 {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<f64>(ClientTexture::VT_SOURCE_WIDTH, Some(0.0)).unwrap()}
+  }
+  #[inline]
+  pub fn source_height(&self) -> f64 {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<f64>(ClientTexture::VT_SOURCE_HEIGHT, Some(0.0)).unwrap()}
+  }
+}
+
+impl flatbuffers::Verifiable for ClientTexture<'_> {
+  #[inline]
+  fn run_verifier(
+    v: &mut flatbuffers::Verifier, pos: usize
+  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+    use self::flatbuffers::Verifiable;
+    v.visit_table(pos)?
+     .visit_field::<u64>("texture_id", Self::VT_TEXTURE_ID, false)?
+     .visit_field::<u32>("width", Self::VT_WIDTH, false)?
+     .visit_field::<u32>("height", Self::VT_HEIGHT, false)?
+     .visit_field::<f64>("source_width", Self::VT_SOURCE_WIDTH, false)?
+     .visit_field::<f64>("source_height", Self::VT_SOURCE_HEIGHT, false)?
+     .finish();
+    Ok(())
+  }
+}
+pub struct ClientTextureArgs {
+    pub texture_id: u64,
+    pub width: u32,
+    pub height: u32,
+    pub source_width: f64,
+    pub source_height: f64,
+}
+impl<'a> Default for ClientTextureArgs {
+  #[inline]
+  fn default() -> Self {
+    ClientTextureArgs {
+      texture_id: 0,
+      width: 0,
+      height: 0,
+      source_width: 0.0,
+      source_height: 0.0,
+    }
+  }
+}
+
+pub struct ClientTextureBuilder<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> {
+  fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+  start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
+}
+impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> ClientTextureBuilder<'a, 'b, A> {
+  #[inline]
+  pub fn add_texture_id(&mut self, texture_id: u64) {
+    self.fbb_.push_slot::<u64>(ClientTexture::VT_TEXTURE_ID, texture_id, 0);
+  }
+  #[inline]
+  pub fn add_width(&mut self, width: u32) {
+    self.fbb_.push_slot::<u32>(ClientTexture::VT_WIDTH, width, 0);
+  }
+  #[inline]
+  pub fn add_height(&mut self, height: u32) {
+    self.fbb_.push_slot::<u32>(ClientTexture::VT_HEIGHT, height, 0);
+  }
+  #[inline]
+  pub fn add_source_width(&mut self, source_width: f64) {
+    self.fbb_.push_slot::<f64>(ClientTexture::VT_SOURCE_WIDTH, source_width, 0.0);
+  }
+  #[inline]
+  pub fn add_source_height(&mut self, source_height: f64) {
+    self.fbb_.push_slot::<f64>(ClientTexture::VT_SOURCE_HEIGHT, source_height, 0.0);
+  }
+  #[inline]
+  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> ClientTextureBuilder<'a, 'b, A> {
+    let start = _fbb.start_table();
+    ClientTextureBuilder {
+      fbb_: _fbb,
+      start_: start,
+    }
+  }
+  #[inline]
+  pub fn finish(self) -> flatbuffers::WIPOffset<ClientTexture<'a>> {
+    let o = self.fbb_.end_table(self.start_);
+    flatbuffers::WIPOffset::new(o.value())
+  }
+}
+
+impl core::fmt::Debug for ClientTexture<'_> {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    let mut ds = f.debug_struct("ClientTexture");
+      ds.field("texture_id", &self.texture_id());
+      ds.field("width", &self.width());
+      ds.field("height", &self.height());
+      ds.field("source_width", &self.source_width());
+      ds.field("source_height", &self.source_height());
+      ds.finish()
+  }
+}
 pub enum WindowOffset {}
 #[derive(Copy, Clone, PartialEq)]
 
@@ -4228,6 +4393,7 @@ impl<'a> Window<'a> {
   pub const VT_PET: flatbuffers::VOffsetT = 100;
   pub const VT_PET_HOLDS: flatbuffers::VOffsetT = 102;
   pub const VT_PET_DRAGGED: flatbuffers::VOffsetT = 104;
+  pub const VT_CLIENT_TEXTURE: flatbuffers::VOffsetT = 106;
 
   #[inline]
   pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -4266,6 +4432,7 @@ impl<'a> Window<'a> {
     builder.add_window_id(args.window_id);
     builder.add_surface_id(args.surface_id);
     builder.add_object_id(args.object_id);
+    if let Some(x) = args.client_texture { builder.add_client_texture(x); }
     builder.add_pet_holds(args.pet_holds);
     builder.add_held_hold(args.held_hold);
     builder.add_opacity(args.opacity);
@@ -4651,6 +4818,13 @@ impl<'a> Window<'a> {
     // which contains a valid value in this slot
     unsafe { self._tab.get::<bool>(Window::VT_PET_DRAGGED, Some(false)).unwrap()}
   }
+  #[inline]
+  pub fn client_texture(&self) -> Option<ClientTexture<'a>> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<ClientTexture>>(Window::VT_CLIENT_TEXTURE, None)}
+  }
 }
 
 impl flatbuffers::Verifiable for Window<'_> {
@@ -4711,6 +4885,7 @@ impl flatbuffers::Verifiable for Window<'_> {
      .visit_field::<bool>("pet", Self::VT_PET, false)?
      .visit_field::<u32>("pet_holds", Self::VT_PET_HOLDS, false)?
      .visit_field::<bool>("pet_dragged", Self::VT_PET_DRAGGED, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<ClientTexture>>("client_texture", Self::VT_CLIENT_TEXTURE, false)?
      .finish();
     Ok(())
   }
@@ -4767,6 +4942,7 @@ pub struct WindowArgs<'a> {
     pub pet: bool,
     pub pet_holds: u32,
     pub pet_dragged: bool,
+    pub client_texture: Option<flatbuffers::WIPOffset<ClientTexture<'a>>>,
 }
 impl<'a> Default for WindowArgs<'a> {
   #[inline]
@@ -4823,6 +4999,7 @@ impl<'a> Default for WindowArgs<'a> {
       pet: false,
       pet_holds: 0,
       pet_dragged: false,
+      client_texture: None,
     }
   }
 }
@@ -5037,6 +5214,10 @@ impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> WindowBuilder<'a, 'b, A> {
     self.fbb_.push_slot::<bool>(Window::VT_PET_DRAGGED, pet_dragged, false);
   }
   #[inline]
+  pub fn add_client_texture(&mut self, client_texture: flatbuffers::WIPOffset<ClientTexture<'b >>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<ClientTexture>>(Window::VT_CLIENT_TEXTURE, client_texture);
+  }
+  #[inline]
   pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> WindowBuilder<'a, 'b, A> {
     let start = _fbb.start_table();
     WindowBuilder {
@@ -5105,6 +5286,7 @@ impl core::fmt::Debug for Window<'_> {
       ds.field("pet", &self.pet());
       ds.field("pet_holds", &self.pet_holds());
       ds.field("pet_dragged", &self.pet_dragged());
+      ds.field("client_texture", &self.client_texture());
       ds.finish()
   }
 }

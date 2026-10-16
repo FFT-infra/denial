@@ -654,6 +654,18 @@ fn create_window_snapshot<'a>(
         let title = builder.create_string(&description.title);
         let app_id = builder.create_string(&description.app_id);
         let held = description.pet.and_then(|pet| pet.held);
+        let client_texture = description.client_texture.map(|texture| {
+            fb::ClientTexture::create(
+                builder,
+                &fb::ClientTextureArgs {
+                    texture_id: texture.texture_id,
+                    width: texture.width,
+                    height: texture.height,
+                    source_width: texture.source_width,
+                    source_height: texture.source_height,
+                },
+            )
+        });
         windows.push(fb::Window::create(
             builder,
             &fb::WindowArgs {
@@ -662,6 +674,7 @@ fn create_window_snapshot<'a>(
                 surface_id: description.surface_id,
                 window_id: description.window_id,
                 texture_id: description.texture_id,
+                client_texture,
                 title: Some(title),
                 app_id: Some(app_id),
                 width: description.width,

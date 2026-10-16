@@ -24,6 +24,7 @@ export 'src/models/denial_drag_icon.dart'
     show DenialDragIcon, DenialDragIconUpdate;
 export 'src/models/denial_window.dart'
     show
+        DenialClientTexture,
         DenialSurfaceLayer,
         DenialSurfaceRole,
         DenialWindow,

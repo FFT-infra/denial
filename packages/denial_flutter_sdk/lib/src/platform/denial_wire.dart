@@ -1491,6 +1491,16 @@ class DenialWireCodec {
         lastCompositionOrder = layer.compositionOrder;
         layers.add(layer);
       }
+      final nativeClient = window.clientTexture;
+      final clientTexture = nativeClient == null
+          ? null
+          : DenialClientTexture(
+              textureId: nativeClient.textureId,
+              width: nativeClient.width,
+              height: nativeClient.height,
+              sourceWidth: nativeClient.sourceWidth,
+              sourceHeight: nativeClient.sourceHeight,
+            );
       final transientParentId = window.transientParentId;
       final decoded = DenialWindow(
         objectId: objectId,
@@ -1537,6 +1547,7 @@ class DenialWireCodec {
         contentWidth: window.contentWidth,
         contentHeight: window.contentHeight,
         surfaceLayers: List<DenialSurfaceLayer>.unmodifiable(layers),
+        clientTexture: clientTexture,
         contentKind: contentKind,
         opacityClass: switch (window.opacityClass) {
           generated.WindowOpacityClass.BorderAlphaOnly =>

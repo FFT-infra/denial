@@ -4657,4 +4657,75 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get pluginsDesktopFeature => '桌面';
+
+  @override
+  String get inputDeckTitle => '键盘与触控板显示屏';
+
+  @override
+  String get inputDeckHeading => '键盘与触控板';
+
+  @override
+  String get inputDeckEnable => '将触摸显示屏用作键盘与触控板';
+
+  @override
+  String get inputDeckUnavailable => '连接触摸显示屏以设置此模式。';
+
+  @override
+  String inputDeckEnableDescription(String output) {
+    return '当有其他显示屏可用时，使用 $output 进行输入。断开外接显示屏即可返回平板模式。';
+  }
+
+  @override
+  String get inputDeckWaiting => '连接并开启第二个显示屏后即可使用。';
+
+  @override
+  String get inputDeckTouchDisplay => '触摸显示屏';
+
+  @override
+  String get inputDeckTouchDisplayDescription => '用于键盘与触控板输入的显示屏。';
+
+  @override
+  String get inputDeckKeyboardSize => '键盘大小';
+
+  @override
+  String get inputDeckTouchpadWidth => '触控板宽度';
+
+  @override
+  String get inputDeckTouchpadHeight => '触控板高度';
+
+  @override
+  String get inputDeckPointerSpeed => '指针速度';
+
+  @override
+  String get inputDeckNaturalScroll => '自然滚动';
+
+  @override
+  String get inputDeckNaturalScrollDescription => '内容随手指移动方向滚动。';
+
+  @override
+  String get inputDeckCpuChart => 'CPU 图表';
+
+  @override
+  String get inputDeckCpuDescription => '在键盘上方显示处理器使用率。';
+
+  @override
+  String get inputDeckGpuCharts => 'GPU 图表';
+
+  @override
+  String get inputDeckGpuDescription => '显示支持使用率报告的 GPU 的使用情况。';
+
+  @override
+  String get inputDeckUseAsDisplay => '用作显示屏';
+
+  @override
+  String get inputDeckTouchpad => '触控板';
+
+  @override
+  String get inputDeckTouchpadHint => '触控板。单指移动指针，轻点单击，双指滚动或轻点以右键单击，双击并按住以拖动。';
+
+  @override
+  String get inputDeckLeftClick => '左键单击';
+
+  @override
+  String get inputDeckRightClick => '右键单击';
 }

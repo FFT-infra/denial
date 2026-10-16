@@ -135,6 +135,10 @@ const GLFW_MOD_CONTROL: u32 = 0x0002;
 const GLFW_MOD_ALT: u32 = 0x0004;
 const MAX_CACHED_DMABUF_BINDINGS_PER_TEXTURE: usize = 8;
 const MAX_CACHED_SHM_BINDINGS: usize = 32;
+// SHM revisions own distinct GPU uploads. Unlike rotating dma-bufs, old
+// revisions are not reusable client storage. Keep a small recent ring per
+// surface while retaining the existing compositor-wide cache bound.
+const MAX_CACHED_SHM_REVISIONS_PER_TEXTURE: usize = 3;
 const MAX_CACHED_EXTERNAL_TEXTURE_LEASES: usize = 256;
 const MAX_RECYCLED_SAMPLED_BUFFER_BATCHES: usize = 8;
 const MAX_RECYCLED_SHM_BUFFERS: usize = 8;
@@ -166,6 +170,9 @@ pub(super) struct OutputRenderTargetPool<'a> {
     pub size: PixelSize,
     pub initial_scanout: usize,
     pub dmabufs: Vec<(&'a Dmabuf, Option<&'a Dmabuf>)>,
+    /// None preserves direct same-device rendering. Source slots and final
+    /// scanout slots share an index, but have distinct storage and completion.
+    pub transfers: Vec<Option<Arc<crate::gpu_transfer::TransferTarget>>>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -443,7 +450,7 @@ fn window_texture_map(windows: &[wire::WindowDescription]) -> HashMap<u64, Vec<i
         .iter()
         .filter(|window| !window.content_kind.is_layer_shell())
     {
-        let texture_ids = if window.surfaces.is_empty() {
+        let mut texture_ids: Vec<i64> = if window.surfaces.is_empty() {
             i64::try_from(window.texture_id)
                 .ok()
                 .filter(|texture_id| *texture_id > 0)
@@ -457,6 +464,9 @@ fn window_texture_map(windows: &[wire::WindowDescription]) -> HashMap<u64, Vec<i
                 .filter(|texture_id| *texture_id > 0)
                 .collect()
         };
+        if let Some(client) = window.client_texture {
+            texture_ids.push(client.texture_id as i64);
+        }
         textures.insert(window.window_id, texture_ids);
     }
     textures
@@ -519,6 +529,8 @@ pub struct FlutterRuntime {
     pending_brightness_requests: VecDeque<super::system_controls::BrightnessRequest>,
     pending_software_dimming_requests: VecDeque<super::gamma_control::SoftwareDimmingRequest>,
     pending_ui_development_commands: VecDeque<super::ui_development::UiDevelopmentCommand>,
+    pub(super) input_deck_commands: VecDeque<super::input_deck::Command>,
+    pub(super) input_deck_snapshot: Option<super::input_deck::Snapshot>,
     pending_idle_policy: Option<idle_policy::IdlePolicyConfiguration>,
     pending_dpms_off: bool,
     pending_vm_service_uri: Option<String>,

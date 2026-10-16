@@ -105,7 +105,7 @@ impl WaylandFrontend {
             i32::try_from(keyboard.repeat_rate_hz)?,
         )?;
         seat.add_pointer();
-        seat.add_touch();
+        seat.add_touch_with_default_grab(|| Box::new(denial_core::touch_grab::DefaultTouchGrab));
         let popups = PopupManager::default();
         let mut space = Space::default();
 
@@ -311,7 +311,7 @@ impl WaylandFrontend {
             #[cfg(feature = "flutter")]
             surface_shm_frames: HashMap::new(),
             #[cfg(feature = "flutter")]
-            shm_snapshot_pool: Arc::new(ShmSnapshotPool::new()),
+            shm_snapshot_pool: Arc::new(ShmSnapshotPool::new_for_device(render_device.clone())),
             #[cfg(feature = "flutter")]
             shm_snapshot_bytes: 0,
             #[cfg(feature = "flutter")]
@@ -505,6 +505,8 @@ impl WaylandFrontend {
             damage_tracker,
             next_window_offset: 48,
             desktop_bounds,
+            #[cfg(feature = "flutter")]
+            input_deck_output: None,
             touch_bounds,
             touch_transform,
             tablet_output_mappings: HashMap::new(),

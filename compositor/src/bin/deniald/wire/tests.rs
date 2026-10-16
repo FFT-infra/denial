@@ -1134,6 +1134,7 @@ fn scene_window(id: u64) -> WindowDescription {
         surface_id: id,
         window_id: id,
         texture_id: id,
+        client_texture: None,
         title: format!("window {id}"),
         app_id: "test".into(),
         width: 100,
@@ -1441,4 +1442,111 @@ fn reset_width_shortcut_schema_decodes_and_encodes_without_changing_height_id() 
             .action(),
         fb::ShortcutActionKind::ResetWindowWidth
     );
+}
+
+#[test]
+fn optional_client_texture_preserves_real_tree_and_fractional_source_extent() {
+    let mut scene = scene_window(17);
+    let client = ClientTextureDescription {
+        texture_id: (1_u64 << 62) | 17,
+        width: 126,
+        height: 101,
+        source_width: 125.25,
+        source_height: 100.5,
+    };
+    scene.client_texture = Some(client);
+    let mut bridge = bridge();
+    let (bytes, _) = bridge
+        .update_windows(1, vec![scene], &BTreeSet::new())
+        .unwrap();
+    let snapshot = fb::root_as_envelope(bytes.unwrap())
+        .unwrap()
+        .payload_as_window_snapshot()
+        .unwrap();
+    let window = snapshot.windows().unwrap().get(0);
+    assert_eq!(window.surface_id(), 17);
+    assert_eq!(window.texture_id(), 17);
+    let merged = window.client_texture().unwrap();
+    assert_eq!(merged.texture_id(), client.texture_id);
+    assert_eq!((merged.width(), merged.height()), (126, 101));
+    assert_eq!(
+        (merged.source_width(), merged.source_height()),
+        (125.25, 100.5)
+    );
+    let (bytes, _) = bridge
+        .update_windows(2, vec![scene_window(17)], &BTreeSet::new())
+        .unwrap();
+    let snapshot = fb::root_as_envelope(bytes.unwrap())
+        .unwrap()
+        .payload_as_window_snapshot()
+        .unwrap();
+    assert!(
+        snapshot
+            .windows()
+            .unwrap()
+            .get(0)
+            .client_texture()
+            .is_none()
+    );
+}
+
+#[test]
+fn client_texture_rejects_invalid_native_image_contracts() {
+    let valid = ClientTextureDescription {
+        texture_id: 1_u64 << 62,
+        width: 100,
+        height: 80,
+        source_width: 100.0,
+        source_height: 80.0,
+    };
+    for invalid in [
+        ClientTextureDescription {
+            texture_id: 0,
+            ..valid
+        },
+        ClientTextureDescription {
+            texture_id: u64::MAX,
+            ..valid
+        },
+        ClientTextureDescription { width: 0, ..valid },
+        ClientTextureDescription {
+            width: 8193,
+            ..valid
+        },
+        ClientTextureDescription {
+            width: 8192,
+            height: 8192,
+            ..valid
+        },
+        ClientTextureDescription {
+            source_width: f64::NAN,
+            ..valid
+        },
+        ClientTextureDescription {
+            source_height: f64::INFINITY,
+            ..valid
+        },
+        ClientTextureDescription {
+            source_width: 100.1,
+            ..valid
+        },
+        ClientTextureDescription {
+            source_height: 0.0,
+            ..valid
+        },
+    ] {
+        let mut scene = scene_window(1);
+        scene.client_texture = Some(invalid);
+        assert!(validate_windows(&[scene]).is_err());
+    }
+    for kind in [
+        WindowContentKind::LocalFlutter,
+        WindowContentKind::PopupSurface,
+        WindowContentKind::LayerShellTop,
+    ] {
+        let mut scene = scene_window(1);
+        scene.content_kind = kind;
+        scene.client_texture = Some(valid);
+        assert!(validate_windows(&[scene]).is_err());
+    }
 }

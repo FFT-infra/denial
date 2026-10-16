@@ -414,6 +414,7 @@ pub(super) fn synchronize_shell_keyboard(
     {
         events.scene_sync.mark_dirty();
     }
+    wayland_frontend::synchronize_input_deck(runtime, events)?;
     publish_software_keyboard_state(runtime, events)?;
     let commands = runtime.drain_keyboard_commands().collect::<Vec<_>>();
     // The OSK is a virtual keyboard source. Rust converts each intent into

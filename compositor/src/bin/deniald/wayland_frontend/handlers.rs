@@ -1252,6 +1252,9 @@ impl CompositorHandler for RuntimeState {
                 buffer_update.as_ref().is_some_and(Option::is_none),
             )
         };
+        if buffer_removed {
+            super::input::cancel_touch_for_surface(self, surface);
+        }
         if let Some(buffer) = buffer_update {
             let frontend = self.wayland.as_mut().expect("missing Wayland frontend");
             if let Some(buffer) = buffer {
@@ -1597,6 +1600,7 @@ impl CompositorHandler for RuntimeState {
     }
 
     fn destroyed(&mut self, surface: &WlSurface) {
+        super::input::cancel_touch_for_surface(self, surface);
         // A system-backend ObjectId is already invalid by the time this
         // callback runs, so DisplayHandle::get_client(surface.id()) is not a
         // reliable way to find the owner. The ClientId captured at creation
@@ -1692,6 +1696,28 @@ impl smithay::wayland::fractional_scale::FractionalScaleHandler for RuntimeState
     }
 }
 
+impl denial_core::touch_grab::TouchCancellation for RuntimeState {
+    type Recipient = Client;
+
+    fn touch_recipient(&self, focus: &WlSurface) -> Option<Client> {
+        focus.client()
+    }
+
+    fn cancel_touch_recipient(&mut self, client: &Client) {
+        let touch = self
+            .wayland
+            .as_ref()
+            .expect("missing Wayland frontend")
+            .seat
+            .get_touch()
+            .expect("seat has no touch");
+        // client_touch only locks the resource list, not the inner grab lock.
+        for resource in touch.client_touch(client) {
+            resource.cancel();
+        }
+    }
+}
+
 impl SeatHandler for RuntimeState {
     type KeyboardFocus = KeyboardFocusTarget;
     type PointerFocus = WlSurface;
@@ -1761,6 +1787,12 @@ impl SeatHandler for RuntimeState {
         if input_method_changed {
             self.scene_sync.mark_dirty();
         }
+        crate::cpu_scheduling::focus_changed(
+            client
+                .as_ref()
+                .and_then(|client| client.get_credentials(&display_handle).ok())
+                .map(|credentials| credentials.pid),
+        );
         set_data_device_focus(&display_handle, seat, client);
         #[cfg(feature = "flutter")]
         {
@@ -2399,6 +2431,7 @@ impl XdgShellHandler for RuntimeState {
     }
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
+        super::input::cancel_touch_for_surface(self, surface.wl_surface());
         let window = self
             .wayland
             .as_ref()
@@ -2440,6 +2473,7 @@ impl XdgShellHandler for RuntimeState {
     }
 
     fn popup_destroyed(&mut self, surface: PopupSurface) {
+        super::input::cancel_touch_for_surface(self, surface.wl_surface());
         let frontend = self.wayland.as_mut().expect("missing Wayland frontend");
         frontend.remove_surface_state(surface.wl_surface(), false);
         // The Flutter path does not call WaylandFrontend::render(), where
