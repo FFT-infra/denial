@@ -907,11 +907,21 @@ mod tests {
         assert_eq!(after.sched_util_min, 600);
         assert_eq!(after.sched_policy, before.sched_policy);
         assert_eq!(after.sched_nice, before.sched_nice);
-        assert_ne!(after.sched_flags & libc::SCHED_FLAG_RESET_ON_FORK as u64, 0);
-
-        // A thread created by the floored thread starts without the floor.
-        spawn_sender.send(true).unwrap();
-        assert_eq!(child_receiver.recv().unwrap(), 0);
+        let reset_on_fork = libc::SCHED_FLAG_RESET_ON_FORK as u64;
+        if before.sched_policy == libc::SCHED_OTHER as u32 {
+            assert_ne!(after.sched_flags & reset_on_fork, 0);
+            // A thread created by the floored thread starts without the floor.
+            spawn_sender.send(true).unwrap();
+            assert_eq!(child_receiver.recv().unwrap(), 0);
+        } else {
+            // Tests can inherit another policy, such as the SCHED_IDLE of a
+            // build host's Nix daemon. set_clamp keeps that policy and so its
+            // reset-on-fork state.
+            assert_eq!(
+                after.sched_flags & reset_on_fork,
+                before.sched_flags & reset_on_fork
+            );
+        }
 
         set_clamp(tid, Some(0), Some(500), false).unwrap();
         let capped = get_attr(tid).unwrap();
