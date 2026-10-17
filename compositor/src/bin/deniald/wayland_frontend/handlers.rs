@@ -12,6 +12,7 @@ use super::window_management::{
     queue_restored_window_state, queue_window_placement, release_window_focus,
 };
 use super::*;
+use smithay::backend::renderer::utils::RendererSurfaceStateUserData;
 #[cfg(feature = "flutter")]
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::wayland::selection::{SelectionSource, SelectionTarget};
@@ -428,11 +429,56 @@ impl Blocker for CancelledSurfaceReadiness {
 }
 
 fn cancel_unsynchronized_surface_commit(surface: &WlSurface) {
-    // Applying a commit after its readiness source failed would let Flutter
-    // sample producer-owned storage without any acquire guarantee. Discard the
-    // transaction instead; the client can submit a later buffer once the
-    // compositor event loop is healthy again.
+    // The readiness source failed, so the commit cannot wait for its acquire
+    // fence, and applying it now would let Flutter sample producer-owned
+    // storage still being written. Cancel the transaction instead: Smithay
+    // keeps its state and merges it into this surface's next applied commit.
+    // signal_unclaimed_release_point covers a detach merged after it.
     add_blocker(surface, CancelledSurfaceReadiness);
+}
+
+/// Signal a syncobj release point that Smithay's renderer state left behind.
+///
+/// Smithay hands a commit's release point to the renderer state only with a
+/// newly attached buffer it can sample. When the applied state detaches the
+/// surface after a buffer merged in from an earlier commit, or the buffer
+/// cannot be sampled, the point stays cached until a later explicit-sync
+/// commit on this surface. Producers that wait for it before reusing the
+/// buffer, such as Droidloom's layer views, would stall until then. Nothing
+/// on this surface is read under the point, so signal it now.
+fn signal_unclaimed_release_point(surface: &WlSurface) {
+    let unclaimed = with_states(surface, |states| {
+        let has_buffer = states
+            .data_map
+            .get::<RendererSurfaceStateUserData>()
+            .is_some_and(|renderer| {
+                renderer
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .buffer()
+                    .is_some()
+            });
+        if has_buffer {
+            return None;
+        }
+        let mut syncobj = states.cached_state.get::<DrmSyncobjCachedState>();
+        let syncobj = syncobj.current();
+        syncobj.acquire_point = None;
+        syncobj.release_point.take()
+    });
+    if let Some(release_point) = unclaimed {
+        if let Err(error) = release_point.signal() {
+            warn!(
+                %error,
+                surface_id = ?surface.id(),
+                "could not signal an unclaimed release point"
+            );
+        }
+        debug!(
+            surface_id = ?surface.id(),
+            "signalled a release point the renderer state did not claim"
+        );
+    }
 }
 
 #[cfg(feature = "flutter")]
@@ -444,8 +490,8 @@ struct PendingFrameDeadline {
 
 #[cfg(feature = "flutter")]
 impl PendingFrameDeadline {
-    fn cancel<Data>(&mut self, loop_handle: &LoopHandle<'_, Data>) -> Option<bool> {
-        if !self.blocker.cancel_if_pending() {
+    fn miss<Data>(&mut self, loop_handle: &LoopHandle<'_, Data>) -> Option<bool> {
+        if !self.blocker.miss_if_pending() {
             return None;
         }
         if let Some(token) = self.token.take() {
@@ -481,7 +527,7 @@ fn install_frame_deadline_blocker(
     let token = match loop_handle.insert_source(
         Timer::from_deadline(target.deadline),
         move |_, _, state| {
-            if deadline_blocker.cancel_if_pending() {
+            if deadline_blocker.miss_if_pending() {
                 state
                     .wayland
                     .as_mut()
@@ -565,18 +611,11 @@ fn install_surface_readiness_hook(surface: &WlSurface) {
             (acquire_point, dmabuf, has_new_buffer)
         });
         #[cfg(feature = "flutter")]
-        let frame_target = match state
+        let frame_target = state
             .wayland
             .as_mut()
             .expect("missing Wayland frontend")
-            .accept_frame_timeline_commit(surface, has_new_buffer)
-        {
-            Ok(deadline) => deadline,
-            Err(()) => {
-                cancel_unsynchronized_surface_commit(surface);
-                return;
-            }
-        };
+            .accept_frame_timeline_commit(surface, has_new_buffer);
         let Some(dmabuf) = dmabuf else {
             #[cfg(feature = "flutter")]
             if let Some(target) = frame_target {
@@ -688,7 +727,7 @@ fn install_surface_readiness_hook(surface: &WlSurface) {
                 Err(error) => {
                     #[cfg(feature = "flutter")]
                     if let (Some(deadline), Some(target)) = (failed_deadline.as_mut(), frame_target)
-                        && deadline.cancel(&loop_handle).is_some()
+                        && deadline.miss(&loop_handle).is_some()
                     {
                         state
                             .wayland
@@ -973,6 +1012,7 @@ fn install_layer_surface_unmap_compatibility_hooks(surface: &WlSurface) {
 mod frame_deadline_source_tests {
     use super::*;
     use smithay::reexports::calloop::EventLoop;
+    use smithay::wayland::compositor::{Blocker, BlockerState};
     use std::sync::atomic::AtomicU64;
 
     #[test]
@@ -990,7 +1030,7 @@ mod frame_deadline_source_tests {
             .insert_source(
                 Timer::from_deadline(now + Duration::from_millis(50)),
                 move |_, _, events| {
-                    deadline_blocker.cancel_if_pending();
+                    deadline_blocker.miss_if_pending();
                     events.push("deadline");
                     TimeoutAction::Drop
                 },
@@ -1036,7 +1076,7 @@ mod frame_deadline_source_tests {
         let handle_for_deadline = handle.clone();
         let token = handle
             .insert_source(Timer::immediate(), move |_, _, events| {
-                assert!(deadline_blocker.cancel_if_pending());
+                assert!(deadline_blocker.miss_if_pending());
                 events.push("deadline");
                 handle_for_deadline
                     .insert_source(Timer::immediate(), |_, _, events| {
@@ -1059,7 +1099,7 @@ mod frame_deadline_source_tests {
                     pending.release_if_on_time(&handle_for_acquire, Instant::now()),
                     None
                 );
-                assert_eq!(pending.cancel(&handle_for_acquire), None);
+                assert_eq!(pending.miss(&handle_for_acquire), None);
                 TimeoutAction::Drop
             })
             .unwrap();
@@ -1072,7 +1112,7 @@ mod frame_deadline_source_tests {
             .dispatch(Some(Duration::ZERO), &mut events)
             .unwrap();
         assert_eq!(events, ["deadline", "acquire", "unrelated"]);
-        assert_eq!(blocker.state(), BlockerState::Cancelled);
+        assert_eq!(blocker.state(), BlockerState::Released);
     }
 }
 
@@ -1247,7 +1287,7 @@ impl CompositorHandler for RuntimeState {
             let frontend = self.wayland.as_ref().expect("missing Wayland frontend");
             (
                 buffer_update.as_ref().is_some_and(Option::is_some)
-                    && !frontend.surface_buffers.contains_key(&surface.id()),
+                    && !frontend.buffered_surfaces.contains(&surface.id()),
                 buffer_update.as_ref().is_some_and(Option::is_some),
                 buffer_update.as_ref().is_some_and(Option::is_none),
             )
@@ -1264,14 +1304,17 @@ impl CompositorHandler for RuntimeState {
                 } else {
                     frontend.pending_shm_snapshots.insert(surface.id());
                 }
-                frontend.surface_buffers.insert(surface.id(), buffer);
+                #[cfg(not(feature = "flutter"))]
+                let _ = buffer;
+                frontend.buffered_surfaces.insert(surface.id());
             } else {
-                frontend.surface_buffers.remove(&surface.id());
+                frontend.buffered_surfaces.remove(&surface.id());
                 #[cfg(feature = "flutter")]
                 frontend.pending_shm_snapshots.remove(&surface.id());
             }
         }
         on_commit_buffer_handler::<Self>(surface);
+        signal_unclaimed_release_point(surface);
         #[cfg(feature = "flutter")]
         if matches!(
             self.wayland
@@ -1634,11 +1677,10 @@ impl CompositorHandler for RuntimeState {
 }
 
 impl BufferHandler for RuntimeState {
-    fn buffer_destroyed(&mut self, buffer: &wl_buffer::WlBuffer) {
-        let frontend = self.wayland.as_mut().expect("missing Wayland frontend");
-        frontend
-            .surface_buffers
-            .retain(|_, current| current != buffer);
+    fn buffer_destroyed(&mut self, _buffer: &wl_buffer::WlBuffer) {
+        // Clients may destroy a buffer once it is released, including SHM
+        // buffers that deniald releases right after snapshotting them. The
+        // surface keeps those contents, so it stays buffered.
         self.scene_sync.mark_dirty();
     }
 }

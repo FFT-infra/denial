@@ -502,12 +502,14 @@ impl WaylandFrontend {
         self.shm_snapshot_bytes = self.shm_snapshot_bytes.saturating_sub(bytes);
     }
 
+    /// Snapshots an SHM buffer for Flutter. Returns whether the surface now
+    /// presents that snapshot, so the buffer itself is no longer read.
     #[cfg(feature = "flutter")]
     pub(super) fn update_surface_shm_frame(
         &mut self,
         surface: &WlSurface,
         buffer: &wl_buffer::WlBuffer,
-    ) {
+    ) -> bool {
         let surface_id = surface.id();
         // Drop the previous CPU snapshot before reserving its replacement, so
         // repeated commits cannot transiently grow the owned cache without a
@@ -533,8 +535,9 @@ impl WaylandFrontend {
                     .expect("bounded SHM snapshot accounting must not overflow");
                 self.next_shm_revision = revision.wrapping_add(1).max(1);
                 self.surface_shm_frames.insert(surface_id, frame);
+                true
             }
-            Ok(None) => {}
+            Ok(None) => false,
             Err(error) => {
                 warn!(
                     %error,
@@ -544,6 +547,7 @@ impl WaylandFrontend {
                     cache_budget_bytes = self.shm_snapshot_budget_bytes,
                     "could not snapshot Wayland SHM buffer for Flutter"
                 );
+                false
             }
         }
     }
@@ -629,10 +633,19 @@ impl WaylandFrontend {
                 self.remove_surface_shm_frame(&surface.id());
             } else if let Some(buffer) = current_buffer {
                 self.surface_buffer_revisions.remove(&surface.id());
-                if self.pending_shm_snapshots.remove(&surface.id())
-                    || !self.surface_shm_frames.contains_key(&surface.id())
+                if (self.pending_shm_snapshots.remove(&surface.id())
+                    || !self.surface_shm_frames.contains_key(&surface.id()))
+                    && self.update_surface_shm_frame(&surface, &buffer)
                 {
-                    self.update_surface_shm_frame(&surface, &buffer);
+                    // Flutter composes the snapshot, so release the buffer
+                    // now rather than when the client attaches another one.
+                    // Toolkits such as GTK 3 draw the next frame into the
+                    // buffer once it is released; while it is held they
+                    // allocate and map a new window-sized pool every frame,
+                    // and deniald then unmaps the old one. Smithay still
+                    // sends its own release when the buffer is replaced;
+                    // a second release of a free buffer is harmless.
+                    buffer.release();
                 }
             } else {
                 self.surface_buffer_revisions.remove(&surface.id());

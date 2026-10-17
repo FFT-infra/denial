@@ -159,6 +159,26 @@ final class DesktopShellServices implements ShellServices {
   final VoidCallback onOpenDashboard;
   final VoidCallback onToggleDashboard;
 
+  // Stateless adapters with the same ref and callbacks are interchangeable;
+  // the scene keeps an equal one so its identity survives rebuilds.
+  @override
+  bool operator ==(Object other) =>
+      other is DesktopShellServices &&
+      identical(ref, other.ref) &&
+      onOpenPowerSettings == other.onOpenPowerSettings &&
+      onToggleLauncher == other.onToggleLauncher &&
+      onOpenDashboard == other.onOpenDashboard &&
+      onToggleDashboard == other.onToggleDashboard;
+
+  @override
+  int get hashCode => Object.hash(
+    ref,
+    onOpenPowerSettings,
+    onToggleLauncher,
+    onOpenDashboard,
+    onToggleDashboard,
+  );
+
   @override
   ProviderListenable<List<ApplicationWindow>> windows(int monitorId) =>
       _windows(monitorId);

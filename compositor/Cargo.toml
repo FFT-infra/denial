@@ -8,7 +8,7 @@ license = "GPL-3.0-or-later"
 publish = false
 
 [workspace]
-members = ["denial-portal", "flutter-engine", "polkit-agent"]
+members = ["denial-portal", "flutter-engine", "polkit-agent", "polling"]
 resolver = "3"
 
 [features]
@@ -123,6 +123,11 @@ required-features = ["control"]
 name = "denial-ui"
 path = "src/bin/denial_ui.rs"
 required-features = ["ui-development"]
+
+# calloop's poller without upstream's per-wait timerfd and notifier re-arming;
+# see polling/src/lib.rs.
+[patch.crates-io]
+polling = { path = "polling" }
 
 [profile.release]
 lto = "thin"

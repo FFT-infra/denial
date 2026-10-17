@@ -38,6 +38,11 @@ const DEFAULT_DEMOTE_DELAY: Duration = Duration::from_millis(2000);
 const DEFAULT_FOCUS_MINIMUM: u32 = 256;
 const HOMOGENEOUS_BOOST: u32 = 512;
 const MAX_TREE_PROCESSES: usize = 512;
+/// How long a process's frame threads are reused without rescanning
+/// `/proc/PID/task`. Focus that briefly visits the shell, such as an overview
+/// toggle, reapplies floors to the same few threads; reading the name of every
+/// thread of a browser each time costs more than the hint itself.
+const FRAME_THREAD_REFRESH: Duration = Duration::from_secs(1);
 const UTIL_MAX: u32 = 1024;
 
 static SENDER: OnceLock<Sender<Event>> = OnceLock::new();
@@ -318,6 +323,7 @@ struct Worker {
     focused: Option<Process>,
     pending: Vec<(Process, Instant)>,
     demoted: HashSet<Process>,
+    frame_threads: HashMap<Process, (Instant, Vec<libc::pid_t>)>,
     boosting: bool,
     uid: u32,
     own_pid: libc::pid_t,
@@ -332,6 +338,7 @@ impl Worker {
             focused: None,
             pending: Vec::new(),
             demoted: HashSet::new(),
+            frame_threads: HashMap::new(),
             boosting: false,
             // SAFETY: getuid has no arguments and cannot fail.
             uid: unsafe { libc::getuid() },
@@ -517,20 +524,44 @@ impl Worker {
     }
 
     fn apply_frame_floor(&mut self, process: Process, floor: u32) {
+        let now = Instant::now();
+        self.frame_threads
+            .retain(|_, (scanned, _)| now.duration_since(*scanned) < FRAME_THREAD_REFRESH);
         if !process.alive() {
+            self.frame_threads.remove(&process);
             return;
         }
-        for (tid, name) in threads(process.pid) {
-            if tid != process.pid && !frame_thread_name(&name, &self.config.extra_names) {
-                continue;
-            }
+        let (scanned, tids) = self.frame_threads.remove(&process).unwrap_or_else(|| {
+            let tids = threads(process.pid)
+                .into_iter()
+                .filter(|(tid, name)| {
+                    *tid == process.pid || frame_thread_name(name, &self.config.extra_names)
+                })
+                .map(|(tid, _)| tid)
+                .collect();
+            (now, tids)
+        });
+        let mut exited = false;
+        for &tid in &tids {
             // Leave realtime, deadline, batch and idle threads to the policy
             // their owner chose.
-            if policy(tid) != Some(libc::SCHED_OTHER) {
-                continue;
+            match policy(tid) {
+                Some(libc::SCHED_OTHER) => {}
+                Some(_) => continue,
+                None => {
+                    exited = true;
+                    continue;
+                }
             }
             let result = set_clamp(tid, Some(floor), None, true);
+            exited |= result
+                .as_ref()
+                .is_err_and(|error| error.raw_os_error() == Some(libc::ESRCH));
             self.report(result, tid, "application frame thread");
+        }
+        // A thread that exited invalidates the list; rescan next time.
+        if !exited {
+            self.frame_threads.insert(process, (scanned, tids));
         }
         tracing::debug!(pid = process.pid, floor, "applied frame-thread CPU floor");
     }

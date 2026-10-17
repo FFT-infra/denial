@@ -67,11 +67,6 @@ impl NativeClientState {
         gl: GlApi,
         display: &Arc<EGLDisplayHandle>,
     ) -> Self {
-        if std::env::var_os("DENIAL_NATIVE_WINDOW_COMPOSITION").as_deref()
-            != Some(std::ffi::OsStr::new("1"))
-        {
-            return Self::default();
-        }
         let mut pass = None;
         let mut probe_modifier = None;
         let setup = (|| -> Result<Arc<NativeWindowPool>, Box<dyn Error>> {

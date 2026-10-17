@@ -1618,7 +1618,7 @@ impl WaylandFrontend {
             .elements()
             .any(|window| self.window_root_surface(window).as_ref() == Some(surface));
 
-        self.surface_buffers.remove(&object_id);
+        self.buffered_surfaces.remove(&object_id);
         let layout_changed = self.window_layout.remove(&object_id);
         for record in self.window_registry.values_mut() {
             if record.placed_transient_parent.as_ref() == Some(&object_id) {

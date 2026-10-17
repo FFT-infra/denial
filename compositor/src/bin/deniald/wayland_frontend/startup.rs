@@ -307,7 +307,7 @@ impl WaylandFrontend {
             dmabuf_render_node: None,
             pending_dmabuf_imports: Vec::new(),
             dmabuf_import_queue_saturated: false,
-            surface_buffers: HashMap::new(),
+            buffered_surfaces: HashSet::new(),
             #[cfg(feature = "flutter")]
             surface_shm_frames: HashMap::new(),
             #[cfg(feature = "flutter")]

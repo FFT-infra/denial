@@ -42,6 +42,7 @@ pub(in crate::flutter_runtime) struct FlutterGlHandler {
     retired_external_bindings: Arc<RetiredExternalBindingQueue>,
     retired_external_binding_scratch: Mutex<Vec<ExternalTextureBinding>>,
     external_texture_lease_pool: Arc<ExternalTextureLeasePool>,
+    leased_buffers: Mutex<HashMap<i64, Vec<Weak<LeasedBuffer>>>>,
     prepared_external_texture: Mutex<Option<PreparedExternalTexture>>,
     external_texture_resource_budget: Arc<ExternalTextureResourceBudget>,
     pending_vsync_batons: Mutex<PendingVsyncBatons>,
@@ -518,6 +519,7 @@ impl FlutterGlHandler {
             external_texture_lease_pool: Arc::new(Mutex::new(Vec::with_capacity(
                 MAX_CACHED_EXTERNAL_TEXTURE_LEASES,
             ))),
+            leased_buffers: Mutex::new(HashMap::new()),
             prepared_external_texture: Mutex::new(None),
             external_texture_resource_budget: Arc::new(ExternalTextureResourceBudget::default()),
             pending_vsync_batons: Mutex::new(PendingVsyncBatons::default()),
@@ -874,19 +876,101 @@ impl FlutterGlHandler {
 
     pub(in crate::flutter_runtime) fn lease_external_texture(
         &self,
-        resource: ExternalTextureLeaseResource,
+        texture_id: i64,
+        generation: u64,
+        mut resource: ExternalTextureLeaseResource,
     ) -> Box<ExternalTextureLease> {
         let mut lease = lock(&self.external_texture_lease_pool)
             .pop()
             .unwrap_or_else(|| {
                 Box::new(ExternalTextureLease {
                     resource: None,
+                    buffer: None,
                     pool: Arc::downgrade(&self.external_texture_lease_pool),
                 })
             });
-        debug_assert!(lease.resource.is_none());
+        debug_assert!(lease.resource.is_none() && lease.buffer.is_none());
+        lease.buffer = resource.take_buffer_guard().map(|guard| {
+            let buffer = Arc::new(Mutex::new(Some(SampledBufferHold {
+                texture_id,
+                generation,
+                _buffer_guard: guard,
+            })));
+            let mut leased = lock(&self.leased_buffers);
+            let buffers = leased.entry(texture_id).or_default();
+            buffers.retain(|leased| leased.strong_count() > 0);
+            buffers.push(Arc::downgrade(&buffer));
+            buffer
+        });
         lease.resource = Some(resource);
         lease
+    }
+
+    /// Detaches the buffers of an unregistered texture from the engine images
+    /// which still hold them. Release them with `release_unregistered_buffers`
+    /// on the render thread.
+    pub(in crate::flutter_runtime) fn take_leased_buffers(
+        &self,
+        texture_id: i64,
+    ) -> Vec<Weak<LeasedBuffer>> {
+        let mut buffers = lock(&self.leased_buffers)
+            .remove(&texture_id)
+            .unwrap_or_default();
+        buffers.retain(|leased| leased.strong_count() > 0);
+        buffers
+    }
+
+    /// Runs on the render thread after the engine unregistered the texture
+    /// that owned `buffers`, so no later frame can sample them. A fence placed
+    /// here follows every frame which could, and the buffers then take the
+    /// ordinary sampled-buffer release path.
+    pub(in crate::flutter_runtime) fn release_unregistered_buffers(
+        &self,
+        buffers: Vec<Weak<LeasedBuffer>>,
+    ) {
+        let mut render_context = lock(&self.render_context);
+        let bound = !render_context.context.is_current();
+        if bound && !render_context.make_current() {
+            // The engine images keep their buffers until Flutter retires them.
+            return;
+        }
+        let holds = buffers
+            .iter()
+            .filter_map(Weak::upgrade)
+            .filter_map(|leased| lock(&leased).take())
+            .collect::<Vec<_>>();
+        if !holds.is_empty() {
+            let fence = match EGLFence::create(render_context.context.display()) {
+                Ok(fence) => {
+                    // SAFETY: the render context is current on this thread.
+                    unsafe { (self.gl.flush)() };
+                    fence
+                        .export()
+                        .inspect_err(
+                            |error| warn!(%error, "unregistered texture fence export failed"),
+                        )
+                        .ok()
+                }
+                Err(error) => {
+                    warn!(%error, "unregistered texture fence creation failed");
+                    None
+                }
+            };
+            if fence.is_none() {
+                // SAFETY: the render context is current on this thread.
+                unsafe { (self.gl.finish)() };
+            }
+            self.publish_sampled_buffer_release(
+                fence,
+                Some(SampledBufferHoldBatch {
+                    holds: Some(holds),
+                    pool: Arc::downgrade(&self.sampled_buffer_batch_pool),
+                }),
+            );
+        }
+        if bound {
+            render_context.clear_current();
+        }
     }
 
     pub(in crate::flutter_runtime) fn complete_vsync(&self, baton: isize) {

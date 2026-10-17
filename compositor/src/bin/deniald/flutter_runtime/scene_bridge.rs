@@ -123,10 +123,7 @@ impl FlutterRuntime {
                 .copied(),
         );
         for texture_id in removed.drain(..) {
-            self.host()
-                .engine()
-                .unregister_external_texture(texture_id)?;
-            self.handler.remove_external_texture_source(texture_id);
+            self.unregister_external_texture(texture_id)?;
             self.pending_frame_texture_ids
                 .retain(|pending| *pending != texture_id);
             self.registered_external_textures.remove(&texture_id);

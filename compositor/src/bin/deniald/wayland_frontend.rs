@@ -435,7 +435,10 @@ pub(super) struct WaylandFrontend {
     dmabuf_render_node: Option<DrmNode>,
     pending_dmabuf_imports: Vec<(Dmabuf, ImportNotifier)>,
     dmabuf_import_queue_saturated: bool,
-    surface_buffers: HashMap<ObjectId, wl_buffer::WlBuffer>,
+    /// Surfaces with an attached buffer. Destroying a released buffer
+    /// keeps its contents (wl_surface.attach), so only a null attach or
+    /// the surface's destruction removes an entry.
+    buffered_surfaces: HashSet<ObjectId>,
     #[cfg(feature = "flutter")]
     surface_shm_frames: HashMap<ObjectId, ShmTextureFrame>,
     #[cfg(feature = "flutter")]

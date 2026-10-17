@@ -489,7 +489,8 @@ def journal_audit_messages(rows, pid, boot_id):
         message = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', message)
         if any(s in message for s in ('Flutter per-output render audit',
                                       'Denial/Volition output scheduler audit',
-                                      'Denial GPU stage audit')):
+                                      'Denial GPU stage audit',
+                                      'Denial layered composition audit')):
             result.append({'monotonic_ns': int(row['__MONOTONIC_TIMESTAMP']) * 1000,
                            'message': message})
     return result
@@ -555,8 +556,34 @@ def summarize_audit_phase(phase, messages):
         count and not gpu['disjoint_samples'] and not gpu['abandoned_samples'] and
         not diagnostic['disjoint_samples'] and not diagnostic['abandoned_samples'] and
         gpu['gpu_frame_avg_us'] is not None)
+    # Engine-side, only with DENIAL_RENDER_AUDIT=1; one line per output
+    # view and interval. Counters are summed over views, max_* and retained_*
+    # gauges take the maximum.
+    layered_intervals = intervals('Denial layered composition audit')
+    layered = {'intervals': len(layered_intervals),
+               'views': sorted({int(v['view']) for v, _ in layered_intervals if 'view' in v})}
+    for field in ('direct_frames', 'layered_frames', 'recomposed_frames', 'single_slice_frames',
+                  'failed_frames', 'composed_pixels', 'slice_blit_pixels', 'window_cuts',
+                  'material_cuts', 'texture_cuts', 'slices', 'slices_reused', 'slices_rendered',
+                  'rendered_new', 'rendered_bounds', 'rendered_content', 'rendered_pixels',
+                  'rendered_slice_pixels', 'slice_allocations', 'slice_pool_reuses',
+                  'slice_render_total_us', 'compose_total_us', 'recompose_total_us'):
+        total = sum(v.get(field, 0) for v, _ in layered_intervals)
+        layered[field] = total if field.endswith('_us') else int(total)
+    for field in ('max_cuts', 'max_slices', 'retained_slices', 'retained_slice_pixels',
+                  'pooled_slices', 'pooled_slice_pixels', 'compose_max_us', 'recompose_max_us'):
+        peak = max((v.get(field, 0) for v, _ in layered_intervals), default=0)
+        layered[field] = peak if field.endswith('_us') else int(peak)
+    layered['slice_reuse_fraction'] = (
+        layered['slices_reused'] / layered['slices'] if layered['slices'] else None)
+    layered['compose_avg_us'] = (
+        layered['compose_total_us'] / layered['layered_frames'] if layered['layered_frames'] else None)
+    layered['recompose_avg_us'] = (
+        layered['recompose_total_us'] / layered['recomposed_frames']
+        if layered['recomposed_frames'] else None)
     return {'name': phase['name'], 'native_render_markers': gpu,
-            'scheduler': scheduler, 'engine_gpu_diagnostic': diagnostic}
+            'scheduler': scheduler, 'engine_gpu_diagnostic': diagnostic,
+            'layered_composition': layered}
 
 
 def audit_report(root, journal):
@@ -579,7 +606,8 @@ def audit_report(root, journal):
                         'Per-draw queries can perturb tiled GPUs. Root command spans overlap their containing passes; do not sum them.',
                         'Stage pixel counts are target/scissor extents, not covered samples or transferred bytes.',
                         'Disjoint/abandoned samples are missing evidence; recorded stage totals are not full work totals.',
-                        'Stage timing comparisons require timings_usable=true. Native and engine collectors share the disjoint acknowledgement flag; native timings are also withheld when the concurrent stage capture rejects samples.']}
+                        'Stage timing comparisons require timings_usable=true. Native and engine collectors share the disjoint acknowledgement flag; native timings are also withheld when the concurrent stage capture rejects samples.',
+                        'Layered composition build and recompose times are raster-thread CPU for changed slices and composition encoding, before the present callback; they are not GPU time. Composed pixels are the buffer damage of layered frames.']}
     write_json(root / 'audit-summary.json', result)
     lines = ['| Phase | GPU marker samples | Render GPU avg ms | Ready frames | Late ready drops | Late discard % |',
              '|---|---:|---:|---:|---:|---:|']
@@ -599,6 +627,22 @@ def audit_report(root, journal):
             lines.append('| {} | {} | {:.0f} | {:.0f} | {} |'.format(
                 p['name'], d['recorded_samples'], d['disjoint_samples'],
                 d['abandoned_samples'], d['timings_usable']))
+    if any(p['layered_composition']['intervals'] for p in result['phases']):
+        lines += ['', '| Phase | Direct frames | Layered builds | Recomposed | Single-slice builds | Failed | Composed Mpx | Slice blit Mpx | Max cuts | Slices | Reused % | Re-rendered (new/bounds/content) | Re-rendered Mpx | Allocations | Pool reuses | Build avg ms | Build max ms | Recompose avg ms | Recompose max ms |',
+                  '|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|']
+        milliseconds = lambda us: 'n/a' if us is None else f'{us / 1000:.3f}'
+        for p in result['phases']:
+            l = p['layered_composition']
+            reuse = l['slice_reuse_fraction']
+            lines.append('| {} | {} | {} | {} | {} | {} | {:.1f} | {:.1f} | {} | {} | {} | {}/{}/{} | {:.1f} | {} | {} | {} | {} | {} | {} |'.format(
+                p['name'], l['direct_frames'], l['layered_frames'], l['recomposed_frames'],
+                l['single_slice_frames'], l['failed_frames'], l['composed_pixels'] / 1e6,
+                l['slice_blit_pixels'] / 1e6,
+                l['max_cuts'], l['slices'], 'n/a' if reuse is None else f'{reuse * 100:.1f}',
+                l['rendered_new'], l['rendered_bounds'], l['rendered_content'],
+                l['rendered_pixels'] / 1e6, l['slice_allocations'], l['slice_pool_reuses'],
+                milliseconds(l['compose_avg_us']), milliseconds(l['compose_max_us']),
+                milliseconds(l['recompose_avg_us']), milliseconds(l['recompose_max_us'])))
     lines += ['', f'Invasive engine GPU tracing: {invasive}.', '', *result['scope']]
     (root / 'audit-summary.md').write_text('\n'.join(lines) + '\n')
     print('\n'.join(lines))

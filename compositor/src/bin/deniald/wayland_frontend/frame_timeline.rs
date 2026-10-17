@@ -597,13 +597,15 @@ impl WaylandFrontend {
         });
     }
 
-    /// Consume the double-buffered target and decide whether this commit may
-    /// enter the ordinary surface transaction.
+    /// Consume the double-buffered target and decide whether this commit is
+    /// latched for its grant. A commit that cannot be still applies, untargeted,
+    /// once its buffer is ready: cancelling it would leave its state cached
+    /// until the surface's next commit.
     pub(super) fn accept_frame_timeline_commit(
         &mut self,
         surface: &WlSurface,
         has_new_buffer: bool,
-    ) -> Result<Option<FrameTargetReservation>, ()> {
+    ) -> Option<FrameTargetReservation> {
         let surface_id = surface.id();
         let state = with_states(surface, |states| {
             states
@@ -626,18 +628,17 @@ impl WaylandFrontend {
         });
         let (constrained, pending) = state;
         if !constrained {
-            return Ok(None);
+            return None;
         }
         let Some(pending) = pending else {
             if has_new_buffer {
                 warn!(
                     ?surface_id,
                     frame_state = "untargeted",
-                    "discarding untargeted exact-timeline buffer commit"
+                    "applying an untargeted exact-timeline buffer commit"
                 );
-                return Err(());
             }
-            return Ok(None);
+            return None;
         };
         if let Some(rejection) = pending.rejection {
             debug!(
@@ -645,9 +646,9 @@ impl WaylandFrontend {
                 frame_epoch = pending.token.epoch,
                 frame_sequence = pending.token.sequence,
                 frame_state = rejection.name(),
-                "discarding semantically invalid targeted commit without disconnecting the client"
+                "applying a commit with a semantically invalid target untargeted"
             );
-            return if has_new_buffer { Err(()) } else { Ok(None) };
+            return None;
         }
         if !has_new_buffer {
             self.frame_timeline.discarded_by_configure(pending.token);
@@ -658,7 +659,7 @@ impl WaylandFrontend {
                 frame_state = "discarded_by_configure",
                 "surface target was consumed by a commit without a new buffer"
             );
-            return Ok(None);
+            return None;
         }
         let subscription_eligible = self
             .frame_timeline
@@ -686,13 +687,13 @@ impl WaylandFrontend {
             "consumed exact surface target"
         );
         if eligible {
-            Ok(grant.map(|grant| FrameTargetReservation {
+            grant.map(|grant| FrameTargetReservation {
                 token: pending.token,
                 deadline: grant.latch_deadline,
-            }))
+            })
         } else {
             self.frame_timeline.missed(pending.token);
-            Err(())
+            None
         }
     }
 
@@ -745,12 +746,20 @@ impl WaylandFrontend {
 }
 
 const DEADLINE_PENDING: u8 = 0;
-const DEADLINE_RELEASED: u8 = 1;
-const DEADLINE_CANCELLED: u8 = 2;
+const DEADLINE_READY: u8 = 1;
+const DEADLINE_MISSED: u8 = 2;
 
-/// A transaction blocker paired with the producer acquire fence. It makes the
-/// named compositor latch a hard upper bound instead of allowing a pending
-/// fence to turn frame N into frame N+1.
+/// A transaction blocker paired with the producer acquire fence. It holds the
+/// commit until the race between that fence and the named compositor latch is
+/// settled, so the grant records the commit as ready or missed before it
+/// applies.
+///
+/// It never cancels the transaction. Smithay would keep a cancelled commit's
+/// state cached until the surface's next applied commit and merge it there;
+/// if that commit detaches the surface, or never comes, the buffer's syncobj
+/// release point is never signalled and the producer stalls. A commit that
+/// misses its latch, or whose epoch ends first, applies once its acquire fence
+/// allows and is shown at the next opportunity.
 #[derive(Clone, Debug)]
 pub(super) struct FrameDeadlineBlocker {
     state: Arc<AtomicU8>,
@@ -773,12 +782,11 @@ impl FrameDeadlineBlocker {
     /// latch, `Some(false)` means the fence itself arrived late, and `None`
     /// means the deadline timer already made the transition.
     pub(super) fn release_if_on_time(&self, now: Instant) -> Option<bool> {
-        let terminal =
-            if now < self.deadline && self.epoch_guard.load(Ordering::Acquire) == self.epoch {
-                DEADLINE_RELEASED
-            } else {
-                DEADLINE_CANCELLED
-            };
+        let terminal = if now < self.deadline && self.epoch_is_current() {
+            DEADLINE_READY
+        } else {
+            DEADLINE_MISSED
+        };
         self.state
             .compare_exchange(
                 DEADLINE_PENDING,
@@ -787,30 +795,33 @@ impl FrameDeadlineBlocker {
                 Ordering::Acquire,
             )
             .ok()
-            .map(|_| terminal == DEADLINE_RELEASED)
+            .map(|_| terminal == DEADLINE_READY)
     }
 
-    pub(super) fn cancel_if_pending(&self) -> bool {
+    pub(super) fn miss_if_pending(&self) -> bool {
         self.state
             .compare_exchange(
                 DEADLINE_PENDING,
-                DEADLINE_CANCELLED,
+                DEADLINE_MISSED,
                 Ordering::AcqRel,
                 Ordering::Acquire,
             )
             .is_ok()
     }
+
+    fn epoch_is_current(&self) -> bool {
+        self.epoch_guard.load(Ordering::Acquire) == self.epoch
+    }
 }
 
 impl Blocker for FrameDeadlineBlocker {
     fn state(&self) -> BlockerState {
-        if self.epoch_guard.load(Ordering::Acquire) != self.epoch {
-            return BlockerState::Cancelled;
-        }
-        match self.state.load(Ordering::Acquire) {
-            DEADLINE_PENDING => BlockerState::Pending,
-            DEADLINE_RELEASED => BlockerState::Released,
-            _ => BlockerState::Cancelled,
+        // A grant from an ended epoch is already aborted, so its commit no
+        // longer waits for the latch race.
+        if self.state.load(Ordering::Acquire) == DEADLINE_PENDING && self.epoch_is_current() {
+            BlockerState::Pending
+        } else {
+            BlockerState::Released
         }
     }
 }
@@ -997,18 +1008,18 @@ mod tests {
         assert_eq!(blocker.state(), BlockerState::Pending);
         assert_eq!(blocker.release_if_on_time(now), Some(true));
         assert_eq!(blocker.state(), BlockerState::Released);
-        assert!(!blocker.cancel_if_pending());
+        assert!(!blocker.miss_if_pending());
         assert_eq!(blocker.release_if_on_time(now), None);
     }
 
     #[test]
-    fn acquire_at_or_after_deadline_cancels_target() {
+    fn acquire_at_or_after_deadline_misses_target() {
         let now = Instant::now();
         for acquired_at in [now, now + Duration::from_nanos(1)] {
             let blocker = FrameDeadlineBlocker::new(now, Arc::new(AtomicU64::new(7)), 7);
             assert_eq!(blocker.release_if_on_time(acquired_at), Some(false));
-            assert_eq!(blocker.state(), BlockerState::Cancelled);
-            assert!(!blocker.cancel_if_pending());
+            assert_eq!(blocker.state(), BlockerState::Released);
+            assert!(!blocker.miss_if_pending());
         }
     }
 
@@ -1018,22 +1029,22 @@ mod tests {
         let blocker =
             FrameDeadlineBlocker::new(now + Duration::from_secs(1), Arc::new(AtomicU64::new(7)), 7);
 
-        assert!(blocker.cancel_if_pending());
-        assert_eq!(blocker.state(), BlockerState::Cancelled);
+        assert!(blocker.miss_if_pending());
+        assert_eq!(blocker.state(), BlockerState::Released);
         assert_eq!(blocker.release_if_on_time(now), None);
     }
 
     #[test]
-    fn invalidated_epoch_cannot_release_target() {
+    fn invalidated_epoch_releases_without_readiness() {
         let now = Instant::now();
         let guard = Arc::new(AtomicU64::new(7));
         let blocker =
             FrameDeadlineBlocker::new(now + Duration::from_secs(1), Arc::clone(&guard), 7);
         guard.store(8, Ordering::Release);
 
-        assert_eq!(blocker.state(), BlockerState::Cancelled);
+        assert_eq!(blocker.state(), BlockerState::Released);
         assert_eq!(blocker.release_if_on_time(now), Some(false));
-        assert!(!blocker.cancel_if_pending());
+        assert!(!blocker.miss_if_pending());
     }
 
     #[test]

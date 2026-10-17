@@ -118,6 +118,13 @@ impl ExternalTextureLeaseResource {
             Self::Dmabuf { _binding, .. } | Self::Shm { _binding, .. } => Arc::clone(_binding),
         }
     }
+
+    fn take_buffer_guard(&mut self) -> Option<ExternalBufferGuard> {
+        match self {
+            Self::Dmabuf { _buffer_guard, .. } => _buffer_guard.take(),
+            Self::Shm { .. } => None,
+        }
+    }
 }
 
 struct PreparedExternalTexture {
@@ -134,8 +141,14 @@ struct PreparedExternalTexture {
 
 type ExternalTextureLeasePool = Mutex<Vec<Box<ExternalTextureLease>>>;
 
+/// The producer buffer of one engine image. The handler takes it back when
+/// the texture is unregistered instead of waiting for the engine to retire
+/// the image, which Impeller GLES does only when a later frame is rendered.
+pub(in crate::flutter_runtime) type LeasedBuffer = Mutex<Option<SampledBufferHold>>;
+
 pub(in crate::flutter_runtime) struct ExternalTextureLease {
     pub(in crate::flutter_runtime) resource: Option<ExternalTextureLeaseResource>,
+    buffer: Option<Arc<LeasedBuffer>>,
     pub(in crate::flutter_runtime) pool: Weak<ExternalTextureLeasePool>,
 }
 
@@ -144,6 +157,7 @@ impl ExternalTextureLease {
         // Release buffer guards and resource permits before making this token
         // reusable. Cached GL bindings remain alive through their cache Arc.
         drop(lease.resource.take());
+        drop(lease.buffer.take());
         let Some(pool) = lease.pool.upgrade() else {
             return;
         };
@@ -737,7 +751,7 @@ impl ExternalTextureSlot {
     }
 }
 
-struct SampledBufferHold {
+pub(in crate::flutter_runtime) struct SampledBufferHold {
     texture_id: i64,
     generation: u64,
     _buffer_guard: ExternalBufferGuard,
