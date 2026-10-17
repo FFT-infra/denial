@@ -255,7 +255,7 @@ for mutations, after the native live update and persistent commit succeed.
 | `settings.document.apply` | `{"expected_revision":3,"document":"{...}"}` | Replace shell-owned settings and return the committed document |
 | `settings.keyboard.get` | none | Layouts, XKB options, repeat settings, active layout, and revision |
 | `settings.keyboard.apply` | revision plus a `keyboard` object | Compile/install XKB state and commit it atomically |
-| `settings.input.get` | none | Touchpad availability and current preferences |
+| `settings.input.get` | none | Input-device availability/preferences and read-only `input_deck` touch-output discovery |
 | `settings.touchpad.apply` | revision plus a `touchpad` object | Apply touchpad preferences and commit them |
 | `settings.shortcuts.get` | none | Bindings, supported actions/inputs, and revision |
 | `settings.shortcuts.validate` | `shortcut` and optional `existing_shortcut` | Canonical validation result without mutation |
@@ -350,6 +350,25 @@ distinguish an accepted transition from an older state snapshot.
 | `ui.restore` | none | Restore the packaged optimized shell |
 | `ui.revert` | none | Restore the last working custom shell when supported |
 | `ui.auto_reload.set` | `{"enabled":true}` | Configure native source watching when supported |
+
+`ui.get` also returns query-only `output_frame_delivery` telemetry. It is
+`{"enabled": false}` by default. Starting the compositor with
+`DENIAL_OUTPUT_FRAME_TRACE=1` enables a bounded history of 4096 terminal native
+output generations and separate pending generations. Rows carry a unique
+ready-fence-token ID, output/pool/slot and logical tick identity, raster broker
+transaction, output-ready and observed GPU-fence times, queue/submission times,
+physical completion and an explicit outcome. The reply supplies its column and
+outcome names, monotonic clock origin and anchor sampling span, lifetime counts
+and eviction count. Time columns ending in `_us` are relative to the origin;
+`physical_monotonic_us` is an absolute kernel timestamp. The nominal interval
+and anchor span are in nanoseconds.
+
+Capture this optional diagnostic outside measured intervals. It performs no
+GPU timing query or per-frame file write. Check history coverage and keep
+pending records distinct from discarded successors; these records do not
+identify every Dart FrameTiming or engine raster job. Fence times describe
+observation by the main loop, and repeated KMS sequences remain ambiguous.
+
 
 Runtime replacement methods acknowledge the requested transition before the
 engine replacement completes. Clients which need completion semantics should

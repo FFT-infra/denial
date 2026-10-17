@@ -90,6 +90,12 @@ impl WaylandFrontend {
         let center = rectangle_center(geometry);
         let mut best: Option<(usize, OutputCandidateScore)> = None;
         for (index, entry) in self.outputs.iter().enumerate() {
+            #[cfg(feature = "flutter")]
+            if self.input_deck_output == Some(entry.id)
+                || (self.input_deck_output.is_some() && !entry.powered)
+            {
+                continue;
+            }
             let output_geometry = entry.logical_geometry;
             let score = OutputCandidateScore {
                 contains_center: output_geometry.contains(center),

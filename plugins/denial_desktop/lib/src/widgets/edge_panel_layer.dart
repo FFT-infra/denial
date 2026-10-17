@@ -11,25 +11,34 @@ import 'package:denial_flutter_sdk/motion.dart';
 import 'package:denial_flutter_sdk/shell_theme.dart';
 
 import 'osk/shell_osk_panel.dart';
+import '../state/input_deck.dart';
 
 import 'package:denial_flutter_sdk/rendering.dart';
 import 'package:denial_flutter_sdk/effects.dart';
 
-/// Keeps the mobile software keyboard above applications and shell surfaces,
+/// Keeps the software keyboard above applications and shell surfaces,
 /// including the compositor-owned lock screen.
-class MobileSystemKeyboardLayer extends ConsumerWidget {
-  const MobileSystemKeyboardLayer({super.key});
+class SystemKeyboardLayer extends ConsumerWidget {
+  const SystemKeyboardLayer({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final enabled = ref.watch(
       referenceShellProvider.select((state) => !state.launchTransitionActive),
     );
+    final deckActive = ref.watch(
+      inputDeckProvider.select((deck) => deck.activeOutput != null),
+    );
+    final showKeyboard =
+        enabled && (!deckActive || ref.watch(referenceShellProvider).locked);
     return Offstage(
-      offstage: !enabled,
+      offstage: !showKeyboard,
       child: TickerMode(
-        enabled: enabled,
-        child: IgnorePointer(ignoring: !enabled, child: const EdgePanelLayer()),
+        enabled: showKeyboard,
+        child: IgnorePointer(
+          ignoring: !showKeyboard,
+          child: const EdgePanelLayer(),
+        ),
       ),
     );
   }
@@ -224,19 +233,21 @@ class _EdgePanelGestureTarget extends ConsumerWidget {
       bottom: ReferenceShellMetrics.gestureBottomInset,
       width: ReferenceShellMetrics.edgePanelGestureWidth,
       height: ReferenceShellMetrics.edgePanelGestureHeight,
-      child: IgnorePointer(
-        ignoring: edgePanelVisible,
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onVerticalDragStart: (_) => controller.startEdgePanelDrag(),
-          onVerticalDragUpdate: (details) {
-            controller.updateEdgePanelDrag(Offset(0.0, details.delta.dy));
-          },
-          onVerticalDragEnd: (details) {
-            controller.endEdgePanelDrag(details.primaryVelocity ?? 0.0);
-          },
-          onVerticalDragCancel: () => controller.endEdgePanelDrag(0.0),
-          child: const SizedBox.expand(),
+      child: TextFieldTapRegion(
+        child: IgnorePointer(
+          ignoring: edgePanelVisible,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onVerticalDragStart: (_) => controller.startEdgePanelDrag(),
+            onVerticalDragUpdate: (details) {
+              controller.updateEdgePanelDrag(Offset(0.0, details.delta.dy));
+            },
+            onVerticalDragEnd: (details) {
+              controller.endEdgePanelDrag(details.primaryVelocity ?? 0.0);
+            },
+            onVerticalDragCancel: () => controller.endEdgePanelDrag(0.0),
+            child: const SizedBox.expand(),
+          ),
         ),
       ),
     );

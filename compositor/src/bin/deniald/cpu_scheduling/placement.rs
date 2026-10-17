@@ -80,6 +80,10 @@ pub(super) fn enabled() -> bool {
     GROUPS.get().is_some_and(Option::is_some)
 }
 
+pub(super) fn groups() -> Option<Groups> {
+    GROUPS.get().copied().flatten()
+}
+
 fn apply(tid: Option<Pid>, mask: &CpuSet) -> io::Result<()> {
     if sched_getaffinity(tid)? != *mask {
         sched_setaffinity(tid, mask)?;
@@ -147,6 +151,7 @@ fn background_name(name: &str) -> bool {
             | "denial-xembed-t"
             | "denial-child-re"
             | "denial-clipboar"
+            | "denial-cpu-hint"
             | "Shm dropping th"
             | "Dart Profiler T"
     ) || name.strip_prefix("deniald:zcq").is_some_and(decimal_suffix)
@@ -287,6 +292,7 @@ mod tests {
             "denial-screensh",
             "Shm dropping th",
             "denial-control-",
+            "denial-cpu-hint",
         ] {
             assert!(background_name(name), "{name}");
         }

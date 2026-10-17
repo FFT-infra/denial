@@ -2168,6 +2168,14 @@ impl ShortcutEngine {
         }
     }
 
+    /// A cancelled input source releases modifiers without performing a tap action.
+    #[cfg(any(feature = "flutter", test))]
+    pub(super) fn cancel_modifier_tap(&mut self) {
+        if self.logo_keys != 0 {
+            self.logo_chorded = true;
+        }
+    }
+
     /// Whether either physical SUPER key is currently compositor-owned.
     #[cfg(any(feature = "flutter", test))]
     pub(super) fn super_pressed(&self) -> bool {
@@ -2767,6 +2775,28 @@ mod tests {
             ShortcutDisposition::Consume
         );
         engine.note_pointer_axis();
+        assert_eq!(
+            engine.observe(KEY_LEFT_META, false),
+            ShortcutDisposition::Consume
+        );
+    }
+    #[test]
+    fn cancelling_a_virtual_modifier_hold_does_not_invoke_its_tap_action() {
+        let mut file = default_shortcut_file();
+        file.shortcuts = vec![ShortcutBinding {
+            shortcut: "Super".into(),
+            target: ShortcutTarget::DenialAction {
+                action: ShortcutAction::OpenOverview,
+            },
+        }];
+        let mut engine = ShortcutEngine::from_file(&file).unwrap();
+        engine.observe(KEY_LEFT_META, true);
+        assert_eq!(
+            engine.observe(KEY_LEFT_META, false),
+            ShortcutDisposition::RequestOverview
+        );
+        engine.observe(KEY_LEFT_META, true);
+        engine.cancel_modifier_tap();
         assert_eq!(
             engine.observe(KEY_LEFT_META, false),
             ShortcutDisposition::Consume

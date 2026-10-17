@@ -20,7 +20,10 @@ pub(super) fn apply_touch_gesture_update(
 }
 
 #[cfg(feature = "flutter")]
-pub(super) fn cancel_captured_touch_routes(state: &mut RuntimeState, slots: &[i32]) -> bool {
+pub(in super::super) fn cancel_captured_touch_routes(
+    state: &mut RuntimeState,
+    slots: &[i32],
+) -> bool {
     if slots.is_empty() {
         return false;
     }
@@ -105,238 +108,12 @@ pub(super) fn process_flutter_input_event(
             };
             route_pointer_motion(state, position, target, motion.time_msec(), None)
         }
-        InputEvent::PointerButton { event: button, .. } => {
-            let serial = SERIAL_COUNTER.next_serial();
-            let button_code = button.button_code();
-            state
-                .wayland
-                .as_mut()
-                .expect("missing Wayland frontend")
-                .set_pointer_cursor_visible(true);
-            state
-                .native_escape_shortcut
-                .note_pointer_button(button.state() == ButtonState::Pressed);
-            if retired_pointer_button_consumes_transition(
-                &mut state
-                    .wayland
-                    .as_mut()
-                    .expect("missing Wayland frontend")
-                    .retired_pointer_buttons,
-                button_code,
-                button.state(),
-            ) {
-                return true;
-            }
-            let pointer = state
-                .wayland
-                .as_ref()
-                .expect("missing Wayland frontend")
-                .seat
-                .get_pointer()
-                .expect("seat has no pointer");
-            let pointer_grabbed = pointer.is_grabbed();
-            let flutter_captured = state.flutter_input.pointer_captured();
-            let clipboard_drag_active = state
-                .wayland
-                .as_ref()
-                .expect("missing Wayland frontend")
-                .clipboard_drag_active;
-            let (target, local_window_region) = {
-                let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
-                let target =
-                    if secure_locked || (flutter_captured && !frontend.clipboard_drag_active) {
-                        InputTarget::Flutter
-                    } else if let Some(route) = frontend.client_pointer_capture.clone() {
-                        InputTarget::Client(route)
-                    } else {
-                        let position = frontend.pointer_location;
-                        frontend.input_target(position)
-                    };
-                let local_window_region = if !secure_locked
-                    && !flutter_captured
-                    && matches!(&target, InputTarget::Flutter)
-                {
-                    frontend.local_flutter_window_region_at(frontend.pointer_location)
-                } else {
-                    None
-                };
-                (target, local_window_region)
-            };
-            let pointer_grabbed = if pointer_grabbed
-                && button.state() == ButtonState::Pressed
-                && let InputTarget::Client(route) = &target
-            {
-                !dismiss_foreign_popup_grab(
-                    state,
-                    &pointer,
-                    &route.surface,
-                    serial,
-                    button.time_msec(),
-                )
-            } else {
-                pointer_grabbed
-            };
-            if button.state() == ButtonState::Released {
-                state
-                    .wayland
-                    .as_mut()
-                    .expect("missing Wayland frontend")
-                    .forget_client_pointer_button(button_code);
-            }
-            // SUPER is compositor-owned and deliberately never enters the
-            // client-facing seat state. Use the native physical-key tracker
-            // for compositor pointer chords instead of Smithay's modifiers.
-            let logo = state.native_escape_shortcut.super_pressed();
-            let super_action = super_pointer_action(logo, button_code);
-            let began_super_grab = if !pointer_grabbed
-                && button.state() == ButtonState::Pressed
-                && let Some(action) = super_action
-            {
-                match (&target, local_window_region) {
-                    (InputTarget::Client(route), _) => {
-                        begin_super_pointer_grab(state, route, action, button_code, serial)
-                    }
-                    (InputTarget::Flutter, Some(region)) => {
-                        begin_local_super_pointer_grab(state, region, action, button_code, serial)
-                    }
-                    _ => false,
-                }
-            } else {
-                false
-            };
-            if began_super_grab {
-                update_pressed_buttons(
-                    &mut state
-                        .wayland
-                        .as_mut()
-                        .expect("missing Wayland frontend")
-                        .wayland_pointer_buttons,
-                    button_code,
-                    ButtonState::Pressed,
-                );
-                pointer.button(
-                    state,
-                    &ButtonEvent {
-                        button: button_code,
-                        state: ButtonState::Pressed,
-                        serial,
-                        time: button.time_msec(),
-                    },
-                );
-                pointer.frame(state);
-                state.scene_sync.mark_dirty();
-                return true;
-            }
-            if !logo
-                && button.state() == ButtonState::Pressed
-                && let InputTarget::Client(route) = &target
-                && state
-                    .wayland
-                    .as_mut()
-                    .expect("missing Wayland frontend")
-                    .resume_pointer_constraint_for_route(route)
-            {
-                state.scene_sync.mark_dirty();
-            }
-            let mut scene_changed = false;
-            if button.state() == ButtonState::Pressed
-                && matches!(&target, InputTarget::Client(_))
-                && state
-                    .wayland
-                    .as_ref()
-                    .and_then(|frontend| frontend.input_layout.as_ref())
-                    .is_some_and(InputLayoutSnapshot::observes_client_pointer_presses)
-            {
-                state.queue_shell_action(
-                    super::super::super::wire::ShellAction::ClientPointerPressed,
-                    None,
-                );
-            }
-            if matches!(&target, InputTarget::Flutter) {
-                let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
-                match button.state() {
-                    ButtonState::Pressed if button_code == BTN_LEFT => {
-                        frontend.flutter_pointer_press = Some(FlutterPointerPress {
-                            button: button_code,
-                            serial,
-                            time: button.time_msec(),
-                            location: frontend.pointer_location,
-                        });
-                    }
-                    ButtonState::Released
-                        if frontend
-                            .flutter_pointer_press
-                            .is_some_and(|press| press.button == button_code) =>
-                    {
-                        frontend.flutter_pointer_press = None;
-                    }
-                    _ => {}
-                }
-            }
-            if clipboard_drag_active && button.state() == ButtonState::Released {
-                // A compositor-owned DnD grab still mirrors the terminal
-                // release into Flutter. This completes the original shell
-                // gesture so its card preview can settle instead of being
-                // abandoned when Smithay receives the actual drop.
-                state.synchronize_flutter_pointer_position();
-                state.flutter_input.handle(&event);
-                state
-                    .wayland
-                    .as_mut()
-                    .expect("missing Wayland frontend")
-                    .set_clipboard_drag_active(false);
-            }
-            match target {
-                InputTarget::Flutter if secure_locked || !pointer_grabbed => {
-                    state.synchronize_flutter_pointer_position();
-                    state.flutter_input.handle(&event);
-                    false
-                }
-                target => {
-                    if button.state() == ButtonState::Pressed
-                        && let InputTarget::Client(route) = &target
-                    {
-                        let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
-                        frontend.remember_client_pointer_press(route, serial, button_code);
-                        if !pointer_grabbed {
-                            frontend.client_pointer_capture = Some(route.clone());
-                            frontend.client_pointer_buttons.insert(button_code);
-                            scene_changed = activate_client_route(state, route, serial);
-                        }
-                    }
-                    update_pressed_buttons(
-                        &mut state
-                            .wayland
-                            .as_mut()
-                            .expect("missing Wayland frontend")
-                            .wayland_pointer_buttons,
-                        button_code,
-                        button.state(),
-                    );
-                    pointer.button(
-                        state,
-                        &ButtonEvent {
-                            button: button_code,
-                            state: button.state(),
-                            serial,
-                            time: button.time_msec(),
-                        },
-                    );
-                    pointer.frame(state);
-                    if button.state() == ButtonState::Released {
-                        let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
-                        frontend.client_pointer_buttons.remove(&button_code);
-                        if frontend.client_pointer_buttons.is_empty() && !pointer.is_grabbed() {
-                            frontend.client_pointer_capture = None;
-                        }
-                    }
-                    if scene_changed {
-                        state.scene_sync.mark_dirty();
-                    }
-                    true
-                }
-            }
-        }
+        InputEvent::PointerButton { event: button, .. } => route_pointer_button(
+            state,
+            button.button_code(),
+            button.state(),
+            button.time_msec(),
+        ),
         InputEvent::PointerAxis { event: axis, .. } => {
             state
                 .wayland
@@ -387,23 +164,53 @@ pub(super) fn process_flutter_input_event(
         } => {
             let serial = SERIAL_COUNTER.next_serial();
             let slot = i32::from(touch_event.slot());
-            let (position, scene_position, software_keyboard_touch) = {
+            let (position, scene_position, software_keyboard_touch, deck_touch) = {
                 let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
-                frontend.set_pointer_cursor_visible(false);
-                let position = output_bound_absolute_position(
-                    touch_event,
-                    frontend.touch_bounds,
-                    frontend.touch_transform,
-                );
+                let position = {
+                    let (bounds, transform) = touch_device_mapping(frontend, &touch_event.device());
+                    output_bound_absolute_position(touch_event, bounds, transform)
+                };
                 let scene_position = position - frontend.atlas_origin;
+                let deck_touch = frontend.input_deck_output.is_some_and(|id| {
+                    frontend.outputs.iter().any(|output| {
+                        output.id == id
+                            && output.logical_geometry.contains(Point::from((
+                                position.x.floor() as i32,
+                                position.y.floor() as i32,
+                            )))
+                    })
+                });
+                if !deck_touch {
+                    frontend.set_pointer_cursor_visible(false);
+                }
                 (
                     position,
                     scene_position,
-                    software_keyboard_owns_touch(frontend.input_layout.as_ref(), scene_position),
+                    deck_touch
+                        || software_keyboard_owns_touch(
+                            frontend.input_layout.as_ref(),
+                            scene_position,
+                        ),
+                    deck_touch,
                 )
             };
+            if deck_touch && !secure_locked {
+                let directions = swipe_scroll_directions(state, None);
+                let update = state.input_deck.screen_gestures.down(
+                    slot,
+                    (position.x, position.y),
+                    directions,
+                );
+                let consume = update.consume;
+                let changed = super::super::input_deck::apply_screen_gesture_update(state, update);
+                if consume {
+                    return changed;
+                }
+            }
             let swipe_directions = swipe_scroll_directions(state, Some(position));
-            let gesture = {
+            let gesture = if deck_touch {
+                TouchGestureUpdate::default()
+            } else {
                 let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
                 frontend
                     .touch_gestures
@@ -430,7 +237,7 @@ pub(super) fn process_flutter_input_event(
             if gesture_consumed {
                 return flush_clients;
             }
-            let target = if secure_locked {
+            let target = if secure_locked || software_keyboard_touch {
                 InputTarget::Flutter
             } else {
                 state
@@ -504,19 +311,35 @@ pub(super) fn process_flutter_input_event(
             let slot = i32::from(touch_event.slot());
             let (position, scene_position) = {
                 let frontend = state.wayland.as_ref().expect("missing Wayland frontend");
-                let position = output_bound_absolute_position(
-                    touch_event,
-                    frontend.touch_bounds,
-                    frontend.touch_transform,
-                );
+                let position = {
+                    let (bounds, transform) = touch_device_mapping(frontend, &touch_event.device());
+                    output_bound_absolute_position(touch_event, bounds, transform)
+                };
                 (position, position - frontend.atlas_origin)
             };
-            let gesture = state
-                .wayland
-                .as_mut()
-                .expect("missing Wayland frontend")
-                .touch_gestures
-                .motion_at(slot, position, touch_event.time());
+            let deck_contact = state.input_deck.screen_gestures.contains(slot);
+            if deck_contact {
+                let update = state.input_deck.screen_gestures.motion(
+                    slot,
+                    (position.x, position.y),
+                    touch_event.time(),
+                );
+                let consume = update.consume;
+                let changed = super::super::input_deck::apply_screen_gesture_update(state, update);
+                if consume {
+                    return changed;
+                }
+            }
+            let gesture = if deck_contact {
+                TouchGestureUpdate::default()
+            } else {
+                state
+                    .wayland
+                    .as_mut()
+                    .expect("missing Wayland frontend")
+                    .touch_gestures
+                    .motion_at(slot, position, touch_event.time())
+            };
             let gesture_consumed = gesture.consume;
             let flush_clients = apply_touch_gesture_update(state, gesture);
             if gesture_consumed {
@@ -579,12 +402,28 @@ pub(super) fn process_flutter_input_event(
             event: touch_event, ..
         } => {
             let slot = i32::from(touch_event.slot());
-            let gesture = state
-                .wayland
-                .as_mut()
-                .expect("missing Wayland frontend")
-                .touch_gestures
-                .up_at(slot, touch_event.time());
+            let deck_contact = state.input_deck.screen_gestures.contains(slot);
+            if deck_contact {
+                let update = state
+                    .input_deck
+                    .screen_gestures
+                    .up(slot, false, touch_event.time());
+                let consume = update.consume;
+                let changed = super::super::input_deck::apply_screen_gesture_update(state, update);
+                if consume {
+                    return changed;
+                }
+            }
+            let gesture = if deck_contact {
+                TouchGestureUpdate::default()
+            } else {
+                state
+                    .wayland
+                    .as_mut()
+                    .expect("missing Wayland frontend")
+                    .touch_gestures
+                    .up_at(slot, touch_event.time())
+            };
             let gesture_consumed = gesture.consume;
             let flush_clients = apply_touch_gesture_update(state, gesture);
             if gesture_consumed {
@@ -655,12 +494,28 @@ pub(super) fn process_flutter_input_event(
             event: touch_event, ..
         } => {
             let slot = i32::from(touch_event.slot());
-            let gesture = state
-                .wayland
-                .as_mut()
-                .expect("missing Wayland frontend")
-                .touch_gestures
-                .cancel_at(slot, touch_event.time());
+            let deck_contact = state.input_deck.screen_gestures.contains(slot);
+            if deck_contact {
+                let update = state
+                    .input_deck
+                    .screen_gestures
+                    .up(slot, true, touch_event.time());
+                let consume = update.consume;
+                let changed = super::super::input_deck::apply_screen_gesture_update(state, update);
+                if consume {
+                    return changed;
+                }
+            }
+            let gesture = if deck_contact {
+                TouchGestureUpdate::default()
+            } else {
+                state
+                    .wayland
+                    .as_mut()
+                    .expect("missing Wayland frontend")
+                    .touch_gestures
+                    .cancel_at(slot, touch_event.time())
+            };
             let gesture_consumed = gesture.consume;
             let flush_clients = apply_touch_gesture_update(state, gesture);
             if gesture_consumed {
@@ -727,7 +582,7 @@ pub(super) fn deliver_routed_flutter_pointer_motion(
 }
 
 #[cfg(feature = "flutter")]
-pub(super) fn route_pointer_motion(
+pub(in super::super) fn route_pointer_motion(
     state: &mut RuntimeState,
     position: Point<f64, Logical>,
     target: PointerMotionTarget,
@@ -1476,4 +1331,238 @@ pub(super) fn process_wayland_keyboard_transition(
     );
     #[cfg(feature = "flutter")]
     synchronize_active_keyboard_layout(state, &keyboard);
+}
+
+#[cfg(feature = "flutter")]
+pub(in super::super) fn route_pointer_button(
+    state: &mut RuntimeState,
+    button_code: u32,
+    button_state: ButtonState,
+    time: u32,
+) -> bool {
+    let secure_locked = state.secure_session_locked();
+    let serial = SERIAL_COUNTER.next_serial();
+    state
+        .wayland
+        .as_mut()
+        .expect("missing Wayland frontend")
+        .set_pointer_cursor_visible(true);
+    state
+        .native_escape_shortcut
+        .note_pointer_button(button_state == ButtonState::Pressed);
+    if retired_pointer_button_consumes_transition(
+        &mut state
+            .wayland
+            .as_mut()
+            .expect("missing Wayland frontend")
+            .retired_pointer_buttons,
+        button_code,
+        button_state,
+    ) {
+        return true;
+    }
+    let pointer = state
+        .wayland
+        .as_ref()
+        .expect("missing Wayland frontend")
+        .seat
+        .get_pointer()
+        .expect("seat has no pointer");
+    let pointer_grabbed = pointer.is_grabbed();
+    let flutter_captured = state.flutter_input.pointer_captured();
+    let clipboard_drag_active = state
+        .wayland
+        .as_ref()
+        .expect("missing Wayland frontend")
+        .clipboard_drag_active;
+    let (target, local_window_region) = {
+        let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
+        let target = if secure_locked || (flutter_captured && !frontend.clipboard_drag_active) {
+            InputTarget::Flutter
+        } else if let Some(route) = frontend.client_pointer_capture.clone() {
+            InputTarget::Client(route)
+        } else {
+            let position = frontend.pointer_location;
+            frontend.input_target(position)
+        };
+        let local_window_region =
+            if !secure_locked && !flutter_captured && matches!(&target, InputTarget::Flutter) {
+                frontend.local_flutter_window_region_at(frontend.pointer_location)
+            } else {
+                None
+            };
+        (target, local_window_region)
+    };
+    let pointer_grabbed = if pointer_grabbed
+        && button_state == ButtonState::Pressed
+        && let InputTarget::Client(route) = &target
+    {
+        !dismiss_foreign_popup_grab(state, &pointer, &route.surface, serial, time)
+    } else {
+        pointer_grabbed
+    };
+    if button_state == ButtonState::Released {
+        state
+            .wayland
+            .as_mut()
+            .expect("missing Wayland frontend")
+            .forget_client_pointer_button(button_code);
+    }
+    // SUPER is compositor-owned and deliberately never enters the
+    // client-facing seat state. Use the native physical-key tracker
+    // for compositor pointer chords instead of Smithay's modifiers.
+    let logo = state.native_escape_shortcut.super_pressed();
+    let super_action = super_pointer_action(logo, button_code);
+    let began_super_grab = if !pointer_grabbed
+        && button_state == ButtonState::Pressed
+        && let Some(action) = super_action
+    {
+        match (&target, local_window_region) {
+            (InputTarget::Client(route), _) => {
+                begin_super_pointer_grab(state, route, action, button_code, serial)
+            }
+            (InputTarget::Flutter, Some(region)) => {
+                begin_local_super_pointer_grab(state, region, action, button_code, serial)
+            }
+            _ => false,
+        }
+    } else {
+        false
+    };
+    if began_super_grab {
+        update_pressed_buttons(
+            &mut state
+                .wayland
+                .as_mut()
+                .expect("missing Wayland frontend")
+                .wayland_pointer_buttons,
+            button_code,
+            ButtonState::Pressed,
+        );
+        pointer.button(
+            state,
+            &ButtonEvent {
+                button: button_code,
+                state: ButtonState::Pressed,
+                serial,
+                time: time,
+            },
+        );
+        pointer.frame(state);
+        state.scene_sync.mark_dirty();
+        return true;
+    }
+    if !logo
+        && button_state == ButtonState::Pressed
+        && let InputTarget::Client(route) = &target
+        && state
+            .wayland
+            .as_mut()
+            .expect("missing Wayland frontend")
+            .resume_pointer_constraint_for_route(route)
+    {
+        state.scene_sync.mark_dirty();
+    }
+    let mut scene_changed = false;
+    if button_state == ButtonState::Pressed
+        && matches!(&target, InputTarget::Client(_))
+        && state
+            .wayland
+            .as_ref()
+            .and_then(|frontend| frontend.input_layout.as_ref())
+            .is_some_and(InputLayoutSnapshot::observes_client_pointer_presses)
+    {
+        state.queue_shell_action(
+            super::super::super::wire::ShellAction::ClientPointerPressed,
+            None,
+        );
+    }
+    if matches!(&target, InputTarget::Flutter) {
+        let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
+        match button_state {
+            ButtonState::Pressed if button_code == BTN_LEFT => {
+                frontend.flutter_pointer_press = Some(FlutterPointerPress {
+                    button: button_code,
+                    serial,
+                    time: time,
+                    location: frontend.pointer_location,
+                });
+            }
+            ButtonState::Released
+                if frontend
+                    .flutter_pointer_press
+                    .is_some_and(|press| press.button == button_code) =>
+            {
+                frontend.flutter_pointer_press = None;
+            }
+            _ => {}
+        }
+    }
+    if clipboard_drag_active && button_state == ButtonState::Released {
+        // A compositor-owned DnD grab still mirrors the terminal
+        // release into Flutter. This completes the original shell
+        // gesture so its card preview can settle instead of being
+        // abandoned when Smithay receives the actual drop.
+        state.synchronize_flutter_pointer_position();
+        state
+            .flutter_input
+            .handle_pointer_button(button_code, button_state);
+        state
+            .wayland
+            .as_mut()
+            .expect("missing Wayland frontend")
+            .set_clipboard_drag_active(false);
+    }
+    match target {
+        InputTarget::Flutter if secure_locked || !pointer_grabbed => {
+            state.synchronize_flutter_pointer_position();
+            state
+                .flutter_input
+                .handle_pointer_button(button_code, button_state);
+            false
+        }
+        target => {
+            if button_state == ButtonState::Pressed
+                && let InputTarget::Client(route) = &target
+            {
+                let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
+                frontend.remember_client_pointer_press(route, serial, button_code);
+                if !pointer_grabbed {
+                    frontend.client_pointer_capture = Some(route.clone());
+                    frontend.client_pointer_buttons.insert(button_code);
+                    scene_changed = activate_client_route(state, route, serial);
+                }
+            }
+            update_pressed_buttons(
+                &mut state
+                    .wayland
+                    .as_mut()
+                    .expect("missing Wayland frontend")
+                    .wayland_pointer_buttons,
+                button_code,
+                button_state,
+            );
+            pointer.button(
+                state,
+                &ButtonEvent {
+                    button: button_code,
+                    state: button_state,
+                    serial,
+                    time: time,
+                },
+            );
+            pointer.frame(state);
+            if button_state == ButtonState::Released {
+                let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
+                frontend.client_pointer_buttons.remove(&button_code);
+                if frontend.client_pointer_buttons.is_empty() && !pointer.is_grabbed() {
+                    frontend.client_pointer_capture = None;
+                }
+            }
+            if scene_changed {
+                state.scene_sync.mark_dirty();
+            }
+            true
+        }
+    }
 }

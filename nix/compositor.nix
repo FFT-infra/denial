@@ -4,6 +4,7 @@
   coreutils,
   pkg-config,
   libglvnd,
+  vulkan-loader,
   libgbm,
   libinput,
   seatd,
@@ -76,13 +77,14 @@ rustPlatform.buildRustPackage {
     test -x $out/bin/denial-portal
   '';
 
-  # EGL, PAM, PulseAudio, and DDC support are loaded with dlopen rather than
+  # EGL, Vulkan, PAM, PulseAudio, and DDC support are loaded with dlopen rather than
   # recorded as ELF dependencies. Give those sonames deterministic Nix-store
   # locations instead of relying on a host-global /usr/lib search path.
   postFixup = ''
     patchelf --add-rpath ${
       lib.makeLibraryPath [
         libglvnd
+        vulkan-loader
         pam
         libpulseaudio
         ddcutil

@@ -16,10 +16,7 @@ impl FlutterRuntime {
             {
                 continue;
             }
-            self.host()
-                .engine()
-                .unregister_external_texture(texture_id)?;
-            self.handler.remove_external_texture_source(texture_id);
+            self.unregister_external_texture(texture_id)?;
             self.pending_frame_texture_ids
                 .retain(|pending| *pending != texture_id);
             self.registered_external_textures.remove(&texture_id);
@@ -77,6 +74,11 @@ impl FlutterRuntime {
         // a lock request cannot be followed by one last unredacted read.
         self.clipboard
             .set_locked(self.authentication.security_gate_locked());
+        if message.channel == crate::input_deck::CONTROL_CHANNEL {
+            crate::input_deck::enqueue(&mut self.input_deck_commands, &message.data);
+            self.host().respond(&mut message, &[])?;
+            return Ok(());
+        }
         if message.channel == "denial/haptics" {
             let result = self.authentication.handle_haptics_packet(&message.data);
             self.host().respond(&mut message, &[])?;
@@ -244,6 +246,34 @@ impl FlutterRuntime {
         self.host
             .as_ref()
             .expect("Flutter runtime is shutting down")
+    }
+
+    /// Unregisters one external texture and returns its producer buffers
+    /// without waiting for the engine to retire its last image of them.
+    /// Impeller GLES retires that image only when a later frame is rendered,
+    /// which a still screen can postpone indefinitely while the producer
+    /// waits for the buffer.
+    pub(super) fn unregister_external_texture(
+        &self,
+        texture_id: i64,
+    ) -> Result<(), Box<dyn Error>> {
+        let engine = self.host().engine();
+        engine.unregister_external_texture(texture_id)?;
+        self.handler.remove_external_texture_source(texture_id);
+        let buffers = self.handler.take_leased_buffers(texture_id);
+        if buffers.is_empty() {
+            return Ok(());
+        }
+        let handler = Arc::downgrade(&self.handler);
+        if let Err(error) = engine.post_render_thread_task(Box::new(move || {
+            if let Some(handler) = handler.upgrade() {
+                handler.release_unregistered_buffers(buffers);
+            }
+        })) {
+            // The engine images keep their buffers until Flutter retires them.
+            warn!(%error, texture_id, "could not release an unregistered texture's buffers");
+        }
+        Ok(())
     }
 
     pub fn shutdown(mut self) -> Result<(), EngineError> {

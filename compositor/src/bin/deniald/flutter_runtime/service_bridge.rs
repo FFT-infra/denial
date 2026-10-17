@@ -273,10 +273,7 @@ impl FlutterRuntime {
         if self.screenshot_texture_id != Some(texture_id) {
             return Err("screenshot texture identity does not match the active texture".into());
         }
-        self.host()
-            .engine()
-            .unregister_external_texture(texture_id)?;
-        self.handler.remove_external_texture_source(texture_id);
+        self.unregister_external_texture(texture_id)?;
         self.pending_frame_texture_ids
             .retain(|pending| *pending != texture_id);
         self.registered_external_textures.remove(&texture_id);
@@ -658,6 +655,19 @@ impl FlutterRuntime {
             .engine()
             .send_platform_message(crate::clipboard::STATE_CHANNEL, &packet)?;
         self.published_clipboard_revision = revision;
+        Ok(())
+    }
+}
+
+impl FlutterRuntime {
+    pub(crate) fn publish_input_deck(
+        &self,
+        snapshot: &crate::input_deck::Snapshot,
+    ) -> Result<(), Box<dyn Error>> {
+        self.host().engine().send_platform_message(
+            crate::input_deck::STATE_CHANNEL,
+            &serde_json::to_vec(snapshot)?,
+        )?;
         Ok(())
     }
 }

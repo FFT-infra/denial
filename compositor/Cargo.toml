@@ -8,7 +8,7 @@ license = "GPL-3.0-or-later"
 publish = false
 
 [workspace]
-members = ["denial-portal", "flutter-engine", "polkit-agent"]
+members = ["denial-portal", "flutter-engine", "polkit-agent", "polling"]
 resolver = "3"
 
 [features]
@@ -16,6 +16,7 @@ default = ["xwayland"]
 flutter = [
     "kms",
     "control",
+    "dep:ash",
     "dep:denial-flutter-engine",
     "dep:png",
     "dep:sha2",
@@ -74,6 +75,7 @@ name = "denial_core"
 path = "src/lib.rs"
 
 [dependencies]
+ash = { version = "=0.38.0", default-features = false, features = ["loaded", "std", "debug"], optional = true }
 async-io = { version = "=2.6.0", optional = true }
 futures-lite = { version = "=2.6.1", optional = true }
 calloop = { version = "0.14", features = ["signals"], optional = true }
@@ -122,6 +124,16 @@ name = "denial-ui"
 path = "src/bin/denial_ui.rs"
 required-features = ["ui-development"]
 
+# calloop's poller without upstream's per-wait timerfd and notifier re-arming;
+# see polling/src/lib.rs.
+[patch.crates-io]
+polling = { path = "polling" }
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+[[bin]]
+name = "denial-transfer-benchmark"
+path = "src/bin/denial_transfer_benchmark.rs"
+required-features = ["flutter"]

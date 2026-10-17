@@ -74,7 +74,7 @@ use super::touch_gestures::{
 };
 
 #[path = "input/flutter_route.rs"]
-mod flutter_route;
+pub(super) mod flutter_route;
 #[path = "input/tablet.rs"]
 mod tablet;
 #[path = "input/wayland_route.rs"]
@@ -89,6 +89,84 @@ pub(crate) use flutter_route::reconcile_flutter_pointer_route;
 pub(super) use flutter_route::release_client_geometry_for_shell_grab;
 use wayland_route::process_wayland_input_event;
 
+/// Cancel the whole client sequence before retiring any of its surface routes.
+/// wl_touch.cancel is client-wide, not a per-slot or per-surface event.
+pub(super) fn cancel_touch_for_surface(state: &mut RuntimeState, surface: &WlSurface) -> bool {
+    let frontend = state.wayland.as_ref().expect("missing Wayland frontend");
+    let touch = frontend.seat.get_touch().expect("seat has no touch");
+    let belongs_to_surface = |focus: &WlSurface| {
+        let mut current = Some(focus.clone());
+        while let Some(candidate) = current {
+            if &candidate == surface {
+                return true;
+            }
+            current = smithay::wayland::compositor::get_parent(&candidate);
+        }
+        #[cfg(feature = "flutter")]
+        if frontend.owning_toplevel_surface(focus).as_ref() == Some(surface) {
+            return true;
+        }
+        false
+    };
+    let affected = touch
+        .with_grab(|_, grab| {
+            grab.downcast_ref::<denial_core::touch_grab::TouchSessionGrab<RuntimeState>>()
+                .and_then(|grab| grab.focus())
+                .is_some_and(belongs_to_surface)
+        })
+        .unwrap_or(false);
+    #[cfg(feature = "flutter")]
+    let affected = affected
+        || frontend.client_touch_routes.values().any(|route| {
+            belongs_to_surface(&route.surface) || route.layer_root.as_ref() == Some(surface)
+        });
+    if affected {
+        touch.cancel(state);
+        #[cfg(feature = "flutter")]
+        {
+            let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
+            frontend.client_touch_routes.clear();
+            frontend.client_touch_frame_pending = false;
+        }
+    }
+    affected
+}
+
+pub(super) fn touch_output_for_device<'a>(
+    frontend: &'a WaylandFrontend,
+    device: &LibinputDevice,
+) -> Option<&'a super::WaylandOutput> {
+    if let Some(name) = device.output_name() {
+        return frontend
+            .outputs
+            .iter()
+            .find(|output| output.connector == name.as_ref());
+    }
+    frontend
+        .outputs
+        .iter()
+        .find(|output| {
+            ["DSI-", "eDP-", "LVDS-"]
+                .iter()
+                .any(|prefix| output.connector.starts_with(prefix))
+        })
+        .or_else(|| {
+            frontend
+                .outputs
+                .iter()
+                .find(|output| output.logical_geometry == frontend.touch_bounds)
+        })
+}
+
+fn touch_device_mapping(
+    frontend: &WaylandFrontend,
+    device: &LibinputDevice,
+) -> (Rectangle<i32, Logical>, OutputTransform) {
+    touch_output_for_device(frontend, device)
+        .map(|output| (output.logical_geometry, output.transform))
+        .unwrap_or((frontend.touch_bounds, frontend.touch_transform))
+}
+
 fn output_bound_absolute_position<E>(
     event: &E,
     bounds: Rectangle<i32, Logical>,
@@ -97,14 +175,51 @@ fn output_bound_absolute_position<E>(
 where
     E: AbsolutePositionEvent<LibinputInputBackend>,
 {
-    let (x, y) = transform.native_to_logical(
-        event.x_transformed(1).clamp(0.0, 1.0),
-        event.y_transformed(1).clamp(0.0, 1.0),
-    );
+    project_touch_position(
+        bounds,
+        transform,
+        event.x_transformed(1),
+        event.y_transformed(1),
+    )
+}
+
+fn project_touch_position(
+    bounds: Rectangle<i32, Logical>,
+    transform: OutputTransform,
+    x: f64,
+    y: f64,
+) -> Point<f64, Logical> {
+    let (x, y) = transform.native_to_logical(x.clamp(0.0, 1.0), y.clamp(0.0, 1.0));
+    let left = f64::from(bounds.loc.x);
+    let top = f64::from(bounds.loc.y);
+    // Output bounds are half-open, including at transformed touch endpoints.
     Point::from((
-        f64::from(bounds.loc.x) + x * f64::from(bounds.size.w),
-        f64::from(bounds.loc.y) + y * f64::from(bounds.size.h),
+        (left + x * f64::from(bounds.size.w))
+            .clamp(left, (left + f64::from(bounds.size.w)).next_down()),
+        (top + y * f64::from(bounds.size.h))
+            .clamp(top, (top + f64::from(bounds.size.h)).next_down()),
     ))
+}
+
+#[cfg(test)]
+mod absolute_touch_bounds_tests {
+    use super::*;
+    #[test]
+    fn edge_contacts_remain_on_their_associated_output_after_rotation() {
+        let bounds = Rectangle::new((-800, 150).into(), (800, 600).into());
+        for transform in [
+            OutputTransform::Normal,
+            OutputTransform::Rotate90,
+            OutputTransform::Rotate180,
+            OutputTransform::Rotate270,
+        ] {
+            for (x, y) in [(0.0, 0.0), (1.0, 1.0), (0.0, 1.0), (1.0, 0.0)] {
+                let position = project_touch_position(bounds, transform, x, y);
+                assert!(position.x >= -800.0 && position.x < 0.0);
+                assert!(position.y >= 150.0 && position.y < 750.0);
+            }
+        }
+    }
 }
 
 #[cfg(feature = "flutter")]
@@ -116,9 +231,9 @@ const MAX_CLIENT_POINTER_PRESSES: usize = 16;
 
 #[cfg(feature = "flutter")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ShellKeyStroke {
-    evdev_keycode: u32,
-    shift: bool,
+pub(super) struct ShellKeyStroke {
+    pub(super) evdev_keycode: u32,
+    pub(super) shift: bool,
 }
 
 #[cfg(feature = "flutter")]
@@ -272,7 +387,7 @@ fn inject_shell_key_stroke(
 }
 
 #[cfg(feature = "flutter")]
-fn inject_shell_key_transition(
+pub(super) fn inject_shell_key_transition(
     state: &mut RuntimeState,
     keyboard: &KeyboardHandle<RuntimeState>,
     stroke: ShellKeyStroke,
@@ -660,19 +775,19 @@ pub(super) enum RoutedPointerTarget {
 }
 
 #[cfg(feature = "flutter")]
-struct PointerMotionTarget {
+pub(super) struct PointerMotionTarget {
     routed: RoutedPointerTarget,
     focus: Option<(WlSurface, Point<f64, Logical>)>,
 }
 
 #[cfg(feature = "flutter")]
 impl PointerMotionTarget {
-    const FLUTTER: Self = Self {
+    pub(super) const FLUTTER: Self = Self {
         routed: RoutedPointerTarget::Flutter,
         focus: None,
     };
 
-    fn client(route: &ClientInputRoute, position: Point<f64, Logical>) -> Self {
+    pub(super) fn client(route: &ClientInputRoute, position: Point<f64, Logical>) -> Self {
         Self {
             routed: RoutedPointerTarget::Client(route.region.surface_id),
             focus: Some(route.focus_at(position)),
@@ -793,7 +908,10 @@ impl WaylandFrontend {
                 || self.input_method.owns_popup_surface(&route.surface))
     }
 
-    fn input_route(&mut self, position: Point<f64, Logical>) -> Option<&ClientInputRoute> {
+    pub(super) fn input_route(
+        &mut self,
+        position: Point<f64, Logical>,
+    ) -> Option<&ClientInputRoute> {
         let layout = self.input_layout.as_ref()?;
         let scene_position = position - self.atlas_origin;
         if layout.exclusive_shell()
@@ -972,7 +1090,10 @@ impl WaylandFrontend {
             .map_or(InputTarget::Flutter, InputTarget::Client)
     }
 
-    fn pointer_motion_target(&mut self, position: Point<f64, Logical>) -> PointerMotionTarget {
+    pub(super) fn pointer_motion_target(
+        &mut self,
+        position: Point<f64, Logical>,
+    ) -> PointerMotionTarget {
         self.input_route(position)
             .map_or(PointerMotionTarget::FLUTTER, |route| {
                 PointerMotionTarget::client(route, position)
@@ -1444,6 +1565,12 @@ fn process_input_event(
     let mut tablet_clients_changed = false;
     if let InputEvent::DeviceAdded { device } = &mut event {
         tablet_clients_changed = tablet::register_device(state, device);
+        #[cfg(feature = "flutter")]
+        if Device::has_capability(device, DeviceCapability::Touch) {
+            state
+                .touchscreen_devices
+                .insert(device.sysname().to_owned(), device.clone());
+        }
         if Device::has_capability(device, DeviceCapability::Keyboard) {
             if let Some(led_state) = state
                 .wayland
@@ -1507,6 +1634,10 @@ fn process_input_event(
         #[cfg(feature = "flutter")]
         state.power_button.remove_device(device.sysname());
         tablet_clients_changed = tablet::unregister_device(state, device);
+        #[cfg(feature = "flutter")]
+        {
+            state.touchscreen_devices.remove(device.sysname());
+        }
         if Device::has_capability(device, DeviceCapability::Keyboard) {
             state.keyboard_devices.remove(device.sysname());
         }
@@ -1697,6 +1828,7 @@ fn reset_input_devices(state: &mut RuntimeState, reset: InputDeviceReset) {
     // their shortcut owner; otherwise the window switcher cannot finish.
     #[cfg(feature = "flutter")]
     if reset.touch {
+        super::input_deck::cancel_screen_gestures(state);
         let actions = state
             .wayland
             .as_mut()

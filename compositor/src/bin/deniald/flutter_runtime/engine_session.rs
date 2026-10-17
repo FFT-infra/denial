@@ -24,6 +24,7 @@ struct PreparedOutputPool {
     // Keep the native allocations alive and compare their identity, not just
     // dimensions/format: a newly allocated pool requires newly imported FBOs.
     dmabufs: Vec<(Dmabuf, Option<Dmabuf>)>,
+    transfer_ids: Vec<usize>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -50,6 +51,15 @@ impl PreparedRendererConfiguration {
                     configuration_generation: pool.configuration_generation,
                     size: pool.size,
                     initial_scanout: pool.initial_scanout,
+                    transfer_ids: pool
+                        .transfers
+                        .iter()
+                        .map(|target| {
+                            target
+                                .as_ref()
+                                .map_or(0, |target| Arc::as_ptr(target) as usize)
+                        })
+                        .collect(),
                     dmabufs: pool
                         .dmabufs
                         .iter()
@@ -117,6 +127,7 @@ impl PreparedFlutterRenderer {
         Arc::get_mut(&mut self.handler)
             .ok_or("prepared Flutter renderer is already shared")?
             .assign_generation(generation);
+        *lock(&self.handler.completion_owner) = Arc::downgrade(&self.handler);
         info!(
             generation,
             "starting Flutter with retained prepared output targets"
@@ -285,6 +296,8 @@ impl FlutterRuntime {
             pending_brightness_requests: VecDeque::with_capacity(16),
             pending_software_dimming_requests: VecDeque::with_capacity(16),
             pending_ui_development_commands: VecDeque::with_capacity(8),
+            input_deck_commands: VecDeque::new(),
+            input_deck_snapshot: None,
             pending_idle_policy: None,
             pending_dpms_off: false,
             pending_vm_service_uri: None,

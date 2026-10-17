@@ -6529,6 +6529,103 @@
   "pluginsDesktopFeature": "Desktop",
   "@pluginsDesktopFeature": {
     "description": "Plugin Manager: DesktopFeature."
+  },
+  "inputDeckTitle": "Keyboard & touchpad display",
+  "@inputDeckTitle": {
+    "description": "Touch display keyboard and touchpad mode."
+  },
+  "inputDeckHeading": "Keyboard & touchpad",
+  "@inputDeckHeading": {
+    "description": "Touch display keyboard and touchpad mode."
+  },
+  "inputDeckEnable": "Use touch display as keyboard and touchpad",
+  "@inputDeckEnable": {
+    "description": "Touch display keyboard and touchpad mode."
+  },
+  "inputDeckUnavailable": "Connect a touch display to configure this mode.",
+  "@inputDeckUnavailable": {
+    "description": "Touch display keyboard and touchpad mode."
+  },
+  "inputDeckEnableDescription": "Use {output} for input whenever another display is available. Disconnect the external display to return to tablet mode.",
+  "@inputDeckEnableDescription": {
+    "description": "Touch display keyboard and touchpad mode.",
+    "placeholders": {
+      "output": {
+        "type": "String",
+        "example": "eDP-1"
+      }
+    }
+  },
+  "inputDeckWaiting": "Ready when a second display is connected and powered on.",
+  "@inputDeckWaiting": {
+    "description": "Touch display keyboard and touchpad mode."
+  },
+  "inputDeckTouchDisplay": "Touch display",
+  "@inputDeckTouchDisplay": {
+    "description": "Touch display keyboard and touchpad mode."
+  },
+  "inputDeckTouchDisplayDescription": "Display to use for keyboard and touchpad input.",
+  "@inputDeckTouchDisplayDescription": {
+    "description": "Touch display keyboard and touchpad mode."
+  },
+  "inputDeckKeyboardSize": "Keyboard size",
+  "@inputDeckKeyboardSize": {
+    "description": "Touch display keyboard and touchpad mode."
+  },
+  "inputDeckTouchpadWidth": "Touchpad width",
+  "@inputDeckTouchpadWidth": {
+    "description": "Touch display keyboard and touchpad mode."
+  },
+  "inputDeckTouchpadHeight": "Touchpad height",
+  "@inputDeckTouchpadHeight": {
+    "description": "Touch display keyboard and touchpad mode."
+  },
+  "inputDeckPointerSpeed": "Pointer speed",
+  "@inputDeckPointerSpeed": {
+    "description": "Touch display keyboard and touchpad mode."
+  },
+  "inputDeckNaturalScroll": "Natural scrolling",
+  "@inputDeckNaturalScroll": {
+    "description": "Touch display keyboard and touchpad mode."
+  },
+  "inputDeckNaturalScrollDescription": "Content follows the movement of your fingers.",
+  "@inputDeckNaturalScrollDescription": {
+    "description": "Touch display keyboard and touchpad mode."
+  },
+  "inputDeckCpuChart": "CPU chart",
+  "@inputDeckCpuChart": {
+    "description": "Touch display keyboard and touchpad mode."
+  },
+  "inputDeckCpuDescription": "Show processor usage above the keyboard.",
+  "@inputDeckCpuDescription": {
+    "description": "Touch display keyboard and touchpad mode."
+  },
+  "inputDeckGpuCharts": "GPU charts",
+  "@inputDeckGpuCharts": {
+    "description": "Touch display keyboard and touchpad mode."
+  },
+  "inputDeckGpuDescription": "Show usage for GPUs that report it.",
+  "@inputDeckGpuDescription": {
+    "description": "Touch display keyboard and touchpad mode."
+  },
+  "inputDeckUseAsDisplay": "Use as display",
+  "@inputDeckUseAsDisplay": {
+    "description": "Touch display keyboard and touchpad mode."
+  },
+  "inputDeckTouchpad": "Touchpad",
+  "@inputDeckTouchpad": {
+    "description": "Touch display keyboard and touchpad mode."
+  },
+  "inputDeckTouchpadHint": "Touchpad. One finger moves the pointer. Tap to click. Two fingers scroll or tap for right click. Double tap and hold to drag.",
+  "@inputDeckTouchpadHint": {
+    "description": "Touch display keyboard and touchpad mode."
+  },
+  "inputDeckLeftClick": "Left click",
+  "@inputDeckLeftClick": {
+    "description": "Touch display keyboard and touchpad mode."
+  },
+  "inputDeckRightClick": "Right click",
+  "@inputDeckRightClick": {
+    "description": "Touch display keyboard and touchpad mode."
   }
-
 }

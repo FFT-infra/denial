@@ -17,6 +17,7 @@ fn buffer() -> Dmabuf {
 fn configuration(buffers: &[Dmabuf]) -> PreparedRendererConfiguration {
     PreparedRendererConfiguration::new(
         &[OutputRenderTargetPool {
+            transfers: vec![],
             output_id: OutputId(1),
             render_view_id: RenderViewId::for_output(OutputId(1)).unwrap(),
             configuration_generation: 2,
@@ -78,6 +79,7 @@ fn prepared_blit_pool_requires_the_same_render_allocation() {
     let scanout = buffer();
     let render = buffer();
     let pool = |render| OutputRenderTargetPool {
+        transfers: vec![],
         output_id: OutputId(1),
         render_view_id: RenderViewId::for_output(OutputId(1)).unwrap(),
         configuration_generation: 2,

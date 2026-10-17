@@ -259,6 +259,18 @@ unsafe extern "C" fn render_outputs_progress(
     }
 }
 
+type RenderThreadTask = Box<dyn FnOnce() + Send>;
+
+unsafe extern "C" fn run_render_thread_task(data: *mut c_void) {
+    // SAFETY: post_render_thread_task produced this pointer with Box::into_raw
+    // and Flutter runs each accepted task exactly once.
+    let task = unsafe { Box::from_raw(data.cast::<RenderThreadTask>()) };
+    if let Err(payload) = catch_unwind(AssertUnwindSafe(move || (*task)())) {
+        // Dropping an arbitrary panic payload may panic again across C.
+        mem::forget(payload);
+    }
+}
+
 pub struct EngineLibrary {
     table: sys::FlutterEngineProcTable,
     set_render_outputs: unsafe extern "C" fn(
@@ -882,6 +894,29 @@ impl RunningEngine {
         check_result("UnregisterExternalTexture", unsafe {
             function(self.handle, texture_id)
         })
+    }
+
+    /// Runs `task` on Flutter's render thread after every render task queued
+    /// before this call, including a preceding texture unregistration. A task
+    /// still queued when the engine shuts down is leaked unrun.
+    pub fn post_render_thread_task(
+        &self,
+        task: Box<dyn FnOnce() + Send>,
+    ) -> Result<(), EngineError> {
+        let function = self
+            .library
+            .table
+            .PostRenderThreadTask
+            .expect("validated Flutter proc table");
+        let task = Box::into_raw(Box::new(task));
+        // SAFETY: the engine handle is live and `run_render_thread_task`
+        // reclaims `task` exactly once if Flutter accepts it.
+        let result = unsafe { function(self.handle, Some(run_render_thread_task), task.cast()) };
+        if result != sys::FlutterEngineResult_kSuccess {
+            // SAFETY: Flutter rejected the task and will never run it.
+            drop(unsafe { Box::from_raw(task) });
+        }
+        check_result("PostRenderThreadTask", result)
     }
 
     pub fn mark_external_texture_frame_available(

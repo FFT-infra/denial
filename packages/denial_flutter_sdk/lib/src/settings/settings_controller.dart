@@ -309,6 +309,12 @@ class ShellSettingsController extends Notifier<ShellSettings> {
     );
   }
 
+  void setInputDeck(InputDeckSettings value) {
+    _update(
+      state.copyWith(inputDeck: InputDeckSettings.fromJson(value.toJson())),
+    );
+  }
+
   void setDesktopWindowLayout(DesktopWindowLayout value) {
     _update(state.copyWith(layout: state.layout.copyWith(windowLayout: value)));
   }

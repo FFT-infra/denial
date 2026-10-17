@@ -13,10 +13,13 @@ impl FlutterRuntime {
     pub fn sync_wayland_scene(
         &mut self,
         metadata_revision: u64,
-        windows: Vec<wire::WindowDescription>,
+        mut windows: Vec<wire::WindowDescription>,
         mut frames: Vec<ExternalTextureFrame>,
         restored_window_ids: &BTreeSet<u64>,
     ) -> Result<SyncedWaylandScene, Box<dyn Error>> {
+        self.changed_texture_scratch.clear();
+        self.handler
+            .update_native_window_plans(&mut windows, &mut self.changed_texture_scratch);
         self.rebuild_texture_output_membership(&windows);
         self.reinstall_cursor_texture_membership();
         let mut desired = mem::take(&mut self.scene_texture_ids);
@@ -48,6 +51,11 @@ impl FlutterRuntime {
             );
         }
 
+        for window in &windows {
+            if let Some(client) = window.client_texture {
+                desired.insert(client.texture_id as i64);
+            }
+        }
         // Both work collections retain their capacity across client buffer
         // commits; scene synchronization commonly runs at application frame
         // rate even when the window count is unchanged.
@@ -57,7 +65,6 @@ impl FlutterRuntime {
         // Update all sources under one short mutex acquisition. Taking this
         // lock once per surface caused avoidable platform/raster contention
         // for multi-window scenes.
-        self.changed_texture_scratch.clear();
         self.handler
             .set_external_texture_sources(frames.drain(..), &mut self.changed_texture_scratch);
         self.stage_changed_textures();
@@ -116,10 +123,7 @@ impl FlutterRuntime {
                 .copied(),
         );
         for texture_id in removed.drain(..) {
-            self.host()
-                .engine()
-                .unregister_external_texture(texture_id)?;
-            self.handler.remove_external_texture_source(texture_id);
+            self.unregister_external_texture(texture_id)?;
             self.pending_frame_texture_ids
                 .retain(|pending| *pending != texture_id);
             self.registered_external_textures.remove(&texture_id);
@@ -162,6 +166,14 @@ impl FlutterRuntime {
         texture_ids.clear();
         self.scene_texture_id_scratch = texture_ids;
         Ok(frames)
+    }
+
+    pub(crate) fn native_client_composition_stats(&self) -> serde_json::Value {
+        self.handler.native_client_composition_stats()
+    }
+
+    pub(crate) fn take_native_window_fallback(&self) -> bool {
+        self.handler.take_native_window_fallback()
     }
 
     pub fn synced_window_ids(&self) -> impl Iterator<Item = u64> + '_ {

@@ -273,6 +273,9 @@ impl FlutterRuntime {
                 }
             };
             remember(window.texture_id);
+            if let Some(client) = window.client_texture {
+                remember(client.texture_id);
+            }
             for surface in &window.surfaces {
                 remember(surface.texture_id);
             }
@@ -280,6 +283,8 @@ impl FlutterRuntime {
     }
 
     pub(super) fn stage_changed_textures(&mut self) {
+        self.handler
+            .expand_native_texture_changes(&mut self.changed_texture_scratch);
         for texture_id in self.changed_texture_scratch.drain(..) {
             if let Some(outputs) = self.texture_output_membership.get(&texture_id) {
                 for output in outputs.outputs() {

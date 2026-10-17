@@ -26,6 +26,8 @@ import 'bridge/context.dart';
 import 'bridge/displays_client.dart';
 import 'bridge/events_client.dart';
 import 'bridge/input_client.dart';
+import 'bridge/input_deck_client.dart';
+export 'bridge/input_deck_client.dart' show InputDeckSnapshot;
 import 'bridge/platform_transport.dart';
 import 'bridge/session_client.dart';
 import 'bridge/settings_document_client.dart';
@@ -55,6 +57,7 @@ class DenialBridge {
     _windows = BridgeWindowsClient(_context);
     _displays = BridgeDisplaysClient(_context);
     _input = BridgeInputClient(_context);
+    _inputDeck = BridgeInputDeckClient(_context);
     _brightness = BridgeBrightnessClient(_context);
     _audio = BridgeAudioClient(_context);
     _session = BridgeSessionClient(_context);
@@ -67,6 +70,7 @@ class DenialBridge {
     );
 
     platform.bind({
+      'denial/input_deck_state': _inputDeck.handleState,
       wire.denialWireToFlutterChannel: _events.handleMessage,
       'denial/audio_state': _audio.handleState,
       'denial/audio_streams_state': _audio.handleStreams,
@@ -84,6 +88,7 @@ class DenialBridge {
   late final BridgeWindowsClient _windows;
   late final BridgeDisplaysClient _displays;
   late final BridgeInputClient _input;
+  late final BridgeInputDeckClient _inputDeck;
   late final BridgeBrightnessClient _brightness;
   late final BridgeAudioClient _audio;
   late final BridgeSessionClient _session;
@@ -360,6 +365,32 @@ class DenialBridge {
     layoutDrop: layoutDrop,
   );
 
+  Stream<InputDeckSnapshot> get inputDeckStates => _inputDeck.states;
+  void readInputDeck() => unawaited(_inputDeck.read());
+  void configureInputDeck(String? output) =>
+      _inputDeck.send({'kind': 'configure', 'output': output});
+  void moveInputDeckPointer(double dx, double dy) =>
+      _inputDeck.send({'kind': 'motion', 'dx': dx, 'dy': dy});
+  void inputDeckButton(int button, bool pressed, {int source = 0}) =>
+      _inputDeck.send({
+        'kind': 'button',
+        'button': button,
+        'pressed': pressed,
+        'source': source,
+      });
+  void scrollInputDeck(double dx, double dy, {bool stop = false}) =>
+      _inputDeck.send({'kind': 'scroll', 'dx': dx, 'dy': dy, 'stop': stop});
+  void inputDeckKey(int keycode, bool pressed, {bool cancelled = false}) =>
+      _inputDeck.send({
+        'kind': 'key',
+        'keycode': keycode,
+        'pressed': pressed,
+        'cancelled': cancelled,
+      });
+  void acknowledgeInputDeckContactCancelled(int device) =>
+      _inputDeck.send({'kind': 'cancel_contact', 'device': device});
+  void releaseInputDeck() => _inputDeck.send({'kind': 'release'});
+
   void sendKeyboardText(String text) => _input.sendKeyboardText(text);
 
   void sendKeyboardKey(String key, {bool ctrl = false}) =>
@@ -533,6 +564,8 @@ class DenialBridge {
 
   void dispose() {
     if (_context.platform.isDisposed) return;
+    releaseInputDeck();
+    _inputDeck.dispose();
     _context.platform.dispose();
     _settingsDocument.dispose();
     _configuration.dispose();

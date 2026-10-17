@@ -21,6 +21,7 @@ Project-level release documents live at the repository root:
 - [Session startup and locking](SESSION_STARTUP.md)
 - [denialctl](DENIALCTL.md)
 - [Keyboard window resizing](keyboard-shortcuts.md)
+- [Touch display keyboard and touchpad](INPUT_DECK.md)
 - [Live Flutter UI development](UI_DEVELOPMENT.md)
 - [Custom Flutter shells](CUSTOM_SHELLS.md)
 - [Plugin system: accepted agent implementation contract](PLUGIN_SYSTEM.md)

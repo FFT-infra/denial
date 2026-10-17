@@ -9,6 +9,7 @@ import 'package:denial_flutter_sdk/platform.dart';
 import 'package:denial_flutter_sdk/state.dart';
 
 import 'reference_shell_state.dart';
+import 'input_deck.dart';
 import 'reference_shell_metrics.dart';
 import 'reference_shell_profile.dart';
 import 'reference_input_layout_coordinator.dart';
@@ -35,6 +36,12 @@ class ReferenceShellController extends Notifier<ReferenceShellState>
         ReferenceShellProfile.mobile;
     _buildGeneration = beginBuildGeneration();
     final generation = _buildGeneration;
+    ref.listen<bool>(
+      inputDeckProvider.select((deck) => deck.activeOutput != null),
+      (_, active) {
+        if (active && !state.locked) closeEdgePanel();
+      },
+    );
     ref.listen<ShellState>(shellControllerProvider, (_, next) {
       if (isBuildGenerationActive(generation)) _synchronizePlatform(next);
     });
@@ -709,6 +716,9 @@ class ReferenceShellController extends Notifier<ReferenceShellState>
   }
 
   void openEdgePanel() {
+    if (!state.locked && ref.read(inputDeckProvider).activeOutput != null) {
+      return;
+    }
     if (state.edgePanelVisible &&
         state.edgePanelDrag == Offset.zero &&
         !state.edgePanelDragActive) {

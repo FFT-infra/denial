@@ -156,6 +156,7 @@ impl WlrLayerShellHandler for RuntimeState {
     }
 
     fn layer_destroyed(&mut self, surface: WlrLayerSurface) {
+        super::input::cancel_touch_for_surface(self, surface.wl_surface());
         let frontend = self.wayland.as_mut().expect("missing Wayland frontend");
         for output in &frontend.outputs {
             let mut map = layer_map_for_output(&output.output);

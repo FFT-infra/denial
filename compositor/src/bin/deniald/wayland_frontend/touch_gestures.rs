@@ -73,7 +73,9 @@ pub(super) struct TouchGestureUpdate {
 
 #[derive(Clone, Copy, Debug)]
 struct Contact {
+    origin: Point<f64, Logical>,
     position: Point<f64, Logical>,
+    app_drag: bool,
     target: Option<TouchWindowTarget>,
     desktop_background: bool,
     captured: bool,
@@ -250,7 +252,9 @@ impl TouchGestureState {
         self.contacts.insert(
             slot,
             Contact {
+                origin: position,
                 position,
+                app_drag: false,
                 target,
                 desktop_background,
                 captured: false,
@@ -324,7 +328,10 @@ impl TouchGestureState {
             if self.contacts_in_gesture_strip(slots) {
                 return self.begin_minimize_swipe(slots, target.window_id);
             }
-            if target.geometry_locked {
+            if target.geometry_locked || slots.iter().any(|slot| self.contacts[slot].app_drag) {
+                // Adding a finger to an established app drag (e.g. joystick
+                // plus camera) must not turn it into a window resize. Explicit
+                // corner moves and bottom-strip gestures retain their paths.
                 return TouchGestureUpdate::default();
             }
             return self.begin_pinch_candidate(slots, target.geometry);
@@ -363,6 +370,10 @@ impl TouchGestureState {
         };
         contact.position = position;
         let captured = contact.captured;
+        if self.gesture.is_none() && !captured {
+            let delta = position - contact.origin;
+            contact.app_drag |= delta.x * delta.x + delta.y * delta.y >= MOVE_SLOP * MOVE_SLOP;
+        }
 
         if matches!(
             self.gesture,
@@ -949,7 +960,12 @@ fn intentional_pinch(initial: [Point<f64, Logical>; 2], current: [Point<f64, Log
     let current_distance = point_distance(current[0], current[1]);
     let separation_change = (current_distance - initial_distance).abs();
     let translation = center_of_two(current) - center_of_two(initial);
-    opposing_motion
+    // A stationary contact may still emit motion events (including identical
+    // coordinates). Both fingers must move beyond jitter before taking the
+    // sequence away from the app; a moved-event boolean cannot establish intent.
+    first_motion.x.hypot(first_motion.y) >= PINCH_SLOP * 0.5
+        && second_motion.x.hypot(second_motion.y) >= PINCH_SLOP * 0.5
+        && opposing_motion
         && separation_change >= PINCH_SLOP
         && separation_change >= translation.x.hypot(translation.y) * PINCH_TRANSLATION_DOMINANCE
 }
@@ -1778,6 +1794,54 @@ mod tests {
         assert!(gestures.up(4).consume);
         assert!(gestures.gesture.is_none());
         assert!(gestures.contacts.is_empty());
+    }
+
+    #[test]
+    fn holding_one_finger_with_sensor_jitter_does_not_capture_the_other_fingers_drag() {
+        for jitter in [0.0, 0.25, 1.0] {
+            let mut gestures = TouchGestureState::default();
+            let window = target(false, false);
+            gestures.down(0, Point::from((200.0, 300.0)), Some(window));
+            gestures.down(1, Point::from((400.0, 300.0)), Some(window));
+            assert_eq!(
+                gestures.motion(0, Point::from((200.0 + jitter, 300.0))),
+                TouchGestureUpdate::default()
+            );
+            assert_eq!(
+                gestures.motion(1, Point::from((360.0, 300.0))),
+                TouchGestureUpdate::default(),
+                "a resting contact with {jitter} pixels of jitter is not a pinch"
+            );
+            assert_eq!(gestures.up(1), TouchGestureUpdate::default());
+            assert_eq!(gestures.up(0), TouchGestureUpdate::default());
+        }
+    }
+
+    #[test]
+    fn adding_a_finger_to_an_established_app_drag_keeps_both_contacts_in_the_app() {
+        let mut gestures = TouchGestureState::default();
+        let window = target(false, false);
+        gestures.down(0, Point::from((200.0, 300.0)), Some(window));
+        assert_eq!(
+            gestures.motion(0, Point::from((180.0, 300.0))),
+            TouchGestureUpdate::default()
+        );
+        gestures.down(1, Point::from((400.0, 300.0)), Some(window));
+        for (slot, position) in [(0, (160.0, 300.0)), (1, (420.0, 300.0))] {
+            assert_eq!(
+                gestures.motion(slot, Point::from(position)),
+                TouchGestureUpdate::default()
+            );
+        }
+        assert_eq!(gestures.up(0), TouchGestureUpdate::default());
+        assert_eq!(gestures.up(1), TouchGestureUpdate::default());
+        // Releasing the app gesture permits a new deliberate window pinch.
+        gestures.down(0, Point::from((200.0, 300.0)), Some(window));
+        gestures.down(1, Point::from((400.0, 300.0)), Some(window));
+        assert!(!gestures.motion(0, Point::from((180.0, 300.0))).consume);
+        let resize = gestures.motion(1, Point::from((420.0, 300.0)));
+        assert!(resize.consume);
+        assert_eq!(resize.captured_slots, [0, 1]);
     }
 
     #[test]

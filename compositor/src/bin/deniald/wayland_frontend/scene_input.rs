@@ -147,7 +147,21 @@ impl WaylandFrontend {
     pub(super) fn clamp_pointer(&self, position: Point<f64, Logical>) -> Point<f64, Logical> {
         if let Some(position) = constrain_pointer_to_outputs(
             position,
-            self.outputs.iter().map(|output| output.logical_geometry),
+            self.outputs
+                .iter()
+                .filter(|output| {
+                    #[cfg(feature = "flutter")]
+                    {
+                        return self.input_deck_output != Some(output.id)
+                            && (self.input_deck_output.is_none() || output.powered);
+                    }
+                    #[cfg(not(feature = "flutter"))]
+                    {
+                        let _ = output;
+                        true
+                    }
+                })
+                .map(|output| output.logical_geometry),
         ) {
             return position;
         }

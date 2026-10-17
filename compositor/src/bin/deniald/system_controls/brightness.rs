@@ -210,13 +210,21 @@ impl BrightnessProvider for BacklightWorker {
     }
 
     fn set(&mut self, connector: &str, level: f64) -> Result<(), String> {
-        let (name, maximum) = {
+        let (name, maximum, path) = {
             let display = self
                 .display(connector)
                 .ok_or_else(|| "output is not associated with a backlight device".to_owned())?;
-            (display.name.clone(), display.maximum)
+            (display.name.clone(), display.maximum, display.path.clone())
         };
         let value = (level.clamp(0.0, 1.0) * f64::from(maximum)).round() as u32;
+        // A seatd session may already have access through a udev rule or run
+        // as root without logind. Use that existing permission; otherwise let
+        // logind authorize the request for the active session as before.
+        match write_backlight_value(&path, value) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {}
+            Err(error) => return Err(format!("kernel backlight write failed: {error}")),
+        }
         let proxy = zbus::blocking::Proxy::new(
             &self.connection,
             "org.freedesktop.login1",
@@ -229,6 +237,21 @@ impl BrightnessProvider for BacklightWorker {
             .map_err(|error| format!("logind SetBrightness failed: {error}"))?;
         Ok(())
     }
+}
+
+fn write_backlight_value(path: &Path, value: u32) -> io::Result<()> {
+    // Never create a replacement if the kernel device disappeared.
+    let mut attribute = fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(path.join("brightness"))?;
+    write_backlight_attribute(&mut attribute, value)
+}
+
+fn write_backlight_attribute(attribute: &mut impl io::Write, value: u32) -> io::Result<()> {
+    // Sysfs parses every write independently. Formatting into the file with
+    // writeln! can send the newline as a second, invalid brightness value.
+    attribute.write_all(format!("{value}\n").as_bytes())
 }
 
 fn read_u32(path: &Path) -> Result<u32, String> {

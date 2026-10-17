@@ -1015,6 +1015,7 @@ fn control_input_snapshot(
     let mouse = frontend.settings.mouse();
     Ok(json!({
         "revision": frontend.settings.revision(),
+        "input_deck": wayland_frontend::input_deck_snapshot(events),
         "has_touchpad": !events.touchpad_devices.is_empty(),
         "has_mouse": !events.mouse_devices.is_empty(),
         "mouse_speed": mouse.speed,

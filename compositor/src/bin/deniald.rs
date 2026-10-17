@@ -44,6 +44,9 @@ mod frame_scheduler;
 #[path = "deniald/gamma_control.rs"]
 mod gamma_control;
 #[cfg(feature = "flutter")]
+#[path = "deniald/gpu_transfer/mod.rs"]
+mod gpu_transfer;
+#[cfg(feature = "flutter")]
 #[path = "deniald/haptics.rs"]
 mod haptics;
 #[path = "deniald/hotplug_transaction.rs"]
@@ -51,6 +54,9 @@ mod hotplug_transaction;
 #[cfg(feature = "flutter")]
 #[path = "deniald/idle_policy.rs"]
 mod idle_policy;
+#[cfg(feature = "flutter")]
+#[path = "deniald/input_deck.rs"]
+mod input_deck;
 #[path = "deniald/keyboard_resize.rs"]
 mod keyboard_resize;
 #[path = "deniald/kms_pipeline.rs"]
@@ -253,9 +259,7 @@ use hotplug_transaction::{
     HotplugProgress, ScanoutKey, ScanoutOrigin, append_quarantined, install_candidate,
     plan_reconcile,
 };
-use kms_render::{
-    current_scanout_state, plane_state, render_blank_target, render_diagnostic_atlas,
-};
+use kms_render::{current_scanout_state, plane_state, render_diagnostic_atlas};
 use kms_session::hold_static_scanout;
 use kms_state::{
     AtlasPlaneProperties, AtlasSwapchain, ConnectedOutput, KmsContext, LayoutTransition,
@@ -370,7 +374,10 @@ fn main() {
         return;
     }
 
-    if let Err(error) = denial_main() {
+    let result = denial_main();
+    #[cfg(feature = "flutter")]
+    let result = result.and_then(|()| gpu_transfer::finish_process_workers().map_err(Into::into));
+    if let Err(error) = result {
         // Returning Result::Err from main becomes status 1, which display
         // managers can mistake for an orderly session exit. Preserve the
         // abnormal-termination distinction (and a usable core dump) for the

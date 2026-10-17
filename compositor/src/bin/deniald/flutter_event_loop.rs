@@ -212,6 +212,7 @@ fn gamma_work_pending(
 }
 
 fn handle_ui_development_requests(
+    scheduler: &output_scheduler::OutputScheduler,
     events: &mut RuntimeState,
     flutter: &mut Option<flutter_runtime::FlutterRuntime>,
     flutter_launcher: &mut FlutterLauncher,
@@ -245,6 +246,12 @@ fn handle_ui_development_requests(
                 .as_mut()
                 .is_some_and(wayland_frontend::WaylandFrontend::idle_inhibited),
         });
+        let state = state.with_native_client_composition(runtime.native_client_composition_stats());
+        let state = if is_query {
+            state.with_output_frame_delivery(scheduler.delivery_trace_snapshot())
+        } else {
+            state
+        };
         if !is_query && let Some(error) = state.error_message() {
             request.reply(Err(output_control::OutputControlFailure::new(
                 "rejected", error,
@@ -535,6 +542,18 @@ fn create_frame_schedulers(
         flutter.as_mut().ok_or(missing_runtime)?,
         events,
     )?;
+    // Refresh this CRTC timing policy at every initial/modeset/recovery
+    // scheduler boundary. Unknown CRTCs continue to reject future metadata.
+    events.presentation_blanking_limits = scanouts
+        .iter()
+        .filter(|s| s.powered)
+        .map(|s| {
+            (
+                s.output.crtc,
+                presentation_clock::mode_blanking_limit(&s.output.mode),
+            )
+        })
+        .collect();
     let frame_scheduler = frame_scheduler::FrameScheduler::new(scanouts, Instant::now());
     Ok((scheduler, frame_scheduler))
 }
@@ -2018,6 +2037,9 @@ fn process_flutter_event_batch(
         .len()
         .min(MAX_FLUTTER_EVENTS_PER_ITERATION);
     runtime.process_events(events.flutter_events.drain(..event_count))?;
+    if runtime.take_native_window_fallback() {
+        events.scene_sync.mark_dirty();
+    }
     synchronize_authentication_boundary(events);
     synchronize_flutter_window_commands(runtime, events)?;
     Ok(())
@@ -2824,7 +2846,7 @@ pub(super) fn run_flutter_event_loop(
             continue;
         }
 
-        handle_ui_development_requests(&mut events, flutter, flutter_launcher);
+        handle_ui_development_requests(&scheduler, &mut events, flutter, flutter_launcher);
 
         if handle_output_confirmation_requests(
             &mut events,

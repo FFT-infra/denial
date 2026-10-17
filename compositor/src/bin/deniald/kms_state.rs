@@ -448,6 +448,16 @@ pub(super) struct ScanoutAllocator {
     allocator: GbmAllocator<DrmDeviceFd>,
     drm_fd: DrmDeviceFd,
     cross_device: bool,
+    #[cfg(feature = "flutter")]
+    transfer: Option<SceneTransferAllocator>,
+}
+
+#[cfg(feature = "flutter")]
+struct SceneTransferAllocator {
+    source_gbm: GbmDevice<DrmDeviceFd>,
+    scene_formats: FormatSet,
+    source_probe: GlesRenderer,
+    device: Arc<crate::gpu_transfer::TransferDevice>,
 }
 
 impl ScanoutAllocator {
@@ -460,7 +470,30 @@ impl ScanoutAllocator {
             allocator,
             drm_fd,
             cross_device,
+            #[cfg(feature = "flutter")]
+            transfer: None,
         }
+    }
+
+    #[cfg(feature = "flutter")]
+    pub(super) fn enable_scene_transfer(
+        &mut self,
+        source_gbm: GbmDevice<DrmDeviceFd>,
+        source_fd: DrmDeviceFd,
+        scene_display: &smithay::backend::egl::EGLDisplay,
+    ) -> Result<(), Box<dyn Error>> {
+        let context = egl_context::create_render_context(scene_display)?;
+        // SAFETY: this context belongs exclusively to this allocation probe.
+        let source_probe = unsafe { GlesRenderer::new(context)? };
+        let scene_formats = scene_display.dmabuf_render_formats().clone();
+        let device = crate::gpu_transfer::TransferDevice::new(source_fd, self.drm_fd.clone())?;
+        self.transfer = Some(SceneTransferAllocator {
+            source_gbm,
+            scene_formats,
+            source_probe,
+            device,
+        });
+        Ok(())
     }
 
     fn allocate(
@@ -476,10 +509,188 @@ impl ScanoutAllocator {
             size,
             modifiers,
         )?;
+        #[cfg(feature = "flutter")]
+        if let Some(transfer) = &mut self.transfer {
+            // Probe actual output-local storage, not physical-device identity.
+            // A successful scene FBO import retains the existing direct pool.
+            let mut direct = buffer.dmabuf.clone();
+            if let Err(error) = transfer.source_probe.bind(&mut direct) {
+                if linear_render_target {
+                    return Err(format!(
+                        "--flutter-offscreen-blit requires direct scene FBO import: {error}"
+                    )
+                    .into());
+                }
+                info!(%error, "scene cannot render output-local scanout; negotiating destination import");
+                buffer.scene_transfer =
+                    Some(transfer.allocate(self.allocator.as_ref(), &buffer.dmabuf, size)?);
+            } else {
+                info!(format=?buffer.format, "scene imported output-local scanout directly; retaining direct Flutter pool");
+            }
+        }
         if linear_render_target {
             buffer.render_target = Some(LinearRenderBuffer::allocate(&mut self.allocator, size)?);
         }
         Ok(buffer)
+    }
+}
+
+#[cfg(feature = "flutter")]
+impl SceneTransferAllocator {
+    fn allocate(
+        &mut self,
+        destination_gbm: &GbmDevice<DrmDeviceFd>,
+        destination: &Dmabuf,
+        size: PixelSize,
+    ) -> Result<SceneTransferBuffers, Box<dyn Error>> {
+        let mut failures = Vec::new();
+        // Try every direct layout before requesting any Vulkan capabilities.
+        for use_bridge in [false, true] {
+            for fourcc in [
+                Fourcc::Abgr8888,
+                Fourcc::Argb8888,
+                Fourcc::Xbgr8888,
+                Fourcc::Xrgb8888,
+            ] {
+                let candidates = if use_bridge {
+                    self.device
+                        .source_modifiers(fourcc, size.width, size.height)
+                } else {
+                    self.device.direct_source_modifiers(fourcc)
+                };
+                let modifiers = candidates
+                    .into_iter()
+                    .filter(|modifier| {
+                        self.scene_formats.contains(&Format {
+                            code: fourcc,
+                            modifier: *modifier,
+                        })
+                    })
+                    .take(16)
+                    .collect::<Vec<_>>();
+                if modifiers.is_empty() {
+                    continue;
+                }
+                let bridge = if use_bridge {
+                    let bo = match destination_gbm.create_buffer_object_with_modifiers2::<()>(
+                        size.width,
+                        size.height,
+                        fourcc,
+                        [Modifier::Linear].into_iter(),
+                        GbmBufferFlags::empty(),
+                    ) {
+                        Ok(bo) => bo,
+                        Err(error) => {
+                            failures
+                                .push(format!("{fourcc:?} destination LINEAR allocation: {error}"));
+                            continue;
+                        }
+                    };
+                    let bridge = GbmBuffer::from_bo(bo, false);
+                    if AllocatorBuffer::format(&bridge)
+                        != (Format {
+                            code: fourcc,
+                            modifier: Modifier::Linear,
+                        })
+                        || bridge.plane_count() != 1
+                    {
+                        failures.push("bridge allocator returned unsupported layout".into());
+                        continue;
+                    }
+                    Some(bridge)
+                } else {
+                    None
+                };
+                let bridge_dmabuf = bridge.as_ref().map(|buffer| buffer.export()).transpose()?;
+                for flags in [
+                    GbmBufferFlags::RENDERING,
+                    GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
+                ] {
+                    // Some GBM backends expose their real EGL/Vulkan-compatible
+                    // layout only through ordinary allocation. Its *returned*
+                    // modifier is checked identically, never labelled LINEAR.
+                    for requested_modifier in
+                        crate::gpu_transfer::source_allocation_candidates(&modifiers, use_bridge)
+                    {
+                        let explicit = requested_modifier.is_some();
+                        let allocation = if let Some(modifier) = requested_modifier {
+                            self.source_gbm.create_buffer_object_with_modifiers2::<()>(
+                                size.width,
+                                size.height,
+                                fourcc,
+                                std::iter::once(modifier),
+                                flags,
+                            )
+                        } else {
+                            self.source_gbm.create_buffer_object::<()>(
+                                size.width,
+                                size.height,
+                                fourcc,
+                                flags,
+                            )
+                        };
+                        let source_buffer = match allocation {
+                            Ok(bo) => GbmBuffer::from_bo(bo, false),
+                            Err(error) => {
+                                failures.push(format!(
+                                    "{fourcc:?} source flags={flags:?} explicit={explicit}: {error}"
+                                ));
+                                continue;
+                            }
+                        };
+                        let actual = AllocatorBuffer::format(&source_buffer);
+                        if actual.code != fourcc
+                            || !modifiers.contains(&actual.modifier)
+                            || source_buffer.plane_count() != 1
+                        {
+                            failures.push(format!(
+                                "source allocator returned unnegotiated layout {actual:?}"
+                            ));
+                            continue;
+                        }
+                        let mut source = source_buffer.export()?;
+                        if let Err(error) = self.source_probe.bind(&mut source) {
+                            failures.push(format!("{actual:?} source EGL FBO import: {error}"));
+                            continue;
+                        }
+                        match self.device.prepare(
+                            source.clone(),
+                            bridge_dmabuf.clone(),
+                            destination.clone(),
+                        ) {
+                            Ok(target) => {
+                                info!(
+                                    ?actual,
+                                    ?flags,
+                                    explicit,
+                                    width = size.width,
+                                    height = size.height,
+                                    bridge_allocated = bridge_dmabuf.is_some(),
+                                    "negotiated destination-owned scene transfer"
+                                );
+                                return Ok(SceneTransferBuffers {
+                                    source,
+                                    bridge: bridge_dmabuf.clone(),
+                                    target,
+                                    _source_buffer: source_buffer,
+                                    _bridge_buffer: bridge,
+                                });
+                            }
+                            Err(error) => failures.push(format!(
+                                "{actual:?} use_bridge={use_bridge} destination import: {error}"
+                            )),
+                        }
+                    }
+                }
+            }
+        }
+        Err(format!(
+            "no usable direct destination import or Vulkan transfer for {}x{}: {}",
+            size.width,
+            size.height,
+            failures.join("; ")
+        )
+        .into())
     }
 }
 
@@ -521,6 +732,17 @@ pub(super) struct ScanoutBuffer {
     format: Format,
     render_target: Option<LinearRenderBuffer>,
     _buffer: GbmBuffer,
+    #[cfg(feature = "flutter")]
+    scene_transfer: Option<SceneTransferBuffers>,
+}
+
+#[cfg(feature = "flutter")]
+struct SceneTransferBuffers {
+    source: Dmabuf,
+    bridge: Option<Dmabuf>,
+    target: Arc<crate::gpu_transfer::TransferTarget>,
+    _source_buffer: GbmBuffer,
+    _bridge_buffer: Option<GbmBuffer>,
 }
 
 impl ScanoutBuffer {
@@ -546,6 +768,8 @@ impl ScanoutBuffer {
             format,
             render_target: None,
             _buffer: buffer,
+            #[cfg(feature = "flutter")]
+            scene_transfer: None,
         })
     }
 
@@ -560,9 +784,47 @@ impl ScanoutBuffer {
     #[cfg(feature = "flutter")]
     pub(super) fn flutter_target_dmabufs(&self) -> (&Dmabuf, Option<&Dmabuf>) {
         (
-            &self.dmabuf,
+            self.scene_transfer
+                .as_ref()
+                .map_or(&self.dmabuf, |transfer| &transfer.source),
             self.render_target.as_ref().map(|target| &target.dmabuf),
         )
+    }
+    #[cfg(feature = "flutter")]
+    fn allocation_bytes(&self) -> Result<u64, Box<dyn Error>> {
+        let mut buffers = vec![&self.dmabuf];
+        if let Some(render) = &self.render_target {
+            buffers.push(&render.dmabuf);
+        }
+        if let Some(transfer) = &self.scene_transfer {
+            buffers.push(&transfer.source);
+            if let Some(bridge) = &transfer.bridge {
+                buffers.push(bridge);
+            }
+        }
+        let mut bytes = 0u64;
+        for buffer in buffers {
+            for fd in buffer.handles() {
+                // SAFETY: DMA-BUF descriptors support seeking to their backing
+                // extent. No CPU mapping or pixel access is performed here.
+                let extent = unsafe { libc::lseek(fd.as_raw_fd(), 0, libc::SEEK_END) };
+                if extent <= 0 {
+                    return Err("cannot determine DMA-BUF backing extent".into());
+                }
+                bytes = bytes
+                    .checked_add(extent as u64)
+                    .ok_or("DMA-BUF backing byte count overflow")?;
+            }
+        }
+        // Shared aux-plane FDs may be counted twice, a conservative reservation.
+        Ok(bytes)
+    }
+
+    #[cfg(feature = "flutter")]
+    pub(super) fn transfer_target(&self) -> Option<Arc<crate::gpu_transfer::TransferTarget>> {
+        self.scene_transfer
+            .as_ref()
+            .map(|transfer| Arc::clone(&transfer.target))
     }
 }
 
@@ -720,6 +982,11 @@ impl OutputSwapchains {
                 .iter()
                 .find(|scanout| scanout.output.id == plan.output_id)
                 .ok_or("physical output pool has no matching scanout")?;
+            #[cfg(feature = "flutter")]
+            let render_formats = allocator
+                .transfer
+                .as_ref()
+                .map_or(render_formats, |transfer| transfer.device.render_formats());
             let modifiers = compatible_xrgb8888_modifiers(
                 std::iter::once(&scanout.surface.plane_info().formats),
                 render_formats,
@@ -736,6 +1003,7 @@ impl OutputSwapchains {
                 .and_then(|pixels| pixels.checked_mul(SCANOUT_BYTES_PER_PIXEL))
                 .and_then(|bytes| bytes.checked_mul(OUTPUT_POOL_LENGTH as u64))
                 .ok_or("physical output pool byte count overflow")?;
+            let previous_bytes = allocated_bytes;
             allocated_bytes = allocated_bytes
                 .checked_add(pool_bytes)
                 .ok_or("physical output pool aggregate byte count overflow")?;
@@ -752,7 +1020,21 @@ impl OutputSwapchains {
                 OUTPUT_POOL_LENGTH,
                 &modifiers,
                 linear_render_targets,
+                MAX_SCANOUT_POOL_BYTES - previous_bytes,
             )?;
+            let actual_bytes = buffers.iter().try_fold(0u64, |bytes, buffer| {
+                bytes
+                    .checked_add(buffer.allocation_bytes()?)
+                    .ok_or_else(|| -> Box<dyn Error> {
+                        "physical output backing byte count overflow".into()
+                    })
+            })?;
+            allocated_bytes = previous_bytes
+                .checked_add(actual_bytes)
+                .ok_or("physical output backing aggregate overflow")?;
+            if allocated_bytes > MAX_SCANOUT_POOL_BYTES {
+                return Err(format!("physical source/bridge/scanout backings reserve {allocated_bytes} bytes, above {MAX_SCANOUT_POOL_BYTES}").into());
+            }
             outputs.push(OutputSwapchain {
                 output_id: plan.output_id,
                 render_view_id: plan.render_view_id,
@@ -890,6 +1172,11 @@ fn flutter_render_target_pools(
             configuration_generation: pool.configuration_generation,
             size: pool.size,
             initial_scanout: pool.current,
+            transfers: pool
+                .buffers
+                .iter()
+                .map(ScanoutBuffer::transfer_target)
+                .collect(),
             dmabufs: pool
                 .buffers
                 .iter()
@@ -1455,8 +1742,14 @@ impl AtlasSwapchain {
         modifiers: &[Modifier],
         linear_render_targets: bool,
     ) -> Result<Self, Box<dyn Error>> {
-        let buffers =
-            allocate_scanout_pool(allocator, size, length, modifiers, linear_render_targets)?;
+        let buffers = allocate_scanout_pool(
+            allocator,
+            size,
+            length,
+            modifiers,
+            linear_render_targets,
+            MAX_SCANOUT_POOL_BYTES,
+        )?;
         Ok(Self {
             size,
             buffers,
@@ -1484,6 +1777,7 @@ fn allocate_scanout_pool(
     length: usize,
     modifiers: &[Modifier],
     linear_render_targets: bool,
+    _byte_budget: u64,
 ) -> Result<Vec<ScanoutBuffer>, Box<dyn Error>> {
     validate_scanout_pool_allocation(size, length)?;
     let optimized = modifiers
@@ -1497,9 +1791,26 @@ fn allocate_scanout_pool(
     }
 
     let allocate = |allocator: &mut ScanoutAllocator, modifiers: &[Modifier]| {
-        (0..length)
-            .map(|_| allocator.allocate(size, modifiers, linear_render_targets))
-            .collect::<Result<Vec<_>, _>>()
+        let mut buffers = Vec::with_capacity(length);
+        #[cfg(feature = "flutter")]
+        let mut bytes = 0u64;
+        for _ in 0..length {
+            let buffer = allocator.allocate(size, modifiers, linear_render_targets)?;
+            #[cfg(feature = "flutter")]
+            {
+                bytes = bytes
+                    .checked_add(buffer.allocation_bytes()?)
+                    .ok_or("physical output backing byte count overflow")?;
+                if bytes > _byte_budget {
+                    return Err(format!(
+                        "negotiated output pool exceeds its {_byte_budget}-byte budget"
+                    )
+                    .into());
+                }
+            }
+            buffers.push(buffer);
+        }
+        Ok::<_, Box<dyn Error>>(buffers)
     };
     let buffers = if optimized.is_empty() {
         allocate(allocator, &[Modifier::Linear])?

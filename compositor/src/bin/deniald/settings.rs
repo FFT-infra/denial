@@ -25,7 +25,7 @@ use denial_core::topology::OutputTransform;
 
 use super::window_layout::WindowLayoutKind;
 
-pub(super) const SETTINGS_SCHEMA_VERSION: u64 = 28;
+pub(super) const SETTINGS_SCHEMA_VERSION: u64 = 29;
 pub(super) const MIN_WORKSPACE_COUNT: u8 = 2;
 pub(super) const MAX_WORKSPACE_COUNT: u8 = 9;
 pub(super) const DEFAULT_WORKSPACE_COUNT: u8 = 4;

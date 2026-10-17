@@ -4900,4 +4900,81 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get pluginsDesktopFeature => 'Desktop';
+
+  @override
+  String get inputDeckTitle => 'Keyboard & touchpad display';
+
+  @override
+  String get inputDeckHeading => 'Keyboard & touchpad';
+
+  @override
+  String get inputDeckEnable => 'Use touch display as keyboard and touchpad';
+
+  @override
+  String get inputDeckUnavailable =>
+      'Connect a touch display to configure this mode.';
+
+  @override
+  String inputDeckEnableDescription(String output) {
+    return 'Use $output for input whenever another display is available. Disconnect the external display to return to tablet mode.';
+  }
+
+  @override
+  String get inputDeckWaiting =>
+      'Ready when a second display is connected and powered on.';
+
+  @override
+  String get inputDeckTouchDisplay => 'Touch display';
+
+  @override
+  String get inputDeckTouchDisplayDescription =>
+      'Display to use for keyboard and touchpad input.';
+
+  @override
+  String get inputDeckKeyboardSize => 'Keyboard size';
+
+  @override
+  String get inputDeckTouchpadWidth => 'Touchpad width';
+
+  @override
+  String get inputDeckTouchpadHeight => 'Touchpad height';
+
+  @override
+  String get inputDeckPointerSpeed => 'Pointer speed';
+
+  @override
+  String get inputDeckNaturalScroll => 'Natural scrolling';
+
+  @override
+  String get inputDeckNaturalScrollDescription =>
+      'Content follows the movement of your fingers.';
+
+  @override
+  String get inputDeckCpuChart => 'CPU chart';
+
+  @override
+  String get inputDeckCpuDescription =>
+      'Show processor usage above the keyboard.';
+
+  @override
+  String get inputDeckGpuCharts => 'GPU charts';
+
+  @override
+  String get inputDeckGpuDescription => 'Show usage for GPUs that report it.';
+
+  @override
+  String get inputDeckUseAsDisplay => 'Use as display';
+
+  @override
+  String get inputDeckTouchpad => 'Touchpad';
+
+  @override
+  String get inputDeckTouchpadHint =>
+      'Touchpad. One finger moves the pointer. Tap to click. Two fingers scroll or tap for right click. Double tap and hold to drag.';
+
+  @override
+  String get inputDeckLeftClick => 'Left click';
+
+  @override
+  String get inputDeckRightClick => 'Right click';
 }

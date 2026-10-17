@@ -1,6 +1,7 @@
 //! Shared calloop state and bounded cross-stage event queues.
 
 use super::*;
+use std::collections::HashMap;
 
 #[derive(Default)]
 pub(super) struct RuntimeState {
@@ -8,6 +9,7 @@ pub(super) struct RuntimeState {
     pub(super) fingerprint: fingerprint_presentation::Controller,
     pub(super) pending: HashSet<crtc::Handle>,
     pub(super) completed_page_flips: VecDeque<PageFlipCompletion>,
+    pub(super) presentation_blanking_limits: HashMap<crtc::Handle, Duration>,
     pub(super) scanout_rebased: bool,
     pub(super) error: Option<String>,
     pub(super) lifecycle: LifecycleState,
@@ -53,6 +55,10 @@ pub(super) struct RuntimeState {
     pub(super) flutter_input: flutter_runtime::InputQueue,
     #[cfg(feature = "flutter")]
     pub(super) touchpad_gestures: touchpad_gestures::TouchpadGestureRecognizer,
+    #[cfg(feature = "flutter")]
+    pub(super) input_deck: input_deck::Controller,
+    #[cfg(feature = "flutter")]
+    pub(super) touchscreen_devices: BTreeMap<String, smithay::reexports::input::Device>,
     pub(super) keyboard_devices: BTreeMap<String, smithay::reexports::input::Device>,
     #[cfg(feature = "flutter")]
     pub(super) mouse_devices: BTreeMap<String, smithay::reexports::input::Device>,
@@ -265,6 +271,7 @@ impl RuntimeState {
     }
 
     pub(super) fn note_user_activity(&mut self) {
+        crate::cpu_scheduling::note_interaction();
         let requests = self.idle_policy.note_activity(Instant::now());
         self.queue_idle_power_requests(requests);
         if let Some(frontend) = self.wayland.as_mut() {
@@ -306,6 +313,7 @@ impl RuntimeState {
 #[cfg(all(test, feature = "flutter"))]
 mod tests {
     use super::*;
+use std::collections::HashMap;
 
     #[test]
     fn replacement_rehydration_waits_for_the_first_input_layout() {

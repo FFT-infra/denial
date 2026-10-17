@@ -30,6 +30,8 @@ fn next_capture_revision() -> u64 {
 pub(super) enum BufferState {
     Free,
     Rendering,
+    /// The source writer has submitted; an asynchronous transfer still owns it.
+    Transferring,
     Ready,
     Pending,
 }
@@ -108,6 +110,7 @@ pub struct ReadyOutputFrame {
     pub(crate) capture_revision: u64,
     pub screenshot_request_id: Option<u64>,
     pub rendered_at: Option<Instant>,
+    pub(crate) raster_transaction: u64,
     pub request: OutputFrameRequest,
     pub(crate) feedback: Vec<crate::surface_feedback::SurfaceFeedback>,
 }
@@ -350,6 +353,24 @@ impl OutputBufferBroker {
         })
     }
 
+    pub(super) fn begin_transfer(&mut self, framebuffer: u32) -> bool {
+        let Some(slot) = self
+            .pools
+            .iter_mut()
+            .flat_map(|pool| &mut pool.slots)
+            .find(|slot| slot.framebuffer == framebuffer && slot.state == BufferState::Rendering)
+        else {
+            return false;
+        };
+        slot.state = BufferState::Transferring;
+        true
+    }
+
+    /// A transfer completes independently of Flutter's raster transaction.
+    pub(super) fn finish_transfer(&mut self, framebuffer: u32) -> Vec<ReadyOutputFrame> {
+        self.take_ready_frames(Some(framebuffer))
+    }
+
     pub(super) fn mark_ready_with_feedback(
         &mut self,
         render_view_id: i64,
@@ -374,12 +395,14 @@ impl OutputBufferBroker {
         else {
             return false;
         };
-        if pool.slots[index].state != BufferState::Rendering
-            || pool
-                .slots
-                .iter()
-                .enumerate()
-                .any(|(other_index, slot)| other_index != index && slot.state == BufferState::Ready)
+        if !matches!(
+            pool.slots[index].state,
+            BufferState::Rendering | BufferState::Transferring
+        ) || pool
+            .slots
+            .iter()
+            .enumerate()
+            .any(|(other_index, slot)| other_index != index && slot.state == BufferState::Ready)
         {
             return false;
         }
@@ -407,16 +430,25 @@ impl OutputBufferBroker {
     }
 
     pub(super) fn finish_transaction(&mut self) -> Vec<ReadyOutputFrame> {
+        self.take_ready_frames(None)
+    }
+
+    fn take_ready_frames(&mut self, framebuffer: Option<u32>) -> Vec<ReadyOutputFrame> {
         let transaction = self.transaction;
         let mut outputs = Vec::with_capacity(self.pools.len());
         for pool in &mut self.pools {
             let Some(index) = pool.slots.iter().position(|slot| {
-                slot.state == BufferState::Ready && slot.ready_transaction == transaction
+                slot.state == BufferState::Ready
+                    && match framebuffer {
+                        Some(framebuffer) => slot.framebuffer == framebuffer,
+                        None => slot.ready_transaction == transaction,
+                    }
             }) else {
                 continue;
             };
             let slot = &mut pool.slots[index];
             slot.state = BufferState::Pending;
+            let raster_transaction = slot.ready_transaction;
             slot.ready_transaction = 0;
             let request = slot
                 .request
@@ -435,6 +467,7 @@ impl OutputBufferBroker {
                     .expect("a ready output must retain its raster damage"),
                 screenshot_request_id: slot.screenshot_request_id.take(),
                 rendered_at: slot.rendered_at.take(),
+                raster_transaction,
                 request,
                 feedback: std::mem::take(&mut slot.feedback),
             });
@@ -557,6 +590,95 @@ impl OutputBufferBroker {
 mod capture_tests {
     use super::*;
     use crate::frame_scheduler::FrameTick;
+
+    fn transfer_broker() -> (OutputBufferBroker, OutputId, RenderViewId, PixelSize, u32) {
+        let output = OutputId(7);
+        let view = RenderViewId::for_output(output).unwrap();
+        let size = PixelSize::new(64, 64);
+        let mut broker = OutputBufferBroker::new([OutputPoolDescriptor {
+            output_id: output,
+            render_view_id: view,
+            configuration_generation: 1,
+            size,
+            initial_scanout: 0,
+            framebuffers: &[11, 12, 13],
+        }])
+        .unwrap();
+        let now = Instant::now();
+        let request = OutputFrameRequest {
+            tick: FrameTick {
+                output,
+                sequence: 1,
+                nominal_interval: Duration::from_millis(16),
+                interval: Duration::from_millis(16),
+                render_deadline: now,
+                presentation_target: now + Duration::from_millis(16),
+            },
+            dirty_serial: 1,
+            lock_frame_token: 0,
+            fingerprint_epoch: 0,
+        };
+        broker.begin_transaction();
+        assert_eq!(broker.authorize(request, now, None), Some(view.get()));
+        let framebuffer = broker.acquire(view.get(), size).unwrap();
+        assert!(broker.begin_transfer(framebuffer));
+        (broker, output, view, size, framebuffer)
+    }
+
+    #[test]
+    fn transfer_source_stays_pinned_across_raster_transactions_and_failures() {
+        let (mut broker, output, _, _, framebuffer) = transfer_broker();
+        assert!(!broker.begin_transfer(framebuffer));
+        assert!(broker.finish_transaction().is_empty());
+        for _ in 0..3 {
+            broker.begin_transaction();
+            assert!(!broker.target_available(output));
+            assert!(broker.finish_transaction().is_empty());
+            assert!(broker.finish_transfer(framebuffer).is_empty());
+        }
+        assert_eq!(
+            broker.pools[0]
+                .slots
+                .iter()
+                .find(|slot| slot.framebuffer == framebuffer)
+                .unwrap()
+                .state,
+            BufferState::Transferring
+        );
+    }
+
+    #[test]
+    fn late_transfer_publishes_only_the_destination_completion_and_retains_scanout() {
+        use std::os::fd::AsRawFd;
+        let (mut broker, output, view, _, framebuffer) = transfer_broker();
+        broker.begin_transaction();
+        let final_fence: OwnedFd = std::fs::File::open("/dev/null").unwrap().into();
+        let final_fd = final_fence.as_raw_fd();
+        let full = [sys::FlutterRect {
+            left: 0.0,
+            top: 0.0,
+            right: 64.0,
+            bottom: 64.0,
+        }];
+        assert!(broker.mark_ready_with_feedback(
+            view.get(),
+            framebuffer,
+            &full,
+            &full,
+            Some(final_fence),
+            None,
+            Vec::new()
+        ));
+        let mut ready = broker.finish_transfer(framebuffer);
+        assert_eq!(ready.len(), 1);
+        let frame = ready.pop().unwrap();
+        assert_eq!(frame.fence.as_ref().unwrap().as_raw_fd(), final_fd);
+        assert_eq!(frame.output_id, output);
+        assert_eq!(frame.request.tick.sequence, 1);
+        assert!(broker.finish_transfer(framebuffer).is_empty());
+        broker.publish(&frame).unwrap();
+        assert_eq!(broker.pools[0].slots[frame.index].output_refs, 1);
+    }
 
     #[test]
     fn delayed_render_waits_for_matching_completion_instead_of_expiring() {

@@ -10,17 +10,17 @@ use super::scheduler_parameters;
 // Linux sched_attr version 1; libc currently exposes only the shorter v0 ABI.
 #[repr(C)]
 #[derive(Default)]
-struct SchedAttr {
-    size: u32,
-    sched_policy: u32,
-    sched_flags: u64,
-    sched_nice: i32,
-    sched_priority: u32,
-    sched_runtime: u64,
-    sched_deadline: u64,
-    sched_period: u64,
-    sched_util_min: u32,
-    sched_util_max: u32,
+pub(super) struct SchedAttr {
+    pub(super) size: u32,
+    pub(super) sched_policy: u32,
+    pub(super) sched_flags: u64,
+    pub(super) sched_nice: i32,
+    pub(super) sched_priority: u32,
+    pub(super) sched_runtime: u64,
+    pub(super) sched_deadline: u64,
+    pub(super) sched_period: u64,
+    pub(super) sched_util_min: u32,
+    pub(super) sched_util_max: u32,
 }
 
 static MINIMUM: OnceLock<Option<u32>> = OnceLock::new();
@@ -34,7 +34,18 @@ fn parse_minimum(value: &str) -> Option<u32> {
 }
 
 pub(super) fn apply_configured() -> io::Result<Option<u32>> {
-    let minimum = MINIMUM.get_or_init(|| {
+    match configured() {
+        Some(minimum) => {
+            request_minimum(minimum)?;
+            Ok(Some(minimum))
+        }
+        None => Ok(None),
+    }
+}
+
+/// The configured UI floor, which semantic hints never go below.
+pub(super) fn configured() -> Option<u32> {
+    *MINIMUM.get_or_init(|| {
         let value = match std::env::var("DENIAL_UI_CPU_MIN") {
             Ok(value) => value,
             Err(std::env::VarError::NotPresent) => return None,
@@ -48,14 +59,7 @@ pub(super) fn apply_configured() -> io::Result<Option<u32>> {
             tracing::warn!(%value, "DENIAL_UI_CPU_MIN must be 0..=1024; preserving host CPU policy");
         }
         parsed
-    });
-    match *minimum {
-        Some(minimum) => {
-            request_minimum(minimum)?;
-            Ok(Some(minimum))
-        }
-        None => Ok(None),
-    }
+    })
 }
 
 fn request_minimum(minimum: u32) -> io::Result<()> {

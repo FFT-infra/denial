@@ -233,11 +233,10 @@ pub(super) fn process_wayland_input_event(
             let serial = SERIAL_COUNTER.next_serial();
             let position = {
                 let frontend = state.wayland.as_ref().expect("missing Wayland frontend");
-                output_bound_absolute_position(
-                    &event,
-                    frontend.touch_bounds,
-                    frontend.touch_transform,
-                )
+                {
+                    let (bounds, transform) = touch_device_mapping(frontend, &event.device());
+                    output_bound_absolute_position(&event, bounds, transform)
+                }
             };
             let touch = {
                 let frontend = state.wayland.as_ref().expect("missing Wayland frontend");
@@ -265,11 +264,10 @@ pub(super) fn process_wayland_input_event(
         InputEvent::TouchMotion { event, .. } => {
             let (position, under) = {
                 let frontend = state.wayland.as_ref().expect("missing Wayland frontend");
-                let position = output_bound_absolute_position(
-                    &event,
-                    frontend.touch_bounds,
-                    frontend.touch_transform,
-                );
+                let position = {
+                    let (bounds, transform) = touch_device_mapping(frontend, &event.device());
+                    output_bound_absolute_position(&event, bounds, transform)
+                };
                 (position, frontend.surface_under(position))
             };
             let touch = state
