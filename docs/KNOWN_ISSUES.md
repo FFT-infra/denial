@@ -129,13 +129,3 @@ or a window surface, must fade each leaf instead, as the desktop's
 To measure, read `drm-total-system0` from the DRM entry in
 `/proc/$(pgrep -n -x deniald)/fdinfo/`. The `i915:i915_gem_object_create`
 tracepoint attributes Intel allocations to the `io.flutter.rast` thread.
-
-## Denial lacks keyboard shortcut inhibition (zwp_keyboard_shortcuts_inhibit_v1)
-
-Denial unconditionally intercepts the `Super` (Logo/Meta) modifier key in
-`native_shortcut.rs` to drive application launcher invocation and window
-management shortcuts. Because Denial does not currently implement the Wayland
-`zwp_keyboard_shortcuts_inhibit_v1` protocol, remote desktop and virtual machine
-clients (e.g. UU Remote, Moonlight, or virtual machines running via Droidloom
-or native Wayland) cannot inhibit host shortcuts, causing keystrokes involving
-`Super` to be consumed by Denial rather than delivered to the remote guest.
