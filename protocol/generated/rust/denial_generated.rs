@@ -942,13 +942,14 @@ impl flatbuffers::SimpleToVerifyInSlice for ShellActionKind {}
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 pub const ENUM_MIN_KEYBOARD_COMMAND_KIND: u8 = 0;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MAX_KEYBOARD_COMMAND_KIND: u8 = 2;
+pub const ENUM_MAX_KEYBOARD_COMMAND_KIND: u8 = 3;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 #[allow(non_camel_case_types)]
-pub const ENUM_VALUES_KEYBOARD_COMMAND_KIND: [KeyboardCommandKind; 3] = [
+pub const ENUM_VALUES_KEYBOARD_COMMAND_KIND: [KeyboardCommandKind; 4] = [
   KeyboardCommandKind::Text,
   KeyboardCommandKind::Key,
   KeyboardCommandKind::DismissPanel,
+  KeyboardCommandKind::PanelMotion,
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -959,13 +960,15 @@ impl KeyboardCommandKind {
   pub const Text: Self = Self(0);
   pub const Key: Self = Self(1);
   pub const DismissPanel: Self = Self(2);
+  pub const PanelMotion: Self = Self(3);
 
   pub const ENUM_MIN: u8 = 0;
-  pub const ENUM_MAX: u8 = 2;
+  pub const ENUM_MAX: u8 = 3;
   pub const ENUM_VALUES: &'static [Self] = &[
     Self::Text,
     Self::Key,
     Self::DismissPanel,
+    Self::PanelMotion,
   ];
   /// Returns the variant's name or "" if unknown.
   pub fn variant_name(self) -> Option<&'static str> {
@@ -973,6 +976,7 @@ impl KeyboardCommandKind {
       Self::Text => Some("Text"),
       Self::Key => Some("Key"),
       Self::DismissPanel => Some("DismissPanel"),
+      Self::PanelMotion => Some("PanelMotion"),
       _ => None,
     }
   }
@@ -4611,6 +4615,7 @@ impl<'a> Window<'a> {
   pub const VT_PET_HOLDS: flatbuffers::VOffsetT = 102;
   pub const VT_PET_DRAGGED: flatbuffers::VOffsetT = 104;
   pub const VT_CLIENT_TEXTURE: flatbuffers::VOffsetT = 106;
+  pub const VT_KEYBOARD_INSET: flatbuffers::VOffsetT = 108;
 
   #[inline]
   pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -4661,6 +4666,7 @@ impl<'a> Window<'a> {
     builder.add_width(args.width);
     if let Some(x) = args.app_id { builder.add_app_id(x); }
     if let Some(x) = args.title { builder.add_title(x); }
+    builder.add_keyboard_inset(args.keyboard_inset);
     builder.add_pet_dragged(args.pet_dragged);
     builder.add_pet(args.pet);
     builder.add_pet_below(args.pet_below);
@@ -5042,6 +5048,13 @@ impl<'a> Window<'a> {
     // which contains a valid value in this slot
     unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<ClientTexture>>(Window::VT_CLIENT_TEXTURE, None)}
   }
+  #[inline]
+  pub fn keyboard_inset(&self) -> bool {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<bool>(Window::VT_KEYBOARD_INSET, Some(false)).unwrap()}
+  }
 }
 
 impl flatbuffers::Verifiable for Window<'_> {
@@ -5103,6 +5116,7 @@ impl flatbuffers::Verifiable for Window<'_> {
      .visit_field::<u32>("pet_holds", Self::VT_PET_HOLDS, false)?
      .visit_field::<bool>("pet_dragged", Self::VT_PET_DRAGGED, false)?
      .visit_field::<flatbuffers::ForwardsUOffset<ClientTexture>>("client_texture", Self::VT_CLIENT_TEXTURE, false)?
+     .visit_field::<bool>("keyboard_inset", Self::VT_KEYBOARD_INSET, false)?
      .finish();
     Ok(())
   }
@@ -5160,6 +5174,7 @@ pub struct WindowArgs<'a> {
     pub pet_holds: u32,
     pub pet_dragged: bool,
     pub client_texture: Option<flatbuffers::WIPOffset<ClientTexture<'a>>>,
+    pub keyboard_inset: bool,
 }
 impl<'a> Default for WindowArgs<'a> {
   #[inline]
@@ -5217,6 +5232,7 @@ impl<'a> Default for WindowArgs<'a> {
       pet_holds: 0,
       pet_dragged: false,
       client_texture: None,
+      keyboard_inset: false,
     }
   }
 }
@@ -5435,6 +5451,10 @@ impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> WindowBuilder<'a, 'b, A> {
     self.fbb_.push_slot_always::<flatbuffers::WIPOffset<ClientTexture>>(Window::VT_CLIENT_TEXTURE, client_texture);
   }
   #[inline]
+  pub fn add_keyboard_inset(&mut self, keyboard_inset: bool) {
+    self.fbb_.push_slot::<bool>(Window::VT_KEYBOARD_INSET, keyboard_inset, false);
+  }
+  #[inline]
   pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> WindowBuilder<'a, 'b, A> {
     let start = _fbb.start_table();
     WindowBuilder {
@@ -5504,6 +5524,7 @@ impl core::fmt::Debug for Window<'_> {
       ds.field("pet_holds", &self.pet_holds());
       ds.field("pet_dragged", &self.pet_dragged());
       ds.field("client_texture", &self.client_texture());
+      ds.field("keyboard_inset", &self.keyboard_inset());
       ds.finish()
   }
 }
@@ -7530,6 +7551,8 @@ impl<'a> KeyboardCommand<'a> {
   pub const VT_KEY: flatbuffers::VOffsetT = 8;
   pub const VT_FLAGS: flatbuffers::VOffsetT = 10;
   pub const VT_ACTIVATION_SERIAL: flatbuffers::VOffsetT = 12;
+  pub const VT_PANEL_HEIGHT: flatbuffers::VOffsetT = 14;
+  pub const VT_PANEL_DURATION_MS: flatbuffers::VOffsetT = 16;
 
   #[inline]
   pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -7542,6 +7565,8 @@ impl<'a> KeyboardCommand<'a> {
   ) -> flatbuffers::WIPOffset<KeyboardCommand<'bldr>> {
     let mut builder = KeyboardCommandBuilder::new(_fbb);
     builder.add_activation_serial(args.activation_serial);
+    builder.add_panel_duration_ms(args.panel_duration_ms);
+    builder.add_panel_height(args.panel_height);
     builder.add_flags(args.flags);
     if let Some(x) = args.key { builder.add_key(x); }
     if let Some(x) = args.text { builder.add_text(x); }
@@ -7585,6 +7610,20 @@ impl<'a> KeyboardCommand<'a> {
     // which contains a valid value in this slot
     unsafe { self._tab.get::<u64>(KeyboardCommand::VT_ACTIVATION_SERIAL, Some(0)).unwrap()}
   }
+  #[inline]
+  pub fn panel_height(&self) -> u32 {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<u32>(KeyboardCommand::VT_PANEL_HEIGHT, Some(0)).unwrap()}
+  }
+  #[inline]
+  pub fn panel_duration_ms(&self) -> u32 {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<u32>(KeyboardCommand::VT_PANEL_DURATION_MS, Some(0)).unwrap()}
+  }
 }
 
 impl flatbuffers::Verifiable for KeyboardCommand<'_> {
@@ -7599,6 +7638,8 @@ impl flatbuffers::Verifiable for KeyboardCommand<'_> {
      .visit_field::<flatbuffers::ForwardsUOffset<&str>>("key", Self::VT_KEY, false)?
      .visit_field::<u32>("flags", Self::VT_FLAGS, false)?
      .visit_field::<u64>("activation_serial", Self::VT_ACTIVATION_SERIAL, false)?
+     .visit_field::<u32>("panel_height", Self::VT_PANEL_HEIGHT, false)?
+     .visit_field::<u32>("panel_duration_ms", Self::VT_PANEL_DURATION_MS, false)?
      .finish();
     Ok(())
   }
@@ -7609,6 +7650,8 @@ pub struct KeyboardCommandArgs<'a> {
     pub key: Option<flatbuffers::WIPOffset<&'a str>>,
     pub flags: u32,
     pub activation_serial: u64,
+    pub panel_height: u32,
+    pub panel_duration_ms: u32,
 }
 impl<'a> Default for KeyboardCommandArgs<'a> {
   #[inline]
@@ -7619,6 +7662,8 @@ impl<'a> Default for KeyboardCommandArgs<'a> {
       key: None,
       flags: 0,
       activation_serial: 0,
+      panel_height: 0,
+      panel_duration_ms: 0,
     }
   }
 }
@@ -7649,6 +7694,14 @@ impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> KeyboardCommandBuilder<'a, 'b, 
     self.fbb_.push_slot::<u64>(KeyboardCommand::VT_ACTIVATION_SERIAL, activation_serial, 0);
   }
   #[inline]
+  pub fn add_panel_height(&mut self, panel_height: u32) {
+    self.fbb_.push_slot::<u32>(KeyboardCommand::VT_PANEL_HEIGHT, panel_height, 0);
+  }
+  #[inline]
+  pub fn add_panel_duration_ms(&mut self, panel_duration_ms: u32) {
+    self.fbb_.push_slot::<u32>(KeyboardCommand::VT_PANEL_DURATION_MS, panel_duration_ms, 0);
+  }
+  #[inline]
   pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> KeyboardCommandBuilder<'a, 'b, A> {
     let start = _fbb.start_table();
     KeyboardCommandBuilder {
@@ -7671,6 +7724,8 @@ impl core::fmt::Debug for KeyboardCommand<'_> {
       ds.field("key", &self.key());
       ds.field("flags", &self.flags());
       ds.field("activation_serial", &self.activation_serial());
+      ds.field("panel_height", &self.panel_height());
+      ds.field("panel_duration_ms", &self.panel_duration_ms());
       ds.finish()
   }
 }

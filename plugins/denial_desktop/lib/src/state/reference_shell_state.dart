@@ -194,6 +194,11 @@ class ReferenceShellState {
     return foregroundWindow;
   }
 
+  /// The foreground app lays itself out around the on-screen keyboard
+  /// (denial-insets-v1 keyboard inset), so the shell does not lift it.
+  bool get primaryWindowHandlesKeyboard =>
+      primaryWindow?.keyboardInset ?? false;
+
   DenialWindow? get inputWindow {
     if (lockLayerVisible || launchTransitionActive || overviewVisible) {
       return null;

@@ -719,6 +719,7 @@ fn create_window_snapshot<'a>(
                 pet: description.pet.is_some(),
                 pet_holds: description.pet.map_or(0, |pet| pet.holds),
                 pet_dragged: description.pet.is_some_and(|pet| pet.dragged),
+                keyboard_inset: description.keyboard_inset,
                 ..Default::default()
             },
         ));

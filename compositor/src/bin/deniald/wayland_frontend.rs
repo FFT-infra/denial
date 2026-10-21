@@ -639,6 +639,8 @@ pub(super) struct WaylandFrontend {
     gamma_control: gamma_control::GammaControlManager,
     screencopy: screencopy::ScreencopyManager,
     text_input: TextInputManager,
+    #[cfg(feature = "flutter")]
+    keyboard_insets: insets::KeyboardInsets,
     input_method: InputMethodManager,
     outputs: Vec<WaylandOutput>,
     scrolling_layout_axes: BTreeMap<String, ScrollingLayoutAxis>,

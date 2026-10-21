@@ -870,6 +870,58 @@ fn panel_dismissal_decodes_as_an_intent_not_a_key() {
     );
 }
 
+fn panel_motion(height: u32, duration_ms: u32) -> Vec<u8> {
+    let mut builder = FlatBufferBuilder::new();
+    let command = fb::KeyboardCommand::create(
+        &mut builder,
+        &fb::KeyboardCommandArgs {
+            kind: fb::KeyboardCommandKind::PanelMotion,
+            panel_height: height,
+            panel_duration_ms: duration_ms,
+            ..Default::default()
+        },
+    );
+    let envelope = fb::Envelope::create(
+        &mut builder,
+        &fb::EnvelopeArgs {
+            protocol_version: PROTOCOL_VERSION,
+            sequence: 1,
+            payload_type: fb::Payload::KeyboardCommand,
+            payload: Some(command.as_union_value()),
+            ..Default::default()
+        },
+    );
+    fb::finish_envelope_buffer(&mut builder, envelope);
+    builder.finished_data().to_vec()
+}
+
+#[test]
+fn panel_motion_decodes_height_and_duration_within_bounds() {
+    let mut bridge = bridge();
+    bridge.handle(&panel_motion(368, 420)).unwrap();
+    bridge.handle(&panel_motion(0, 0)).unwrap();
+    assert_eq!(
+        bridge.pending_keyboard_commands.drain(..).collect::<Vec<_>>(),
+        [
+            KeyboardCommand::PanelMotion {
+                height: 368,
+                duration_ms: 420
+            },
+            KeyboardCommand::PanelMotion {
+                height: 0,
+                duration_ms: 0
+            },
+        ]
+    );
+    for (height, duration_ms) in [
+        (MAX_KEYBOARD_PANEL_HEIGHT + 1, 0),
+        (0, MAX_KEYBOARD_PANEL_DURATION_MS + 1),
+    ] {
+        assert!(bridge.handle(&panel_motion(height, duration_ms)).is_err());
+    }
+    assert!(bridge.pending_keyboard_commands.is_empty());
+}
+
 fn keyboard_command(
     kind: fb::KeyboardCommandKind,
     text: Option<&str>,
@@ -886,7 +938,7 @@ fn keyboard_command(
             text,
             key,
             flags,
-            activation_serial: 0,
+            ..Default::default()
         },
     );
     let envelope = fb::Envelope::create(
@@ -1296,6 +1348,7 @@ fn scene_window(id: u64) -> WindowDescription {
         content_kind: WindowContentKind::SurfaceTree,
         opacity_class: WindowOpacityClass::FullyOpaque,
         pet: None,
+        keyboard_inset: false,
     }
 }
 

@@ -288,6 +288,20 @@ void main() {
     expect(command.key, isNull);
   });
 
+  test('panel motion carries where the keyboard settles and when', () {
+    final codec = DenialWireCodec();
+    final envelope = Envelope(
+      codec.encodeKeyboardPanelMotion(368, const Duration(milliseconds: 456)),
+    );
+    final command = envelope.payload as KeyboardCommand;
+    expect(command.kind, KeyboardCommandKind.PanelMotion);
+    expect(command.panelHeight, 368);
+    expect(command.panelDurationMs, 456);
+    expect(command.flags, 0);
+    expect(command.text, isNull);
+    expect(command.key, isNull);
+  });
+
   test('system bar configuration encodes its edge and selected outputs', () {
     final codec = DenialWireCodec();
     final bytes = codec.encodeSystemBarConfiguration(

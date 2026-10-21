@@ -104,6 +104,7 @@ class _MobileApplicationSceneState
     return ColoredBox(
       color: context.shellColors.background,
       child: MobileKeyboardViewport(
+        appScene: true,
         child: ValueListenableBuilder<FrostedBackdrop?>(
           valueListenable: _wallpaperGlass,
           // Layers that move windows add their motion below.

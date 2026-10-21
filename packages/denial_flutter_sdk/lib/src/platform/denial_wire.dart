@@ -388,6 +388,17 @@ class DenialWireCodec {
     );
   }
 
+  Uint8List encodeKeyboardPanelMotion(int height, Duration duration) {
+    return _encodeEnvelope(
+      generated.PayloadTypeId.KeyboardCommand,
+      generated.KeyboardCommandObjectBuilder(
+        kind: generated.KeyboardCommandKind.PanelMotion,
+        panelHeight: height,
+        panelDurationMs: duration.inMilliseconds,
+      ),
+    );
+  }
+
   Uint8List encodeKeyboardKey(
     String key, {
     bool ctrl = false,
@@ -1592,6 +1603,7 @@ class DenialWireCodec {
                 },
               )
             : null,
+        keyboardInset: window.keyboardInset,
       );
       // FlatBuffers getters parse their field on each access. Validate the
       // materialized snapshot so geometry and layer fields are read only once.

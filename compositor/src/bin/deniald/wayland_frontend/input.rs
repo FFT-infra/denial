@@ -496,6 +496,14 @@ pub(crate) fn dispatch_shell_keyboard(
             frontend.text_input.dismiss_panel(*activation_serial);
             true
         }
+        super::super::wire::KeyboardCommand::PanelMotion {
+            height,
+            duration_ms,
+        } => {
+            let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
+            frontend.set_keyboard_height(*height, *duration_ms);
+            true
+        }
         super::super::wire::KeyboardCommand::Text(text) => {
             let mut delivered = false;
             for character in text.chars() {

@@ -38,11 +38,11 @@ class ReferenceInputLayoutCoordinator {
       viewSize,
       edgePanelProgress,
     );
-    final softwareKeyboardRegions =
+    List<Rect> softwareKeyboardRegions({required bool scrollStripVisible}) =>
         ReferenceShellMetrics.softwareKeyboardRegions(
           viewSize,
           progress: edgePanelProgress,
-          scrollStripVisible: state.edgePanelVisible,
+          scrollStripVisible: scrollStripVisible,
         );
     if (state.lockLayerVisible) {
       final lockBackgroundWindow = state.primaryWindow;
@@ -59,14 +59,19 @@ class ReferenceInputLayoutCoordinator {
               hitTest: false,
             ),
         ],
-        softwareKeyboardRegions: softwareKeyboardRegions,
+        softwareKeyboardRegions: softwareKeyboardRegions(
+          scrollStripVisible: state.edgePanelVisible,
+        ),
         keyboardCapture: true,
         exclusiveShellMode: true,
       );
       return;
     }
 
-    final contentOffset = edgePanelActive
+    // An app laid out around the keyboard stays in place, so its input
+    // regions do too, and there is no lifted scene for the strip to pan.
+    final appLifted = !state.primaryWindowHandlesKeyboard;
+    final contentOffset = edgePanelActive && appLifted
         ? (edgePanelRect.height - state.edgePanelViewportScroll)
               .clamp(0.0, edgePanelRect.height)
               .toDouble()
@@ -76,17 +81,21 @@ class ReferenceInputLayoutCoordinator {
         : viewSize.height;
     final inputWindow = state.inputWindow;
     final canvas = Offset.zero & viewSize;
+    final shellOwnsCanvas =
+        inputWindow == null ||
+        state.overviewVisible ||
+        state.launchTransitionActive ||
+        quickSettingsActive ||
+        interactions.capturesFullScene;
+    final scrollStripVisible =
+        state.edgePanelVisible && (shellOwnsCanvas || appLifted);
     final shellRegions = <Rect>[
-      if (inputWindow == null ||
-          state.overviewVisible ||
-          state.launchTransitionActive ||
-          quickSettingsActive ||
-          interactions.capturesFullScene)
+      if (shellOwnsCanvas)
         canvas
       else if (edgePanelActive) ...[
         ReferenceShellMetrics.statusRect(viewSize),
         if (edgePanelRect.height > 0.0) edgePanelRect,
-        if (state.edgePanelVisible)
+        if (scrollStripVisible)
           ReferenceShellMetrics.edgePanelScrollStripRect(viewSize),
       ] else ...[
         ReferenceShellMetrics.statusRect(viewSize),
@@ -117,7 +126,9 @@ class ReferenceInputLayoutCoordinator {
       viewSize: viewSize,
       shellRegions: shellRegions,
       windows: inputRegions,
-      softwareKeyboardRegions: softwareKeyboardRegions,
+      softwareKeyboardRegions: softwareKeyboardRegions(
+        scrollStripVisible: scrollStripVisible,
+      ),
       edgeSwipeRegions: edgeSwipeRegions,
       keyboardCapture: quickSettingsActive || interactions.capturesKeyboard,
       exclusiveShellMode: interactions.compositorExclusive,
