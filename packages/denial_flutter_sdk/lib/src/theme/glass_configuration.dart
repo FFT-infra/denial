@@ -80,8 +80,8 @@ class ShellGlassConfiguration {
   /// appearance (MOBILE_APP_MATERIALS.md group floor). On a phone, app-panel
   /// opacities below it look the same as the floor.
   double get mobileAppPanelFloor => switch (appearance) {
-    ShellGlassAppearance.dark => 0.35,
-    ShellGlassAppearance.light => 0.55,
+    ShellGlassAppearance.dark => 0.30,
+    ShellGlassAppearance.light => 0.50,
   };
   final double blurSigma;
   final double quality;
