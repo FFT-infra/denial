@@ -135,6 +135,10 @@ pub enum WindowCommand {
     Minimize {
         window_id: u64,
     },
+    /// The system Back action, as Android's navigation bar sends it.
+    NavigateBack {
+        window_id: u64,
+    },
     Configure {
         window_id: u64,
         geometry: WindowGeometry,
@@ -273,6 +277,7 @@ impl WindowCommand {
             Self::Close { window_id }
             | Self::Focus { window_id }
             | Self::Minimize { window_id }
+            | Self::NavigateBack { window_id }
             | Self::Configure { window_id, .. }
             | Self::MoveToWorkspace { window_id, .. }
             | Self::DropOnWorkspace { window_id, .. }
@@ -441,12 +446,27 @@ impl InputWindowRegion {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InputEdge {
+    Left,
+    Right,
+}
+
+/// A touch starting in `rect` over a client stays with that client until it
+/// travels inward from `edge`; the shell then claims it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EdgeSwipeRegion {
+    pub rect: InputRect,
+    pub edge: InputEdge,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct InputLayoutSnapshot {
     pub epoch: u64,
     pub flags: u32,
     pub shell_regions: Vec<InputRect>,
     pub software_keyboard_regions: Vec<InputRect>,
+    pub edge_swipe_regions: Vec<EdgeSwipeRegion>,
     pub windows: Vec<InputWindowRegion>,
     pub visible_surface_ids: Vec<u64>,
 }

@@ -501,6 +501,9 @@ fn apply_local_window_command(state: &mut RuntimeState, window_id: u64, command:
         WindowCommand::Focus { .. } => {
             activate_local_flutter_window(state, window_id);
         }
+        // In-bundle Flutter windows live in the shell's own isolate, which
+        // routes Back to them itself.
+        WindowCommand::NavigateBack { .. } => {}
         WindowCommand::Configure { geometry, .. } => {
             let changed = state
                 .wayland
@@ -536,6 +539,9 @@ fn apply_client_window_command(
         }
         WindowCommand::Focus { .. } => {
             activate_window(state, window, SERIAL_COUNTER.next_serial());
+        }
+        WindowCommand::NavigateBack { .. } => {
+            super::input::navigate_back(state, window);
         }
         WindowCommand::Configure {
             geometry,

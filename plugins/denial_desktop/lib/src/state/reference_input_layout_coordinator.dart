@@ -30,8 +30,7 @@ class ReferenceInputLayoutCoordinator {
       return;
     }
 
-    final quickSettingsActive =
-        state.quickSettingsVisible || state.quickSettingsDragProgress > 0.0;
+    final quickSettingsActive = state.quickSettingsEngaged;
     final edgePanelActive =
         state.edgePanelVisible || state.edgePanelDragProgress > 0.0;
     final edgePanelProgress = state.edgePanelDragProgress;
@@ -98,6 +97,12 @@ class ReferenceInputLayoutCoordinator {
         if (!region.intersect(canvas).isEmpty) region.intersect(canvas),
     ];
 
+    // Back swipes start over the app and are handed to the shell's strips
+    // once they move inward. Elsewhere the shell owns the whole canvas.
+    final edgeSwipeRegions = shellRegions.contains(canvas)
+        ? const <InputEdgeSwipeRegion>[]
+        : _backGestureRegions(viewSize, inputBottom);
+
     final inputRegions = inputWindow == null
         ? const <InputWindowRegion>[]
         : _inputRegionsForWindow(
@@ -113,9 +118,26 @@ class ReferenceInputLayoutCoordinator {
       shellRegions: shellRegions,
       windows: inputRegions,
       softwareKeyboardRegions: softwareKeyboardRegions,
+      edgeSwipeRegions: edgeSwipeRegions,
       keyboardCapture: quickSettingsActive || interactions.capturesKeyboard,
       exclusiveShellMode: interactions.compositorExclusive,
     );
+  }
+
+  static List<InputEdgeSwipeRegion> _backGestureRegions(
+    Size viewSize,
+    double bottom,
+  ) {
+    final strips = ReferenceShellMetrics.backGestureRects(
+      viewSize,
+      bottom: bottom,
+    );
+    return <InputEdgeSwipeRegion>[
+      if (!strips.left.isEmpty)
+        InputEdgeSwipeRegion(rect: strips.left, edge: InputEdge.left),
+      if (!strips.right.isEmpty)
+        InputEdgeSwipeRegion(rect: strips.right, edge: InputEdge.right),
+    ];
   }
 
   List<InputWindowRegion> _inputRegionsForWindow({
@@ -208,6 +230,8 @@ class ReferenceInputLayoutCoordinator {
     required List<Rect> shellRegions,
     required List<InputWindowRegion> windows,
     List<Rect> softwareKeyboardRegions = const <Rect>[],
+    List<InputEdgeSwipeRegion> edgeSwipeRegions =
+        const <InputEdgeSwipeRegion>[],
     bool keyboardCapture = false,
     bool exclusiveShellMode = false,
   }) {
@@ -230,6 +254,7 @@ class ReferenceInputLayoutCoordinator {
       shellRegions: shellRegions,
       windows: windows,
       softwareKeyboardRegions: softwareKeyboardRegions,
+      edgeSwipeRegions: edgeSwipeRegions,
       visibleSurfaceIds: visibleSurfaceIds.toList(growable: false),
       keyboardCapture: keyboardCapture,
       exclusiveShellMode: exclusiveShellMode,

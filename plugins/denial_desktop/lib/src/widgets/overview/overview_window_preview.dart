@@ -22,6 +22,22 @@ class OverviewWindowPreview extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final borderRadius = BorderRadius.circular(context.shellTheme.windowRadius);
+    // The content covers the card at its on-screen size and maps the window
+    // itself; a scale here would also scale the window glass.
+    Widget content = WindowContentRect(
+      window: window,
+      borderRadius: borderRadius,
+      contentPadding: const EdgeInsets.only(
+        top: ReferenceShellMetrics.appStatusBarHeight,
+      ),
+    );
+    // A compositor window's plane and glass round their own corners. A clip
+    // would cost every card a depth pass on every frame of a scroll. Only an
+    // in-bundle app's content needs one.
+    if (window.isLocalFlutter) {
+      content = ClipRRect(borderRadius: borderRadius, child: content);
+    }
     return Semantics(
       label: localizedWindowTitle(context, window),
       child: RepaintBoundary(
@@ -29,23 +45,7 @@ class OverviewWindowPreview extends StatelessWidget {
           key: previewKey,
           width: size.width,
           height: size.height,
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(
-              context.shellTheme.windowRadius,
-            ),
-            child: FittedBox(
-              fit: BoxFit.fill,
-              child: SizedBox.fromSize(
-                size: MediaQuery.sizeOf(context),
-                child: WindowSurface(
-                  window: window,
-                  contentPadding: const EdgeInsets.only(
-                    top: ReferenceShellMetrics.appStatusBarHeight,
-                  ),
-                ),
-              ),
-            ),
-          ),
+          child: content,
         ),
       ),
     );

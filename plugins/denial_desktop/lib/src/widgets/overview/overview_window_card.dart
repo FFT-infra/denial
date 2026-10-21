@@ -7,6 +7,7 @@ import 'package:denial_flutter_sdk/models.dart';
 import 'package:denial_flutter_sdk/motion.dart';
 import 'package:denial_flutter_sdk/rendering.dart';
 
+import 'overview_card_label.dart';
 import 'overview_window_preview.dart';
 
 /// A fixed-size preview with paint-only drag and settle motion.
@@ -17,6 +18,8 @@ class OverviewWindowCard extends StatefulWidget {
     required this.cardSize,
     required this.foreground,
     this.focusing = false,
+    this.removing = false,
+    this.labelOpacity,
     required this.onDismiss,
     required this.onFocus,
   });
@@ -25,6 +28,13 @@ class OverviewWindowCard extends StatefulWidget {
   final Size cardSize;
   final bool foreground;
   final bool focusing;
+
+  /// The slot stays only while its neighbors reflow into it.
+  final bool removing;
+
+  /// Shows the app icon and name above the card. It stays while the hero or
+  /// focus overlay presents the window in place of the preview.
+  final Animation<double>? labelOpacity;
   final ValueChanged<DenialWindow> onDismiss;
   final void Function(DenialWindow window, Rect startRect) onFocus;
 
@@ -40,9 +50,12 @@ class _OverviewWindowCardState extends State<OverviewWindowCard>
   static const double _dismissDistanceRatio = 0.5;
   static const double _dismissFlingVelocity = 1000.0;
   static const double _offscreenMargin = 16.0;
+  // A card swiped away shrinks as it leaves.
+  static const double _dismissShrink = 0.1;
 
   late final AnimationController _dismiss;
   late final Animation<Offset> _translation;
+  late final Animation<double> _scale;
   double _exitY = -double.maxFinite;
   double _dragDisplacement = 0;
   double _dismissLength = 1;
@@ -61,6 +74,12 @@ class _OverviewWindowCardState extends State<OverviewWindowCard>
       ..addListener(_checkCommit);
     _translation = _dismiss.drive(
       Tween(begin: Offset.zero, end: const Offset(0, 1)),
+    );
+    _scale = _dismiss.drive(
+      Animatable.fromCallback(
+        (value) =>
+            1 - _dismissShrink * (-value / _dismissLength).clamp(0.0, 1.0),
+      ),
     );
   }
 
@@ -85,56 +104,94 @@ class _OverviewWindowCardState extends State<OverviewWindowCard>
 
   @override
   Widget build(BuildContext context) {
-    if (_dismissed || widget.focusing || widget.foreground) {
+    final size = widget.cardSize;
+    if (_dismissed || widget.removing) {
+      return Center(
+        child: SizedBox(width: size.width, height: size.height),
+      );
+    }
+    final labelOpacity = widget.labelOpacity;
+    final label = labelOpacity == null
+        ? null
+        : Positioned(
+            key: const ValueKey('label'),
+            left: 0,
+            right: 0,
+            bottom: size.height + OverviewCardLabel.gap,
+            child: IgnorePointer(
+              child: FadeTransition(
+                opacity: labelOpacity,
+                child: OverviewCardLabel(window: widget.window),
+              ),
+            ),
+          );
+    if (widget.focusing || widget.foreground) {
       return Center(
         child: SizedBox(
-          width: widget.cardSize.width,
-          height: widget.cardSize.height,
+          width: size.width,
+          height: size.height,
+          child: Stack(clipBehavior: Clip.none, children: [?label]),
         ),
       );
     }
 
-    final card = Center(
-      child: RetainedTranslation(
-        translation: _translation,
-        child: Listener(
-          onPointerDown: (event) {
-            if (_trackedPointer != null) return;
-            _trackedPointer = event.pointer;
-            _pointerCancelled = false;
-            _velocityTracker = VelocityTracker.withKind(event.kind)
-              ..addPosition(event.timeStamp, event.position);
-          },
-          onPointerMove: (event) {
-            if (event.pointer == _trackedPointer) {
-              _velocityTracker?.addPosition(event.timeStamp, event.position);
-            }
-          },
-          onPointerUp: (event) {
-            if (event.pointer == _trackedPointer) _trackedPointer = null;
-          },
-          onPointerCancel: (event) {
-            if (event.pointer != _trackedPointer) return;
-            _trackedPointer = null;
-            _pointerCancelled = true;
-          },
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: _handleTap,
-            onVerticalDragStart: _handleVerticalDragStart,
-            onVerticalDragUpdate: _handleVerticalDragUpdate,
-            onVerticalDragEnd: _handleVerticalDragEnd,
-            onVerticalDragCancel: _settleBack,
-            child: OverviewWindowPreview(
-              previewKey: _previewKey,
-              window: widget.window,
-              size: widget.cardSize,
+    final preview = RetainedScale(
+      scale: _scale,
+      child: Listener(
+        onPointerDown: (event) {
+          if (_trackedPointer != null) return;
+          _trackedPointer = event.pointer;
+          _pointerCancelled = false;
+          _velocityTracker = VelocityTracker.withKind(event.kind)
+            ..addPosition(event.timeStamp, event.position);
+        },
+        onPointerMove: (event) {
+          if (event.pointer == _trackedPointer) {
+            _velocityTracker?.addPosition(event.timeStamp, event.position);
+          }
+        },
+        onPointerUp: (event) {
+          if (event.pointer == _trackedPointer) _trackedPointer = null;
+        },
+        onPointerCancel: (event) {
+          if (event.pointer != _trackedPointer) return;
+          _trackedPointer = null;
+          _pointerCancelled = true;
+        },
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: _handleTap,
+          onVerticalDragStart: _handleVerticalDragStart,
+          onVerticalDragUpdate: _handleVerticalDragUpdate,
+          onVerticalDragEnd: _handleVerticalDragEnd,
+          onVerticalDragCancel: _settleBack,
+          child: OverviewWindowPreview(
+            previewKey: _previewKey,
+            window: widget.window,
+            size: size,
+          ),
+        ),
+      ),
+    );
+    return WindowBackdropMotion(
+      motion: _dismiss,
+      child: Center(
+        child: RetainedTranslation(
+          translation: _translation,
+          child: SizedBox(
+            width: size.width,
+            height: size.height,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Positioned.fill(key: const ValueKey('preview'), child: preview),
+                ?label,
+              ],
             ),
           ),
         ),
       ),
     );
-    return card;
   }
 
   void _handleTap() {
@@ -144,8 +201,14 @@ class _OverviewWindowCardState extends State<OverviewWindowCard>
     if (renderObject is! RenderBox || !renderObject.hasSize) {
       return;
     }
-    final origin = renderObject.localToGlobal(Offset.zero);
-    widget.onFocus(widget.window, origin & renderObject.size);
+    // Start the zoom from the card's on-screen rect, transforms included.
+    widget.onFocus(
+      widget.window,
+      MatrixUtils.transformRect(
+        renderObject.getTransformTo(null),
+        Offset.zero & renderObject.size,
+      ),
+    );
   }
 
   void _handleVerticalDragUpdate(DragUpdateDetails details) {
@@ -215,6 +278,7 @@ class _OverviewWindowCardState extends State<OverviewWindowCard>
       0.0,
       velocity: velocity,
       spring: Motion.bouncy,
+      tolerance: Motion.pixelTolerance,
       telemetryLabel: 'overview_card_settle',
     );
   }
@@ -227,6 +291,7 @@ class _OverviewWindowCardState extends State<OverviewWindowCard>
       _exitY,
       velocity: velocity,
       spring: Motion.snappy,
+      tolerance: Motion.pixelTolerance,
       telemetryLabel: 'overview_card_dismiss',
     );
   }

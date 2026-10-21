@@ -96,12 +96,49 @@ class _LockStatusIcons extends StatelessWidget {
         child: _DesktopLockStatusBar(cpu: cpu, gpus: gpus),
       );
     }
+    // The operator sits opposite the icons, as far in from the left edge as
+    // the battery is from the right.
     return Positioned(
       top: math.max(22.0, topPadding + 18.0),
+      left: 28,
       right: 28,
       child: Opacity(
         opacity: 0.92,
-        child: StatusIconCluster(battery: power.batteryStatus),
+        child: Row(
+          children: [
+            const Expanded(child: _LockOperatorName()),
+            const SizedBox(width: 16),
+            StatusIconCluster(battery: power.batteryStatus),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _LockOperatorName extends ConsumerWidget {
+  const _LockOperatorName();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final name = ref.watch(
+      mobileNetworkProvider.select(
+        (discovery) => discovery.isLoading || discovery.hasError
+            ? ''
+            : discovery.value?.operatorName ?? '',
+      ),
+    );
+    return Text(
+      name,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      softWrap: false,
+      style: ShellText.base.copyWith(
+        color: context.shellColors.textPrimary,
+        fontSize: 15,
+        height: 1,
+        fontWeight: FontWeight.w600,
+        letterSpacing: 0,
       ),
     );
   }
@@ -212,12 +249,28 @@ class _LockClockBlock extends StatelessWidget {
     required this.desktop,
     required this.scale,
     required this.showSystemStatus,
+    required this.opacity,
+    required this.lift,
+    this.parts = const {
+      HomeClockPart.time,
+      HomeClockPart.date,
+      HomeClockPart.status,
+    },
   });
 
   final HomeClockInfo clock;
   final bool desktop;
   final double scale;
   final bool showSystemStatus;
+
+  /// Mobile draws the time under the wallpaper's subject and the date and
+  /// battery row over it, as two blocks with the same layout.
+  final Set<HomeClockPart> parts;
+
+  /// The mobile PIN stage fades and lifts the clock away; both stay at rest
+  /// otherwise, so the clock paints live.
+  final Animation<double> opacity;
+  final ValueListenable<Offset> lift;
 
   @override
   Widget build(BuildContext context) {
@@ -230,20 +283,42 @@ class _LockClockBlock extends StatelessWidget {
         ? math.min(280.0, size.height * 0.36)
         : math.min(250.0, size.height * 0.34);
 
+    // Mobile stretches the time upward with the date on top, painted above
+    // the block; the fade snapshot has to cover them.
+    final reserve = desktop ? 0.0 : height;
     return Positioned(
       left: horizontalInset,
       right: desktop ? size.width * 0.48 : 0,
-      top: top,
-      height: height,
-      child: Transform.scale(
-        alignment: Alignment.center,
-        scale: scale,
-        child: Padding(
-          padding: desktop
-              ? EdgeInsets.zero
-              : const EdgeInsets.symmetric(horizontal: 24),
-          child: RepaintBoundary(
-            child: HomeClockWidget(clock: clock, showStatus: showSystemStatus),
+      top: top - reserve,
+      height: height + reserve,
+      child: FadeSnapshot(
+        opacity: opacity,
+        child: CompositedTranslation(
+          translation: lift,
+          devicePixelRatio: MediaQuery.devicePixelRatioOf(context),
+          child: Padding(
+            padding: EdgeInsets.only(top: reserve),
+            child: Transform.scale(
+              alignment: Alignment.center,
+              scale: scale,
+              child: Padding(
+                padding: desktop
+                    ? EdgeInsets.zero
+                    : const EdgeInsets.symmetric(horizontal: 24),
+                child: RepaintBoundary(
+                  child: HomeClockWidget(
+                    clock: clock,
+                    showStatus: showSystemStatus,
+                    timeStretch: desktop ? 1.0 : 2.0,
+                    detailsAbove: !desktop,
+                    dateColor: desktop
+                        ? ShellMediaColors.lightForegroundSecondary
+                        : ShellMediaColors.lightForeground,
+                    parts: parts,
+                  ),
+                ),
+              ),
+            ),
           ),
         ),
       ),
@@ -251,36 +326,344 @@ class _LockClockBlock extends StatelessWidget {
   }
 }
 
-class _LockSwipePill extends StatelessWidget {
-  const _LockSwipePill({required this.progress});
+/// The lock glyph centred near the top of the mobile face. It fades with the
+/// clock when a credential prompt comes up.
+class _LockGlyph extends StatelessWidget {
+  const _LockGlyph({required this.opacity});
 
-  final double progress;
+  final Animation<double> opacity;
+
+  static const double _size = 26.0;
 
   @override
   Widget build(BuildContext context) {
-    final bottomPadding = MediaQuery.paddingOf(context).bottom;
-
     return Positioned(
       left: 0,
       right: 0,
-      bottom:
-          math.max(34.0, MediaQuery.sizeOf(context).height * 0.034) +
-          bottomPadding,
+      top: MediaQuery.sizeOf(context).height / 16 - _size / 2,
       child: Center(
-        child: Opacity(
-          opacity: 0.76 + progress * 0.2,
-          child: Transform.translate(
-            offset: Offset(0.0, -8.0 * progress),
+        child: FadeSnapshot(
+          opacity: opacity,
+          child: const Icon(
+            Icons.lock_rounded,
+            size: _size,
+            color: ShellMediaColors.lightForeground,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The swipe-up pill of the mobile face: wider than the navigation pill and
+/// centred where it sits. It fades with the clock when a credential prompt
+/// comes up.
+class _LockSwipePill extends StatelessWidget {
+  const _LockSwipePill({required this.opacity});
+
+  final Animation<double> opacity;
+
+  @override
+  Widget build(BuildContext context) {
+    // BottomGestureHandle centres the navigation pill below the top 20 px of
+    // its hit area.
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: ReferenceShellMetrics.gestureBottomInset,
+      height: ReferenceShellMetrics.gestureHitHeight,
+      child: Padding(
+        padding: const EdgeInsets.only(top: 20),
+        child: Center(
+          child: FadeSnapshot(
+            opacity: opacity,
             child: DecoratedBox(
               decoration: BoxDecoration(
                 color: context.shellColors.gesturePill,
                 borderRadius: context.shellTheme.borderRadius(3),
               ),
-              child: const SizedBox(width: 132, height: 5),
+              child: const SizedBox(width: 180, height: 5),
             ),
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Marks an armed fingerprint reader: on an under-display sensor the ring sits
+/// on the sensor, otherwise near the bottom edge. It fades with the clock when
+/// a credential prompt comes up, and when the reader stops listening.
+class _LockFingerprintRing extends StatefulWidget {
+  const _LockFingerprintRing({
+    required this.available,
+    required this.sensor,
+    required this.opacity,
+  });
+
+  final bool available;
+
+  /// Panel fractions in the panel's native orientation.
+  final Rect? sensor;
+  final Animation<double> opacity;
+
+  @override
+  State<_LockFingerprintRing> createState() => _LockFingerprintRingState();
+}
+
+class _LockFingerprintRingState extends State<_LockFingerprintRing>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _available = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 180),
+    value: widget.available ? 1.0 : 0.0,
+  );
+
+  @override
+  void didUpdateWidget(covariant _LockFingerprintRing oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.available == widget.available) {
+      return;
+    }
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _available.value = widget.available ? 1.0 : 0.0;
+    } else if (widget.available) {
+      _available.forward();
+    } else {
+      _available.reverse();
+    }
+  }
+
+  @override
+  void dispose() {
+    _available.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: CustomPaint(
+        painter: _LockFingerprintRingPainter(
+          available: _available,
+          opacity: widget.opacity,
+          sensor: widget.sensor,
+        ),
+      ),
+    );
+  }
+}
+
+class _LockFingerprintRingPainter extends CustomPainter {
+  _LockFingerprintRingPainter({
+    required this.available,
+    required this.opacity,
+    required this.sensor,
+  }) : super(repaint: Listenable.merge([available, opacity]));
+
+  final Animation<double> available;
+  final Animation<double> opacity;
+  final Rect? sensor;
+
+  static const double _radius = 13.0;
+  static const double _stroke = 2.0;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final alpha = available.value * opacity.value;
+    if (alpha <= 0.0) {
+      return;
+    }
+    final sensor = this.sensor;
+    // Sensor fractions follow the panel's native portrait orientation; a
+    // landscape lock screen falls back to the bottom edge.
+    final center = sensor != null && size.height >= size.width
+        ? Offset(sensor.center.dx * size.width, sensor.center.dy * size.height)
+        : Offset(size.width / 2, size.height * 0.88);
+    canvas.drawCircle(
+      center,
+      _radius,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = _stroke
+        ..color = ShellMediaColors.lightForeground.withValues(
+          alpha: 0.92 * alpha,
+        ),
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _LockFingerprintRingPainter oldDelegate) =>
+      oldDelegate.available != available ||
+      oldDelegate.opacity != opacity ||
+      oldDelegate.sensor != sensor;
+}
+
+/// Prototype depth effect: the subject cut out of the lock wallpaper, drawn
+/// over the clock so the clock sits behind it. The mask is an offline
+/// segmentation of the wallpaper, `~/.cache/denial/wallpaper-depth/
+/// lock-mask.png` (alpha marks the subject, in wallpaper space), with a
+/// sidecar naming the wallpaper it belongs to. This layer is the backdrop
+/// again, kept where the mask is, with the mask blurred like the backdrop:
+/// away from the clock it matches the backdrop under it exactly.
+class _LockDepthForeground extends ConsumerStatefulWidget {
+  const _LockDepthForeground();
+
+  @override
+  ConsumerState<_LockDepthForeground> createState() =>
+      _LockDepthForegroundState();
+}
+
+class _LockDepthForegroundState extends ConsumerState<_LockDepthForeground> {
+  String? _wallpaper;
+  ui.Image? _source;
+  ui.Image? _mask;
+  (double, Size)? _maskKey;
+  int _generation = 0;
+
+  @override
+  void dispose() {
+    _generation++;
+    _source?.dispose();
+    _mask?.dispose();
+    super.dispose();
+  }
+
+  void _forget() {
+    _generation++;
+    _source?.dispose();
+    _mask?.dispose();
+    _source = null;
+    _mask = null;
+    _maskKey = null;
+  }
+
+  Future<void> _load(String wallpaper) async {
+    final generation = _generation;
+    ui.Image? image;
+    try {
+      final configured = Platform.environment['XDG_CACHE_HOME'] ?? '';
+      final cache = configured.isNotEmpty
+          ? configured
+          : '${Platform.environment['HOME']}/.cache';
+      final directory = '$cache/denial/wallpaper-depth';
+      final sidecar = jsonDecode(
+        await File('$directory/lock-mask.json').readAsString(),
+      );
+      if (sidecar is Map && sidecar['wallpaper'] == wallpaper) {
+        final codec = await ui.instantiateImageCodec(
+          await File('$directory/lock-mask.png').readAsBytes(),
+        );
+        image = (await codec.getNextFrame()).image;
+        codec.dispose();
+      }
+    } on Object {
+      image = null;
+    }
+    if (!mounted || generation != _generation) {
+      image?.dispose();
+      return;
+    }
+    setState(() => _source = image);
+  }
+
+  /// Blurs the mask once with the backdrop's blur, in mask pixels.
+  Future<void> _bake(ui.Image source, double sigma, Size size) async {
+    final key = (sigma, size);
+    _maskKey = key;
+    final generation = _generation;
+    final recorder = ui.PictureRecorder();
+    Canvas(recorder).drawImage(
+      source,
+      Offset.zero,
+      Paint()
+        ..imageFilter = ImageFilter.blur(
+          sigmaX: sigma,
+          sigmaY: sigma,
+          tileMode: TileMode.clamp,
+        ),
+    );
+    final picture = recorder.endRecording();
+    final result = await picture.toImage(source.width, source.height);
+    picture.dispose();
+    if (!mounted || generation != _generation || _maskKey != key) {
+      result.dispose();
+      return;
+    }
+    setState(() {
+      _mask?.dispose();
+      _mask = result;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final settings = ref.watch(
+      shellSettingsProvider.select((value) => value.lockScreen),
+    );
+    final outputName = ref.watch(
+      displayLayoutProvider.select((layout) => layout?.mainOutput?.name),
+    );
+    final assignment = ref.watch(
+      wallpaperControllerProvider.select((state) => state.assignment),
+    );
+    final resource = outputName == null
+        ? assignment.all
+        : assignment.forOutput(outputName);
+    final alignment = outputName == null
+        ? assignment.spanAlignment
+        : assignment.alignmentForOutput(outputName);
+    final wallpaper =
+        settings.useSystemWallpaper &&
+            resource.kind == WallpaperResourceKind.file
+        ? resource.path
+        : null;
+    if (wallpaper != _wallpaper) {
+      _wallpaper = wallpaper;
+      _forget();
+      if (wallpaper != null) {
+        _load(wallpaper);
+      }
+    }
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final source = _source;
+        final size = constraints.biggest;
+        if (source == null || size.isEmpty) {
+          return const SizedBox.shrink();
+        }
+        final cover = math.max(
+          size.width / source.width,
+          size.height / source.height,
+        );
+        final sigma = settings.blurRadius / cover;
+        if (sigma > 0.0 && _maskKey != (sigma, size)) {
+          _bake(source, sigma, size);
+        }
+        final mask = sigma > 0.0 ? _mask : source;
+        if (mask == null) {
+          return const SizedBox.shrink();
+        }
+        final matrix = Matrix4.diagonal3Values(cover, cover, 1.0)
+          ..setTranslationRaw(
+            (size.width - source.width * cover) * (alignment.x + 1) / 2,
+            (size.height - source.height * cover) * (alignment.y + 1) / 2,
+            0.0,
+          );
+        return IgnorePointer(
+          child: ShaderMask(
+            blendMode: BlendMode.dstIn,
+            shaderCallback: (_) => ImageShader(
+              mask,
+              TileMode.clamp,
+              TileMode.clamp,
+              matrix.storage,
+              filterQuality: FilterQuality.medium,
+            ),
+            child: const _LockBackdrop(),
+          ),
+        );
+      },
     );
   }
 }

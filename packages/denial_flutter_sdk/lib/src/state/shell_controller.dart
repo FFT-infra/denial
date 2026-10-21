@@ -85,6 +85,8 @@ class ShellController extends Notifier<ShellState>
 
   void closeWindow(DenialWindow window) => _bridge.closeWindow(window);
 
+  void navigateBack(DenialWindow window) => _bridge.navigateBack(window);
+
   void focusWindow(DenialWindow window) {
     if (!window.isUserApp) return;
     state = state.copyWith(foregroundObjectId: window.objectId);

@@ -91,6 +91,21 @@ final class BridgeWindowsClient {
     );
   }
 
+  /// Sends the system Back action to [window], as Android's navigation bar
+  /// does: the compositor taps the Back key at the window's keyboard focus.
+  void navigateBack(DenialWindow window) {
+    if (window.windowId <= 0) {
+      return;
+    }
+
+    _context.sendWire(
+      _context.codec.encodeWindowRequest(
+        wire.WindowRequestKind.NavigateBack,
+        windowId: window.windowId,
+      ),
+    );
+  }
+
   /// Releases the native last-frame texture retained for a finished close
   /// animation. Native also owns a bounded watchdog, so a lost message cannot
   /// leak a client buffer or Flutter texture.

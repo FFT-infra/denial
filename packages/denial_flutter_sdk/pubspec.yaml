@@ -55,6 +55,8 @@ flutter:
   - assets/branding/denial-dark.svg
   - assets/icons/application-default-icon.svg
   - assets/wallpapers/trails-h-accent-9-dark.png
+  shaders:
+  - shaders/window_glass.frag
   fonts:
   - family: JetBrainsMono
     fonts:
@@ -64,3 +66,6 @@ flutter:
       weight: 500
     - asset: assets/fonts/JetBrainsMono-Bold.ttf
       weight: 700
+  - family: RobotoFlex
+    fonts:
+    - asset: assets/fonts/roboto_flex/RobotoFlex.ttf

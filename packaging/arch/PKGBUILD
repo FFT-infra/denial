@@ -236,6 +236,9 @@ package() {
     "$repository_root/packages/denial_flutter_sdk/assets/fonts/JetBrainsMono.sha256" \
     "$pkgdir/usr/share/doc/denial/JETBRAINS_MONO.sha256"
   install -Dm644 \
+    "$repository_root/packages/denial_flutter_sdk/assets/fonts/roboto_flex/RobotoFlex.sha256" \
+    "$pkgdir/usr/share/doc/denial/ROBOTO_FLEX.sha256"
+  install -Dm644 \
     "$repository_root/third_party/bibata/Bibata_Cursor-v2.0.7-source.tar.gz" \
     "$pkgdir/usr/share/doc/denial/sources/Bibata_Cursor-v2.0.7-source.tar.gz"
   install -Dm644 "$repository_root/LICENSES/CC-BY-SA-4.0.txt" \
@@ -244,6 +247,8 @@ package() {
     "$pkgdir/usr/share/licenses/denial/GPL-3.0-only.txt"
   install -Dm644 "$repository_root/packages/denial_flutter_sdk/assets/fonts/OFL.txt" \
     "$pkgdir/usr/share/licenses/denial/OFL-1.1.txt"
+  install -Dm644 "$repository_root/packages/denial_flutter_sdk/assets/fonts/roboto_flex/OFL.txt" \
+    "$pkgdir/usr/share/licenses/denial/OFL-1.1-RobotoFlex.txt"
   install -Dm644 "$repository_root/LICENSE" \
     "$pkgdir/usr/share/licenses/denial/LICENSE"
   install_runtime_version

@@ -7,6 +7,8 @@ use std::collections::HashMap;
 pub(super) struct RuntimeState {
     #[cfg(feature = "flutter")]
     pub(super) fingerprint: fingerprint_presentation::Controller,
+    #[cfg(feature = "flutter")]
+    pub(super) screen_off_touch: screen_off_touch::Filter,
     pub(super) pending: HashSet<crtc::Handle>,
     pub(super) completed_page_flips: VecDeque<PageFlipCompletion>,
     pub(super) presentation_blanking_limits: HashMap<crtc::Handle, Duration>,
@@ -313,7 +315,7 @@ impl RuntimeState {
 #[cfg(all(test, feature = "flutter"))]
 mod tests {
     use super::*;
-use std::collections::HashMap;
+    use std::collections::HashMap;
 
     #[test]
     fn replacement_rehydration_waits_for_the_first_input_layout() {

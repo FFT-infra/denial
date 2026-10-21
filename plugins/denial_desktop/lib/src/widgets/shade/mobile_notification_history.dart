@@ -9,6 +9,8 @@ import 'package:denial_flutter_sdk/localization.dart';
 import 'package:denial_flutter_sdk/system_services.dart';
 import 'package:denial_flutter_sdk/state.dart';
 import 'package:denial_flutter_sdk/motion.dart';
+import 'package:denial_flutter_sdk/rendering.dart'
+    show WindowBackdropCache, WindowBackdropMotion;
 import 'package:denial_flutter_sdk/shell_theme.dart';
 
 import '../notification_banner.dart';
@@ -44,6 +46,9 @@ class _MobileNotificationHistoryState
     with SingleTickerProviderStateMixin {
   late final AnimationController _entrance;
   final ScrollController _scroll = ScrollController();
+  final _rowMotion = _RowMotion();
+  Animation<double>? _motionProgress;
+  Listenable? _motion;
   bool _armed = true;
   bool _reducedMotion = false;
   bool _acknowledgeScheduled = false;
@@ -116,9 +121,23 @@ class _MobileNotificationHistoryState
     });
   }
 
+  /// Everything that moves a card on screen without repainting it, for the
+  /// cached glass slices: the shade, the entrance, scrolling, and row layout
+  /// or dismissal. The same merge while the shade progress is unchanged.
+  Listenable _motionFor(Animation<double> progress) {
+    if (!identical(progress, _motionProgress)) {
+      _motionProgress = progress;
+      _motion = Listenable.merge([progress, _entrance, _scroll, _rowMotion]);
+    }
+    return _motion!;
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(desktopNotificationsProvider);
+    final cachedGlass =
+        context.shellTheme.effectivePanelOpacity < 1 &&
+        WindowBackdropCache.maybeOf(context) != null;
     final controller = ref.read(desktopNotificationsProvider.notifier);
     final locked = ref.watch(
       referenceShellProvider.select((state) => state.lockLayerVisible),
@@ -139,89 +158,118 @@ class _MobileNotificationHistoryState
           _scroll.hasClients &&
           _scroll.position.hasContentDimensions &&
           _scroll.position.maxScrollExtent <= _scroll.position.minScrollExtent,
-      child: CustomScrollView(
-        key: const PageStorageKey('mobile-notification-history'),
-        controller: _scroll,
-        physics: const _HistoryScrollPhysics(),
-        primary: false,
-        clipBehavior: Clip.none,
-        slivers: [
-          NotificationShadeList(
-            progress: widget.progress,
-            entrance: _entrance,
-            delegate: SliverChildBuilderDelegate(
-              (context, index) {
-                if (index == records.length) {
-                  final padding = MediaQuery.viewPaddingOf(context);
-                  final metrics = MobileUiMetrics.of(context);
+      child: WindowBackdropMotion(
+        motion: _motionFor(widget.progress),
+        child: CustomScrollView(
+          key: const PageStorageKey('mobile-notification-history'),
+          controller: _scroll,
+          physics: const _HistoryScrollPhysics(),
+          primary: false,
+          clipBehavior: Clip.none,
+          slivers: [
+            NotificationShadeList(
+              progress: widget.progress,
+              entrance: _entrance,
+              opaqueRows: cachedGlass,
+              onRowsMoved: _rowMotion.moved,
+              delegate: SliverChildBuilderDelegate(
+                (context, index) {
+                  if (index == records.length) {
+                    final padding = MediaQuery.viewPaddingOf(context);
+                    final metrics = MobileUiMetrics.of(context);
+                    return _ColorOsNotificationReveal(
+                      reveal: _revealOf(index),
+                      index: index,
+                      cachedGlass: cachedGlass,
+                      child: Padding(
+                        padding: EdgeInsets.fromLTRB(
+                          padding.left +
+                              metrics.visual(
+                                MobileNotificationCard.horizontalMargin,
+                              ),
+                          0,
+                          padding.right +
+                              metrics.visual(
+                                MobileNotificationCard.horizontalMargin,
+                              ),
+                          metrics.visual(MobileNotificationMetrics.rowSpacing),
+                        ),
+                        child: Builder(
+                          builder: (context) => NotificationReveal.revealed(
+                            context,
+                            const Align(
+                              alignment: Alignment.centerRight,
+                              child: ClearNotificationHistoryButton(),
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  }
+                  final record = records[index];
                   return _ColorOsNotificationReveal(
-                    entrance: _entrance,
+                    reveal: _revealOf(index),
                     index: index,
-                    child: Padding(
-                      padding: EdgeInsets.fromLTRB(
-                        padding.left +
-                            metrics.visual(
-                              MobileNotificationCard.horizontalMargin,
-                            ),
-                        0,
-                        padding.right +
-                            metrics.visual(
-                              MobileNotificationCard.horizontalMargin,
-                            ),
-                        metrics.visual(MobileNotificationMetrics.rowSpacing),
-                      ),
-                      child: const Align(
-                        alignment: Alignment.centerRight,
-                        child: ClearNotificationHistoryButton(),
-                      ),
+                    cachedGlass: cachedGlass,
+                    child: _HistoryNotification(
+                      key: ValueKey(record.notification.id),
+                      record: record,
+                      preview: preview,
+                      interactive: !locked,
+                      onDismiss: () =>
+                          controller.dismissFromHistory(record.notification.id),
+                      onOpen: () {
+                        if (controller.invokeDefaultAction(
+                          record.notification.id,
+                        )) {
+                          ref
+                              .read(referenceShellProvider.notifier)
+                              .closeQuickSettings();
+                        }
+                      },
+                      onAction: (key) =>
+                          controller.invokeAction(record.notification.id, key),
                     ),
                   );
-                }
-                final record = records[index];
-                return _ColorOsNotificationReveal(
-                  entrance: _entrance,
-                  index: index,
-                  child: _HistoryNotification(
-                    key: ValueKey(record.notification.id),
-                    record: record,
-                    preview: preview,
-                    interactive: !locked,
-                    onDismiss: () =>
-                        controller.dismissFromHistory(record.notification.id),
-                    onOpen: () {
-                      if (controller.invokeDefaultAction(
-                        record.notification.id,
-                      )) {
-                        ref
-                            .read(referenceShellProvider.notifier)
-                            .closeQuickSettings();
-                      }
-                    },
-                    onAction: (key) =>
-                        controller.invokeAction(record.notification.id, key),
-                  ),
-                );
-              },
-              childCount:
-                  records.length + (records.isNotEmpty && !locked ? 1 : 0),
-              findChildIndexCallback: (key) =>
-                  key is ValueKey<int> && indices.containsKey(key.value)
-                  ? indices[key.value]
-                  : null,
+                },
+                childCount:
+                    records.length + (records.isNotEmpty && !locked ? 1 : 0),
+                findChildIndexCallback: (key) =>
+                    key is ValueKey<int> && indices.containsKey(key.value)
+                    ? indices[key.value]
+                    : null,
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
+
+  /// Rows past the last stagger share one reveal.
+  Animation<double> _revealOf(int index) {
+    final stagger = index.clamp(0, Motion.notificationHistoryMaxStagger);
+    return _reveals[stagger] ??= _entrance.drive(
+      Animatable.fromCallback(
+        (entrance) => _ColorOsNotificationReveal.revealAt(entrance, stagger),
+      ),
+    );
+  }
+
+  final _reveals = <int, Animation<double>>{};
 
   @override
   void dispose() {
     widget.progress.removeListener(_observeProgress);
     _entrance.dispose();
     _scroll.dispose();
+    _rowMotion.dispose();
     super.dispose();
   }
+}
+
+class _RowMotion extends ChangeNotifier {
+  void moved() => notifyListeners();
 }
 
 /// Separate notification rows reveal with alpha, scale, and negative vertical
@@ -229,50 +277,61 @@ class _MobileNotificationHistoryState
 /// of treating the notification center as a horizontally sliding drawer.
 class _ColorOsNotificationReveal extends StatelessWidget {
   const _ColorOsNotificationReveal({
-    required this.entrance,
+    required this.reveal,
     required this.index,
+    required this.cachedGlass,
     required this.child,
   });
 
-  final Animation<double> entrance;
+  /// The row's eased reveal: [revealAt] its stagger.
+  final Animation<double> reveal;
   final int index;
+
+  /// Over cached glass the row fades through [NotificationReveal], without
+  /// an opacity layer, and its text scales as an image.
+  final bool cachedGlass;
   final Widget child;
+
+  /// The row's eased reveal at [entrance], after its stagger.
+  static double revealAt(double entrance, int index) {
+    final staggerIndex = index.clamp(0, Motion.notificationHistoryMaxStagger);
+    final duration = Motion.notificationHistorySlide.inMilliseconds;
+    final stagger = Motion.notificationHistoryStagger.inMilliseconds;
+    final total = duration + stagger * Motion.notificationHistoryMaxStagger;
+    final phase = ((entrance * total - staggerIndex * stagger) / duration)
+        .clamp(0.0, 1.0)
+        .toDouble();
+    return Curves.easeOutCubic.transform(phase);
+  }
 
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: entrance,
-      child: child,
+      animation: reveal,
+      child: cachedGlass
+          ? NotificationReveal(reveal: reveal, child: child)
+          : child,
       builder: (context, child) {
         final staggerIndex = index.clamp(
           0,
           Motion.notificationHistoryMaxStagger,
         );
-        final duration = Motion.notificationHistorySlide.inMilliseconds;
-        final stagger = Motion.notificationHistoryStagger.inMilliseconds;
-        final total = duration + stagger * Motion.notificationHistoryMaxStagger;
-        final phase =
-            ((entrance.value * total - staggerIndex * stagger) / duration)
-                .clamp(0.0, 1.0)
-                .toDouble();
-        final value = Curves.easeOutCubic.transform(phase);
+        final value = reveal.value;
         final initialScale = (0.85 - staggerIndex * 0.1)
             .clamp(0.0, 1.0)
             .toDouble();
         final baseSpacing = -30.0 * staggerIndex;
         final initialSpacing =
             baseSpacing - (1 - initialScale) * baseSpacing.abs();
-        return Opacity(
-          opacity: value,
-          child: Transform.translate(
-            offset: Offset(0, initialSpacing * (1 - value)),
-            child: Transform.scale(
-              scale: initialScale + (1 - initialScale) * value,
-              alignment: Alignment.topCenter,
-              child: child,
-            ),
+        final moved = Transform.translate(
+          offset: Offset(0, initialSpacing * (1 - value)),
+          child: Transform.scale(
+            scale: initialScale + (1 - initialScale) * value,
+            alignment: Alignment.topCenter,
+            child: child,
           ),
         );
+        return cachedGlass ? moved : Opacity(opacity: value, child: moved);
       },
     );
   }
@@ -330,6 +389,7 @@ class _HistoryNotification extends StatelessWidget {
             notification: notification,
             interactive: interactive,
             groupedBackdrop: true,
+            cachedBackdrop: true,
             previewMode: preview,
             onDefaultAction: record.active ? onOpen : null,
             onAction: record.active ? onAction : null,

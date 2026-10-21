@@ -41,6 +41,56 @@ class AppLocalizationsEn extends AppLocalizations {
   String get homeResizeWidget => 'Resize widget';
 
   @override
+  String get homeFolderDefaultName => 'Folder';
+
+  @override
+  String get homeFolderGames => 'Games';
+
+  @override
+  String get homeFolderInternet => 'Internet';
+
+  @override
+  String get homeFolderOffice => 'Office';
+
+  @override
+  String get homeFolderGraphics => 'Graphics';
+
+  @override
+  String get homeFolderMedia => 'Media';
+
+  @override
+  String get homeFolderDevelopment => 'Development';
+
+  @override
+  String get homeFolderEducation => 'Education';
+
+  @override
+  String get homeFolderScience => 'Science';
+
+  @override
+  String get homeFolderSystem => 'System';
+
+  @override
+  String get homeFolderUtilities => 'Utilities';
+
+  @override
+  String get homeFolderSettings => 'Settings';
+
+  @override
+  String get homeFolderRename => 'Rename folder';
+
+  @override
+  String homeFolderApps(String name, int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count apps',
+      one: '1 app',
+    );
+    return '$name, $_temp0';
+  }
+
+  @override
   String get actionCancel => 'Cancel';
 
   @override
@@ -1234,7 +1284,7 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
-  String get quickSettingsAutomatic => 'Automatic';
+  String get quickSettingsAutoRotate => 'Auto-rotate';
 
   @override
   String get quickSettingsBalanced => 'Balanced';
@@ -1249,18 +1299,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get quickSettingsControls => 'Controls';
 
   @override
-  String quickSettingsDate(String weekday, int day) {
-    return '$weekday $day';
-  }
-
-  @override
   String get quickSettingsHighPerformance => 'High performance';
 
   @override
   String get quickSettingsKeyboard => 'Keyboard';
-
-  @override
-  String get quickSettingsLocked => 'Locked';
 
   @override
   String get quickSettingsNormal => 'Normal';
@@ -1283,9 +1325,6 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get quickSettingsPerformance => 'Performance';
-
-  @override
-  String get quickSettingsRotation => 'Rotation';
 
   @override
   String get quickSettingsSettingsUnavailable => 'Settings are unavailable.';
@@ -4977,4 +5016,79 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get inputDeckRightClick => 'Right click';
+
+  @override
+  String get lockEnterPin => 'Enter PIN';
+
+  @override
+  String lockPinProgress(int entered, int length) {
+    return 'PIN, $entered of $length digits entered';
+  }
+
+  @override
+  String get lockPinObscured => 'PIN, obscured';
+
+  @override
+  String get lockWrongPin => 'Wrong PIN';
+
+  @override
+  String get lockUsePassword => 'Use password';
+
+  @override
+  String get lockUsePin => 'Use PIN';
+
+  @override
+  String get lockPinDelete => 'Delete';
+
+  @override
+  String get settingsLockPinTitle => 'PIN';
+
+  @override
+  String get settingsLockPinLabel => 'Unlock with a PIN';
+
+  @override
+  String get settingsLockPinDescription =>
+      'Type a short numeric PIN on the lock screen instead of your password. The password still unlocks too, and everything else keeps asking for it.';
+
+  @override
+  String settingsLockPinOn(int length) {
+    return 'On, $length digits';
+  }
+
+  @override
+  String get settingsLockPinOff => 'Off';
+
+  @override
+  String get settingsLockPinSetUp => 'Set up PIN';
+
+  @override
+  String get settingsLockPinChange => 'Change PIN';
+
+  @override
+  String get settingsLockPinRemove => 'Remove PIN';
+
+  @override
+  String get settingsLockPinSave => 'Save PIN';
+
+  @override
+  String get settingsLockPinPassword => 'Account password';
+
+  @override
+  String get settingsLockPinNew => 'New PIN';
+
+  @override
+  String get settingsLockPinConfirm => 'Confirm PIN';
+
+  @override
+  String get settingsLockPinLengthHint => '4 to 12 digits';
+
+  @override
+  String get settingsLockPinMismatch => 'The PINs don’t match';
+
+  @override
+  String get settingsLockPinWrongPassword => 'Wrong password';
+
+  @override
+  String get settingsLockPinUnavailable =>
+      'Couldn’t change the PIN. Try again.';
 }

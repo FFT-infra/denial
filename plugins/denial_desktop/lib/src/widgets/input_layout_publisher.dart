@@ -29,8 +29,8 @@ class _InputLayoutPublisherState extends ConsumerState<InputLayoutPublisher> {
           inputWindow: state.inputWindow,
           launchRequestId: state.launchRequest?.requestId,
           launchingObjectId: state.launchingObjectId,
-          quickSettingsVisible: state.quickSettingsVisible,
-          quickSettingsProgress: state.quickSettingsDragProgress,
+          // The shade's input region does not follow its drag.
+          quickSettingsActive: state.quickSettingsEngaged,
           edgePanelVisible: state.edgePanelVisible,
           edgePanelProgress: state.edgePanelDragProgress,
           edgePanelViewportScroll: state.edgePanelViewportScroll,

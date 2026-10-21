@@ -102,7 +102,7 @@ mixin _PeriodicRefresh<StateT> on Notifier<StateT> {
     _refreshing = false;
 
     Future<void> run() async {
-      if (!isRefreshActive(generation) || _refreshing) {
+      if (!isRefreshActive(generation) || _refreshing || ref.isPaused) {
         return;
       }
       _refreshing = true;
@@ -115,10 +115,26 @@ mixin _PeriodicRefresh<StateT> on Notifier<StateT> {
       }
     }
 
+    Timer? timer;
+    void schedule() {
+      timer?.cancel();
+      timer = Timer.periodic(interval, (_) => unawaited(run()));
+    }
+
     scheduleMicrotask(() => unawaited(run()));
-    final timer = Timer.periodic(interval, (_) => unawaited(run()));
+    schedule();
+    // A provider whose every listener is hidden (TickerMode off) is paused:
+    // stop waking the device for it, and catch up when one is shown again.
+    ref.onCancel(() {
+      timer?.cancel();
+      timer = null;
+    });
+    ref.onResume(() {
+      schedule();
+      unawaited(run());
+    });
     ref.onDispose(() {
-      timer.cancel();
+      timer?.cancel();
       if (generation == _refreshGeneration) {
         _refreshGeneration++;
         _refreshing = false;

@@ -30,7 +30,9 @@ class SystemKeyboardLayer extends ConsumerWidget {
       inputDeckProvider.select((deck) => deck.activeOutput != null),
     );
     final showKeyboard =
-        enabled && (!deckActive || ref.watch(referenceShellProvider).locked);
+        enabled &&
+        (!deckActive ||
+            ref.watch(referenceShellProvider.select((state) => state.locked)));
     return Offstage(
       offstage: !showKeyboard,
       child: TickerMode(
@@ -97,9 +99,10 @@ class _MobileKeyboardViewportState
           progress: state.edgePanelDragProgress,
           scroll: state.edgePanelViewportScroll,
         ));
-        return RetainedTranslation(
+        return CompositedTranslation(
           translation: _translation,
-          child: RepaintBoundary(child: widget.child),
+          devicePixelRatio: MediaQuery.devicePixelRatioOf(context),
+          child: widget.child,
         );
       },
     );

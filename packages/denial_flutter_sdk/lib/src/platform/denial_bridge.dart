@@ -289,6 +289,9 @@ class DenialBridge {
 
   void closeWindow(DenialWindow window) => _windows.closeWindow(window);
 
+  /// Sends the system Back action to [window].
+  void navigateBack(DenialWindow window) => _windows.navigateBack(window);
+
   /// Releases the native last-frame texture retained for a finished close
   /// animation. Native also owns a bounded watchdog, so a lost message cannot
   /// leak a client buffer or Flutter texture.

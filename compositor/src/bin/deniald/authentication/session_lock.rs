@@ -158,6 +158,7 @@ mod tests {
             Box::new(UnavailableBackend {
                 reason: "test backend".into(),
             }),
+            None,
             false,
         )
         .unwrap();

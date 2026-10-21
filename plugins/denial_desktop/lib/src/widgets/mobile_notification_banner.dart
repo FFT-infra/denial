@@ -79,21 +79,33 @@ class _MobileNotificationBannerViewState
           clipBehavior: Clip.none,
           children: [...previous, ?current],
         ),
-        transitionBuilder: (child, animation) => SlideTransition(
-          position: Tween<Offset>(
-            begin: const Offset(0, -1),
-            end: Offset.zero,
-          ).animate(animation),
-          child: AnimatedBuilder(
-            animation: animation,
-            child: child,
-            builder: (context, child) {
-              final exiting = animation.status == AnimationStatus.reverse;
-              return IgnorePointer(
-                ignoring: exiting,
-                child: ExcludeSemantics(excluding: exiting, child: child),
-              );
-            },
+        // The slide repaints only its own boundary, not the overlays and
+        // chrome up to the root.
+        transitionBuilder: (child, animation) => RepaintBoundary(
+          child: SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(0, -1),
+              end: Offset.zero,
+            ).animate(animation),
+            child: AnimatedBuilder(
+              animation: animation,
+              child: child,
+              builder: (context, child) {
+                final exiting = animation.status == AnimationStatus.reverse;
+                // The banner takes input once it has arrived. A region that
+                // followed the slide would republish the native input layout
+                // on every frame of it.
+                return ShellInputScope(
+                  enabled:
+                      animation.isCompleted &&
+                      ShellInputScope.enabledOf(context),
+                  child: IgnorePointer(
+                    ignoring: exiting,
+                    child: ExcludeSemantics(excluding: exiting, child: child),
+                  ),
+                );
+              },
+            ),
           ),
         ),
         child: !_ready || notification == null || notification.historyOnly

@@ -10,7 +10,10 @@ abstract interface class AuthenticationService {
 
   void synchronize();
   void lock();
-  void begin();
+
+  /// Starts the preferred credential, the PIN when one is set, or the account
+  /// password when [password] is true.
+  void begin({bool password = false});
   void respond({
     required int attemptId,
     required int promptSequence,
@@ -46,7 +49,10 @@ class NativeAuthenticationService implements AuthenticationService {
   void lock() => _send(AuthenticationPacketKind.lock);
 
   @override
-  void begin() => _send(AuthenticationPacketKind.begin);
+  void begin({bool password = false}) => _send(
+    AuthenticationPacketKind.begin,
+    argument: password ? AuthenticationProtocol.beginPassword : 0,
+  );
 
   @override
   void respond({
@@ -79,13 +85,18 @@ class NativeAuthenticationService implements AuthenticationService {
     _send(AuthenticationPacketKind.cancel, attemptId: attemptId);
   }
 
-  void _send(AuthenticationPacketKind kind, {int attemptId = 0}) {
+  void _send(
+    AuthenticationPacketKind kind, {
+    int attemptId = 0,
+    int argument = 0,
+  }) {
     if (_disposed) {
       return;
     }
     final packet = AuthenticationProtocol.encodeCommand(
       kind,
       attemptId: attemptId,
+      argument: argument,
     );
     if (packet == null) {
       return;
@@ -107,7 +118,8 @@ class NativeAuthenticationService implements AuthenticationService {
         (packet.kind == AuthenticationPacketKind.state ||
             packet.kind == AuthenticationPacketKind.prompt ||
             packet.kind == AuthenticationPacketKind.result ||
-            packet.kind == AuthenticationPacketKind.fingerprintFeedback)) {
+            packet.kind == AuthenticationPacketKind.fingerprintFeedback ||
+            packet.kind == AuthenticationPacketKind.credential)) {
       _events.add(packet);
     }
     return null;

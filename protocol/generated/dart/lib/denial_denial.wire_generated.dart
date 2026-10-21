@@ -167,7 +167,8 @@ enum WindowRequestKind {
   ConfigureSystemBar(6),
   SwitchWorkspace(7),
   MoveWindowToWorkspace(8),
-  MinimizeWindow(9);
+  MinimizeWindow(9),
+  NavigateBack(10);
 
   final int value;
   const WindowRequestKind(this.value);
@@ -184,6 +185,7 @@ enum WindowRequestKind {
       case 7: return WindowRequestKind.SwitchWorkspace;
       case 8: return WindowRequestKind.MoveWindowToWorkspace;
       case 9: return WindowRequestKind.MinimizeWindow;
+      case 10: return WindowRequestKind.NavigateBack;
       default: throw StateError('Invalid value $value for bit flag enum');
     }
   }
@@ -192,7 +194,7 @@ enum WindowRequestKind {
       value == null ? null : WindowRequestKind.fromValue(value);
 
   static const int minValue = 0;
-  static const int maxValue = 9;
+  static const int maxValue = 10;
   static const fb.Reader<WindowRequestKind> reader = _WindowRequestKindReader();
 }
 
@@ -1041,6 +1043,40 @@ class _CursorStateKindReader extends fb.Reader<CursorStateKind> {
       CursorStateKind.fromValue(const fb.Uint8Reader().read(bc, offset));
 }
 
+enum InputEdge {
+  Left(0),
+  Right(1);
+
+  final int value;
+  const InputEdge(this.value);
+
+  factory InputEdge.fromValue(int value) {
+    switch (value) {
+      case 0: return InputEdge.Left;
+      case 1: return InputEdge.Right;
+      default: throw StateError('Invalid value $value for bit flag enum');
+    }
+  }
+
+  static InputEdge? _createOrNull(int? value) =>
+      value == null ? null : InputEdge.fromValue(value);
+
+  static const int minValue = 0;
+  static const int maxValue = 1;
+  static const fb.Reader<InputEdge> reader = _InputEdgeReader();
+}
+
+class _InputEdgeReader extends fb.Reader<InputEdge> {
+  const _InputEdgeReader();
+
+  @override
+  int get size => 1;
+
+  @override
+  InputEdge read(fb.BufferContext bc, int offset) =>
+      InputEdge.fromValue(const fb.Uint8Reader().read(bc, offset));
+}
+
 enum ShortcutTargetTypeId {
   NONE(0),
   ShortcutDenialActionTarget(1),
@@ -1505,6 +1541,76 @@ class InputWindowRegionObjectBuilder extends fb.ObjectBuilder {
     return fbBuilder.buffer;
   }
 }
+class EdgeSwipeRegion {
+  EdgeSwipeRegion._(this._bc, this._bcOffset);
+
+  static const fb.Reader<EdgeSwipeRegion> reader = _EdgeSwipeRegionReader();
+
+  final fb.BufferContext _bc;
+  final int _bcOffset;
+
+  WireRect get rect => WireRect.reader.read(_bc, _bcOffset + 0);
+  InputEdge get edge => InputEdge.fromValue(const fb.Uint8Reader().read(_bc, _bcOffset + 32));
+
+  @override
+  String toString() {
+    return 'EdgeSwipeRegion{rect: ${rect}, edge: ${edge}}';
+  }
+}
+
+class _EdgeSwipeRegionReader extends fb.StructReader<EdgeSwipeRegion> {
+  const _EdgeSwipeRegionReader();
+
+  @override
+  int get size => 40;
+
+  @override
+  EdgeSwipeRegion createObject(fb.BufferContext bc, int offset) => 
+    EdgeSwipeRegion._(bc, offset);
+}
+
+class EdgeSwipeRegionBuilder {
+  EdgeSwipeRegionBuilder(this.fbBuilder);
+
+  final fb.Builder fbBuilder;
+
+  int finish(fb.StructBuilder rect, InputEdge edge) {
+    fbBuilder.pad(7);
+    fbBuilder.putUint8(edge.value);
+    rect();
+    return fbBuilder.offset;
+  }
+
+}
+
+class EdgeSwipeRegionObjectBuilder extends fb.ObjectBuilder {
+  final WireRectObjectBuilder _rect;
+  final InputEdge _edge;
+
+  EdgeSwipeRegionObjectBuilder({
+    required WireRectObjectBuilder rect,
+    required InputEdge edge,
+  })
+      : _rect = rect,
+        _edge = edge;
+
+  /// Finish building, and store into the [fbBuilder].
+  @override
+  int finish(fb.Builder fbBuilder) {
+    fbBuilder.pad(7);
+    fbBuilder.putUint8(_edge.value);
+    _rect.finish(fbBuilder);
+    return fbBuilder.offset;
+  }
+
+  /// Convenience method to serialize to byte list.
+  @override
+  Uint8List toBytes([String? fileIdentifier]) {
+    final fbBuilder = fb.Builder(deduplicateTables: false);
+    fbBuilder.finish(finish(fbBuilder), fileIdentifier);
+    return fbBuilder.buffer;
+  }
+}
 class InputLayout {
   InputLayout._(this._bc, this._bcOffset);
   factory InputLayout(List<int> bytes) {
@@ -1523,10 +1629,11 @@ class InputLayout {
   List<InputWindowRegion>? get windows => const fb.ListReader<InputWindowRegion>(InputWindowRegion.reader).vTableGetNullable(_bc, _bcOffset, 10);
   List<int>? get visibleSurfaceIds => const fb.ListReader<int>(fb.Uint64Reader()).vTableGetNullable(_bc, _bcOffset, 12);
   List<WireRect>? get softwareKeyboardRegions => const fb.ListReader<WireRect>(WireRect.reader).vTableGetNullable(_bc, _bcOffset, 14);
+  List<EdgeSwipeRegion>? get edgeSwipeRegions => const fb.ListReader<EdgeSwipeRegion>(EdgeSwipeRegion.reader).vTableGetNullable(_bc, _bcOffset, 16);
 
   @override
   String toString() {
-    return 'InputLayout{epoch: ${epoch}, flags: ${flags}, shellRegions: ${shellRegions}, windows: ${windows}, visibleSurfaceIds: ${visibleSurfaceIds}, softwareKeyboardRegions: ${softwareKeyboardRegions}}';
+    return 'InputLayout{epoch: ${epoch}, flags: ${flags}, shellRegions: ${shellRegions}, windows: ${windows}, visibleSurfaceIds: ${visibleSurfaceIds}, softwareKeyboardRegions: ${softwareKeyboardRegions}, edgeSwipeRegions: ${edgeSwipeRegions}}';
   }
 }
 
@@ -1544,7 +1651,7 @@ class InputLayoutBuilder {
   final fb.Builder fbBuilder;
 
   void begin() {
-    fbBuilder.startTable(6);
+    fbBuilder.startTable(7);
   }
 
   int addEpoch(int? epoch) {
@@ -1571,6 +1678,10 @@ class InputLayoutBuilder {
     fbBuilder.addOffset(5, offset);
     return fbBuilder.offset;
   }
+  int addEdgeSwipeRegionsOffset(int? offset) {
+    fbBuilder.addOffset(6, offset);
+    return fbBuilder.offset;
+  }
 
   int finish() {
     return fbBuilder.endTable();
@@ -1584,6 +1695,7 @@ class InputLayoutObjectBuilder extends fb.ObjectBuilder {
   final List<InputWindowRegionObjectBuilder>? _windows;
   final List<int>? _visibleSurfaceIds;
   final List<WireRectObjectBuilder>? _softwareKeyboardRegions;
+  final List<EdgeSwipeRegionObjectBuilder>? _edgeSwipeRegions;
 
   InputLayoutObjectBuilder({
     int? epoch,
@@ -1592,13 +1704,15 @@ class InputLayoutObjectBuilder extends fb.ObjectBuilder {
     List<InputWindowRegionObjectBuilder>? windows,
     List<int>? visibleSurfaceIds,
     List<WireRectObjectBuilder>? softwareKeyboardRegions,
+    List<EdgeSwipeRegionObjectBuilder>? edgeSwipeRegions,
   })
       : _epoch = epoch,
         _flags = flags,
         _shellRegions = shellRegions,
         _windows = windows,
         _visibleSurfaceIds = visibleSurfaceIds,
-        _softwareKeyboardRegions = softwareKeyboardRegions;
+        _softwareKeyboardRegions = softwareKeyboardRegions,
+        _edgeSwipeRegions = edgeSwipeRegions;
 
   /// Finish building, and store into the [fbBuilder].
   @override
@@ -1611,13 +1725,16 @@ class InputLayoutObjectBuilder extends fb.ObjectBuilder {
         : fbBuilder.writeListUint64(_visibleSurfaceIds!);
     final int? softwareKeyboardRegionsOffset = _softwareKeyboardRegions == null ? null
         : fbBuilder.writeListOfStructs(_softwareKeyboardRegions!);
-    fbBuilder.startTable(6);
+    final int? edgeSwipeRegionsOffset = _edgeSwipeRegions == null ? null
+        : fbBuilder.writeListOfStructs(_edgeSwipeRegions!);
+    fbBuilder.startTable(7);
     fbBuilder.addUint64(0, _epoch);
     fbBuilder.addUint32(1, _flags);
     fbBuilder.addOffset(2, shellRegionsOffset);
     fbBuilder.addOffset(3, windowsOffset);
     fbBuilder.addOffset(4, visibleSurfaceIdsOffset);
     fbBuilder.addOffset(5, softwareKeyboardRegionsOffset);
+    fbBuilder.addOffset(6, edgeSwipeRegionsOffset);
     return fbBuilder.endTable();
   }
 

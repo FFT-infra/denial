@@ -137,6 +137,12 @@ impl FrameTimelineManager {
         }
     }
 
+    pub(super) fn has_active_subscription(&self) -> bool {
+        self.subscriptions
+            .values()
+            .any(|subscription| subscription.active)
+    }
+
     fn begin_new_epoch(&mut self) {
         for token in self.grants.keys().copied().collect::<Vec<_>>() {
             self.finish(token, FrameTerminal::AbortedByEpoch);

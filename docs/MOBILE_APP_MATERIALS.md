@@ -2,8 +2,8 @@
 
 Status: accepted (Islands, 2026-10-21; smoke islands and the light appearance
 the same day).
-Implemented in `denial-apps/libraries/denial-look`, `denial-look-gpui` and
-Messages. This governs native phone
+Implemented in `denial-apps/libraries/denial-look`, `denial-look-gpui`,
+Messages and Calls. This governs native phone
 apps (Messages, Phone, Contacts, Settings and later ones). Desktop apps follow
 [APPLICATION_MATERIALS.md](APPLICATION_MATERIALS.md). The phone shell's insets
 protocol is in [MOBILE_APP_INSETS.md](MOBILE_APP_INSETS.md).
@@ -61,7 +61,7 @@ Rules that follow from the table:
   goes inside it.
 - Errors in chips use the error text color with an icon, not a red fill. The
   destructive action fill is #D2453B and appears only on a confirm button and
-  the end-call button.
+  the end-call button. The call fill #3E9B5B appears only on Call and Answer.
 - GPUI has no backdrop filter and deniald has no client blur protocol. Glass
   groups and chips are tint only, over the compositor's frost. Do not fake blur
   in the client and do not draw the wallpaper into the app.
@@ -260,7 +260,7 @@ Apps take every value from denial-look. No hardcoded colors, radii, alphas or
 durations in apps.
 
 - `palette` for dark and light, selected from the saved appearance, plus error
-  text and destructive fill.
+  text, the destructive fill and the call fill.
 - `INSET` (gutter), `MIN_RADIUS`, `nested_radius`, `Look::group_radius`, and a
   bubble radius helper equal to max(4, R).
 - Group and chip alpha helpers that apply the floors for the current
@@ -290,5 +290,6 @@ request. A successful build is not visual acceptance.
 1. Fixed floors or floors derived from frost brightness published by the shell.
 2. Pins are app-local (like drafts) until dmail stores them, if it should.
 3. Per-item opacity for the scroll fade in gpui-touch lists is not yet checked.
-4. `org.dmail.Voice1` returns NotSupported for everything; Dialer and in-call
-   need a "Calls aren't supported yet" state until it is implemented.
+4. `org.dmail.Voice1` returns NotSupported for everything. Until it is
+   implemented, Calls mocks calls on screen and its call screen's top group
+   says "Mock call".

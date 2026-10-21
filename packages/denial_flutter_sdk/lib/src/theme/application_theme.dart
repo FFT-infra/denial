@@ -71,9 +71,7 @@ class DenialApplicationTheme {
         transparency: shell.transparencyMode,
         windowOpacity: shell.transparencyMode == ShellTransparencyMode.glass
             ? shell.glass.windowOpacity
-            : shell.effectivePanelOpacity == 1
-            ? 1
-            : DenialMaterialPolicy.minimumWindowOpacity,
+            : shell.effectivePanelOpacity,
         appPanelOpacity: shell.transparencyMode == ShellTransparencyMode.glass
             ? shell.glass.appPanelOpacity
             : shell.effectivePanelOpacity,

@@ -1700,6 +1700,11 @@ impl WaylandFrontend {
         self.screencopy.image_copy_capture.cleanup();
     }
 
+    #[cfg(feature = "flutter")]
+    pub(crate) fn has_pending_screencopies(&self) -> bool {
+        !self.screencopy.pending.is_empty()
+    }
+
     pub(crate) fn has_pending_screencopy_for_output(&self, output: OutputId) -> bool {
         self.screencopy
             .pending

@@ -4,15 +4,43 @@ import 'package:denial_flutter_sdk/state.dart' show ShellState;
 
 import 'reference_shell_metrics.dart';
 
+/// Which way the bottom gesture drags the shell's visuals, if at all.
+///
+/// The drag itself changes on every frame of a swipe. It lives in
+/// `ReferenceShellController.gestureDrag`, which only the moving layers
+/// observe; the shell state changes only when this phase does.
+enum GestureDragPhase {
+  idle,
+  up,
+  down,
+  left,
+  right;
+
+  /// The phase of an axis-locked visual drag.
+  static GestureDragPhase of(Offset drag) {
+    if (drag.dx < 0.0) return left;
+    if (drag.dx > 0.0) return right;
+    if (drag.dy < 0.0) return up;
+    if (drag.dy > 0.0) return down;
+    return idle;
+  }
+
+  bool get horizontal => this == left || this == right;
+}
+
+/// The target of the mobile system Back action. See
+/// [ReferenceShellState.backTarget].
+enum MobileBackTarget { none, keyboard, shade, overview, app }
+
 /// Reference UI state over the shared SDK snapshot. Gesture updates reuse its
 /// native indexes; presentation focus may differ while home or recents is shown.
 class ReferenceShellState {
   const ReferenceShellState._({
     required this.platform,
     required this.overviewVisible,
-    required this.gestureDrag,
+    required this.gesture,
     required this.quickSettingsVisible,
-    required this.quickSettingsDrag,
+    required this.quickSettingsDragged,
     required this.quickSettingsDragActive,
     required this.edgePanelVisible,
     required this.edgePanelDrag,
@@ -23,15 +51,16 @@ class ReferenceShellState {
     required this.launchingObjectId,
     required this.launchRequest,
     required this.homeTransitionActive,
+    required this.appSwitchOrder,
   });
 
   factory ReferenceShellState.initial(ShellState platform) {
     return ReferenceShellState._(
       platform: platform,
       overviewVisible: false,
-      gestureDrag: Offset.zero,
+      gesture: GestureDragPhase.idle,
       quickSettingsVisible: false,
-      quickSettingsDrag: Offset.zero,
+      quickSettingsDragged: false,
       quickSettingsDragActive: false,
       edgePanelVisible: false,
       edgePanelDrag: Offset.zero,
@@ -42,6 +71,7 @@ class ReferenceShellState {
       launchingObjectId: null,
       launchRequest: null,
       homeTransitionActive: false,
+      appSwitchOrder: const <int>[],
     );
   }
 
@@ -57,9 +87,12 @@ class ReferenceShellState {
   bool get locked => platform.locked;
 
   final bool overviewVisible;
-  final Offset gestureDrag;
+  final GestureDragPhase gesture;
   final bool quickSettingsVisible;
-  final Offset quickSettingsDrag;
+
+  /// A shade drag holds the shade past closed. The finger's position, which
+  /// changes on every frame, is `ReferenceShellController.quickSettingsDrag`.
+  final bool quickSettingsDragged;
   final bool quickSettingsDragActive;
   final bool edgePanelVisible;
   final Offset edgePanelDrag;
@@ -74,24 +107,13 @@ class ReferenceShellState {
   /// fullscreen primary stage stays hidden until the transition resolves.
   final bool homeTransitionActive;
 
-  double get overviewDragProgress {
-    if (overviewVisible) {
-      return 1.0;
-    }
+  /// App object IDs in stacking order, oldest first, frozen while a sequence
+  /// of quick switches lasts. Each switch raises its target to the top, so
+  /// the live order would only alternate between the two most recent apps.
+  final List<int> appSwitchOrder;
 
-    return (-gestureDrag.dy / 280.0).clamp(0.0, 1.0).toDouble();
-  }
-
-  double get quickSettingsDragProgress {
-    if (quickSettingsVisible) {
-      return 1.0;
-    }
-
-    return (quickSettingsDrag.dy /
-            ReferenceShellMetrics.quickSettingsDragDistance)
-        .clamp(0.0, 1.0)
-        .toDouble();
-  }
+  /// The shade is open or held partly open.
+  bool get quickSettingsEngaged => quickSettingsVisible || quickSettingsDragged;
 
   double get edgePanelDragProgress {
     if (edgePanelVisible) {
@@ -106,9 +128,9 @@ class ReferenceShellState {
   ReferenceShellState copyWith({
     ShellState? platform,
     bool? overviewVisible,
-    Offset? gestureDrag,
+    GestureDragPhase? gesture,
     bool? quickSettingsVisible,
-    Offset? quickSettingsDrag,
+    bool? quickSettingsDragged,
     bool? quickSettingsDragActive,
     bool? edgePanelVisible,
     Offset? edgePanelDrag,
@@ -122,13 +144,14 @@ class ReferenceShellState {
     AppLaunchRequest? launchRequest,
     bool clearLaunchRequest = false,
     bool? homeTransitionActive,
+    List<int>? appSwitchOrder,
   }) {
     return ReferenceShellState._(
       platform: platform ?? this.platform,
       overviewVisible: overviewVisible ?? this.overviewVisible,
-      gestureDrag: gestureDrag ?? this.gestureDrag,
+      gesture: gesture ?? this.gesture,
       quickSettingsVisible: quickSettingsVisible ?? this.quickSettingsVisible,
-      quickSettingsDrag: quickSettingsDrag ?? this.quickSettingsDrag,
+      quickSettingsDragged: quickSettingsDragged ?? this.quickSettingsDragged,
       quickSettingsDragActive:
           quickSettingsDragActive ?? this.quickSettingsDragActive,
       edgePanelVisible: edgePanelVisible ?? this.edgePanelVisible,
@@ -147,6 +170,7 @@ class ReferenceShellState {
           ? null
           : launchRequest ?? this.launchRequest,
       homeTransitionActive: homeTransitionActive ?? this.homeTransitionActive,
+      appSwitchOrder: appSwitchOrder ?? this.appSwitchOrder,
     );
   }
 
@@ -178,26 +202,60 @@ class ReferenceShellState {
     return primaryWindow;
   }
 
+  /// What the system Back action acts on, in Android's order: the keyboard
+  /// first, then the shade, then recents, then the foreground app.
+  MobileBackTarget get backTarget {
+    if (locked || lockLayerVisible || launchTransitionActive) {
+      return MobileBackTarget.none;
+    }
+    if (edgePanelVisible) {
+      return MobileBackTarget.keyboard;
+    }
+    if (quickSettingsEngaged) {
+      return MobileBackTarget.shade;
+    }
+    if (overviewVisible) {
+      return MobileBackTarget.overview;
+    }
+    return primaryWindow == null ? MobileBackTarget.none : MobileBackTarget.app;
+  }
+
   int get openAppWindowCount => openAppWindows.length;
 
   DenialWindow? get appSwitchTargetWindow {
     if (lockLayerVisible ||
         overviewVisible ||
-        quickSettingsDragProgress > 0.0 ||
+        quickSettingsEngaged ||
         edgePanelDragProgress > 0.0) {
       return null;
     }
 
-    final dx = gestureDrag.dx;
-    if (dx == 0.0) {
-      return null;
-    }
-
-    return adjacentOpenAppWindow(dx > 0.0 ? -1 : 1);
+    return switch (gesture) {
+      // Dragging right brings in the previous app, left the next.
+      GestureDragPhase.right => adjacentOpenAppWindow(-1),
+      GestureDragPhase.left => adjacentOpenAppWindow(1),
+      _ => null,
+    };
   }
 
-  DenialWindow? adjacentOpenAppWindow(int direction) =>
-      platform.adjacentAppWindow(foregroundObjectId, direction);
+  DenialWindow? adjacentOpenAppWindow(int direction) {
+    final foreground = foregroundObjectId;
+    final index = foreground == null ? -1 : appSwitchOrder.indexOf(foreground);
+    if (index < 0) {
+      return platform.adjacentAppWindow(foreground, direction);
+    }
+    final step = direction.sign;
+    if (step == 0) {
+      return null;
+    }
+    for (var i = index + step; i >= 0 && i < appSwitchOrder.length; i += step) {
+      final window = openAppWindowsByObjectId[appSwitchOrder[i]];
+      if (window != null) {
+        return window;
+      }
+    }
+    return null;
+  }
 
   DenialWindow? windowByObjectId(int? objectId) =>
       platform.windowByObjectId(objectId);

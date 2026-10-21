@@ -1,9 +1,14 @@
+import 'package:denial_desktop/src/state/reference_shell_metrics.dart';
 import 'package:denial_desktop/src/state/reference_shell_profile.dart';
 
+import 'dart:convert' show jsonDecode;
+import 'dart:io' show File, Platform;
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 import 'dart:ui' show ImageFilter, TileMode;
 
 import 'package:flutter/material.dart' show Icons;
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
@@ -19,9 +24,13 @@ import 'package:denial_flutter_sdk/models.dart';
 import 'package:denial_flutter_sdk/platform.dart';
 import 'package:denial_flutter_sdk/settings.dart';
 import 'package:denial_flutter_sdk/state.dart';
+import 'package:denial_flutter_sdk/system_services.dart'
+    show hapticsServiceProvider, mobileNetworkProvider;
 import 'package:denial_flutter_sdk/motion.dart';
 import 'package:denial_flutter_sdk/shell_theme.dart';
 import 'package:denial_flutter_sdk/tokens.dart';
+import 'package:denial_flutter_sdk/wallpaper.dart'
+    show WallpaperResourceKind, wallpaperControllerProvider;
 
 import '../edge_panel_layer.dart';
 
@@ -30,6 +39,7 @@ import 'package:denial_flutter_sdk/rendering.dart';
 import '../shade/status_glyphs.dart';
 
 part 'lock_authentication_panels.dart';
+part 'lock_pin_stage.dart';
 part 'lock_screen_background.dart';
 part 'lock_screen_pane.dart';
 

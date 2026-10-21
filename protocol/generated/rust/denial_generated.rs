@@ -397,10 +397,10 @@ impl flatbuffers::SimpleToVerifyInSlice for WindowOpacityClass {}
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 pub const ENUM_MIN_WINDOW_REQUEST_KIND: u8 = 0;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MAX_WINDOW_REQUEST_KIND: u8 = 9;
+pub const ENUM_MAX_WINDOW_REQUEST_KIND: u8 = 10;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 #[allow(non_camel_case_types)]
-pub const ENUM_VALUES_WINDOW_REQUEST_KIND: [WindowRequestKind; 10] = [
+pub const ENUM_VALUES_WINDOW_REQUEST_KIND: [WindowRequestKind; 11] = [
   WindowRequestKind::ListWindows,
   WindowRequestKind::GetDisplayLayout,
   WindowRequestKind::CloseWindow,
@@ -411,6 +411,7 @@ pub const ENUM_VALUES_WINDOW_REQUEST_KIND: [WindowRequestKind; 10] = [
   WindowRequestKind::SwitchWorkspace,
   WindowRequestKind::MoveWindowToWorkspace,
   WindowRequestKind::MinimizeWindow,
+  WindowRequestKind::NavigateBack,
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -428,9 +429,10 @@ impl WindowRequestKind {
   pub const SwitchWorkspace: Self = Self(7);
   pub const MoveWindowToWorkspace: Self = Self(8);
   pub const MinimizeWindow: Self = Self(9);
+  pub const NavigateBack: Self = Self(10);
 
   pub const ENUM_MIN: u8 = 0;
-  pub const ENUM_MAX: u8 = 9;
+  pub const ENUM_MAX: u8 = 10;
   pub const ENUM_VALUES: &'static [Self] = &[
     Self::ListWindows,
     Self::GetDisplayLayout,
@@ -442,6 +444,7 @@ impl WindowRequestKind {
     Self::SwitchWorkspace,
     Self::MoveWindowToWorkspace,
     Self::MinimizeWindow,
+    Self::NavigateBack,
   ];
   /// Returns the variant's name or "" if unknown.
   pub fn variant_name(self) -> Option<&'static str> {
@@ -456,6 +459,7 @@ impl WindowRequestKind {
       Self::SwitchWorkspace => Some("SwitchWorkspace"),
       Self::MoveWindowToWorkspace => Some("MoveWindowToWorkspace"),
       Self::MinimizeWindow => Some("MinimizeWindow"),
+      Self::NavigateBack => Some("NavigateBack"),
       _ => None,
     }
   }
@@ -2486,6 +2490,91 @@ impl<'a> flatbuffers::Verifiable for CursorStateKind {
 
 impl flatbuffers::SimpleToVerifyInSlice for CursorStateKind {}
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
+pub const ENUM_MIN_INPUT_EDGE: u8 = 0;
+#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
+pub const ENUM_MAX_INPUT_EDGE: u8 = 1;
+#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
+#[allow(non_camel_case_types)]
+pub const ENUM_VALUES_INPUT_EDGE: [InputEdge; 2] = [
+  InputEdge::Left,
+  InputEdge::Right,
+];
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[repr(transparent)]
+pub struct InputEdge(pub u8);
+#[allow(non_upper_case_globals)]
+impl InputEdge {
+  pub const Left: Self = Self(0);
+  pub const Right: Self = Self(1);
+
+  pub const ENUM_MIN: u8 = 0;
+  pub const ENUM_MAX: u8 = 1;
+  pub const ENUM_VALUES: &'static [Self] = &[
+    Self::Left,
+    Self::Right,
+  ];
+  /// Returns the variant's name or "" if unknown.
+  pub fn variant_name(self) -> Option<&'static str> {
+    match self {
+      Self::Left => Some("Left"),
+      Self::Right => Some("Right"),
+      _ => None,
+    }
+  }
+}
+impl core::fmt::Debug for InputEdge {
+  fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+    if let Some(name) = self.variant_name() {
+      f.write_str(name)
+    } else {
+      f.write_fmt(format_args!("<UNKNOWN {:?}>", self.0))
+    }
+  }
+}
+impl<'a> flatbuffers::Follow<'a> for InputEdge {
+  type Inner = Self;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    let b = unsafe { flatbuffers::read_scalar_at::<u8>(buf, loc) };
+    Self(b)
+  }
+}
+
+impl flatbuffers::Push for InputEdge {
+    type Output = InputEdge;
+    #[inline]
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        unsafe { flatbuffers::emplace_scalar::<u8>(dst, self.0); }
+    }
+}
+
+impl flatbuffers::EndianScalar for InputEdge {
+  type Scalar = u8;
+  #[inline]
+  fn to_little_endian(self) -> u8 {
+    self.0.to_le()
+  }
+  #[inline]
+  #[allow(clippy::wrong_self_convention)]
+  fn from_little_endian(v: u8) -> Self {
+    let b = u8::from_le(v);
+    Self(b)
+  }
+}
+
+impl<'a> flatbuffers::Verifiable for InputEdge {
+  #[inline]
+  fn run_verifier(
+    v: &mut flatbuffers::Verifier, pos: usize
+  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+    use self::flatbuffers::Verifiable;
+    u8::run_verifier(v, pos)
+  }
+}
+
+impl flatbuffers::SimpleToVerifyInSlice for InputEdge {}
+#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 pub const ENUM_MIN_SHORTCUT_TARGET: u8 = 0;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 pub const ENUM_MAX_SHORTCUT_TARGET: u8 = 4;
@@ -3542,6 +3631,117 @@ impl<'a> InputWindowRegion {
 
 }
 
+// struct EdgeSwipeRegion, aligned to 8
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq)]
+pub struct EdgeSwipeRegion(pub [u8; 40]);
+impl Default for EdgeSwipeRegion { 
+  fn default() -> Self { 
+    Self([0; 40])
+  }
+}
+impl core::fmt::Debug for EdgeSwipeRegion {
+  fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+    f.debug_struct("EdgeSwipeRegion")
+      .field("rect", &self.rect())
+      .field("edge", &self.edge())
+      .finish()
+  }
+}
+
+impl flatbuffers::SimpleToVerifyInSlice for EdgeSwipeRegion {}
+impl<'a> flatbuffers::Follow<'a> for EdgeSwipeRegion {
+  type Inner = &'a EdgeSwipeRegion;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe { <&'a EdgeSwipeRegion>::follow(buf, loc) }
+  }
+}
+impl<'a> flatbuffers::Follow<'a> for &'a EdgeSwipeRegion {
+  type Inner = &'a EdgeSwipeRegion;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe { flatbuffers::follow_cast_ref::<EdgeSwipeRegion>(buf, loc) }
+  }
+}
+impl<'b> flatbuffers::Push for EdgeSwipeRegion {
+    type Output = EdgeSwipeRegion;
+    #[inline]
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        let src = unsafe { ::core::slice::from_raw_parts(self as *const EdgeSwipeRegion as *const u8, <Self as flatbuffers::Push>::size()) };
+        dst.copy_from_slice(src);
+    }
+    #[inline]
+    fn alignment() -> flatbuffers::PushAlignment {
+        flatbuffers::PushAlignment::new(8)
+    }
+}
+
+impl<'a> flatbuffers::Verifiable for EdgeSwipeRegion {
+  #[inline]
+  fn run_verifier(
+    v: &mut flatbuffers::Verifier, pos: usize
+  ) -> Result<(), flatbuffers::InvalidFlatbuffer> {
+    use self::flatbuffers::Verifiable;
+    v.in_buffer::<Self>(pos)
+  }
+}
+
+impl<'a> EdgeSwipeRegion {
+  #[allow(clippy::too_many_arguments)]
+  pub fn new(
+    rect: &WireRect,
+    edge: InputEdge,
+  ) -> Self {
+    let mut s = Self([0; 40]);
+    s.set_rect(rect);
+    s.set_edge(edge);
+    s
+  }
+
+  pub fn rect(&self) -> &WireRect {
+    // Safety:
+    // Created from a valid Table for this object
+    // Which contains a valid struct in this slot
+    unsafe { &*(self.0[0..].as_ptr() as *const WireRect) }
+  }
+
+  #[allow(clippy::identity_op)]
+  pub fn set_rect(&mut self, x: &WireRect) {
+    self.0[0..0 + 32].copy_from_slice(&x.0)
+  }
+
+  pub fn edge(&self) -> InputEdge {
+    let mut mem = core::mem::MaybeUninit::<<InputEdge as EndianScalar>::Scalar>::uninit();
+    // Safety:
+    // Created from a valid Table for this object
+    // Which contains a valid value in this slot
+    EndianScalar::from_little_endian(unsafe {
+      core::ptr::copy_nonoverlapping(
+        self.0[32..].as_ptr(),
+        mem.as_mut_ptr() as *mut u8,
+        core::mem::size_of::<<InputEdge as EndianScalar>::Scalar>(),
+      );
+      mem.assume_init()
+    })
+  }
+
+  pub fn set_edge(&mut self, x: InputEdge) {
+    let x_le = x.to_little_endian();
+    // Safety:
+    // Created from a valid Table for this object
+    // Which contains a valid value in this slot
+    unsafe {
+      core::ptr::copy_nonoverlapping(
+        &x_le as *const _ as *const u8,
+        self.0[32..].as_mut_ptr(),
+        core::mem::size_of::<<InputEdge as EndianScalar>::Scalar>(),
+      );
+    }
+  }
+
+}
+
 pub enum InputLayoutOffset {}
 #[derive(Copy, Clone, PartialEq)]
 
@@ -3564,6 +3764,7 @@ impl<'a> InputLayout<'a> {
   pub const VT_WINDOWS: flatbuffers::VOffsetT = 10;
   pub const VT_VISIBLE_SURFACE_IDS: flatbuffers::VOffsetT = 12;
   pub const VT_SOFTWARE_KEYBOARD_REGIONS: flatbuffers::VOffsetT = 14;
+  pub const VT_EDGE_SWIPE_REGIONS: flatbuffers::VOffsetT = 16;
 
   #[inline]
   pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -3576,6 +3777,7 @@ impl<'a> InputLayout<'a> {
   ) -> flatbuffers::WIPOffset<InputLayout<'bldr>> {
     let mut builder = InputLayoutBuilder::new(_fbb);
     builder.add_epoch(args.epoch);
+    if let Some(x) = args.edge_swipe_regions { builder.add_edge_swipe_regions(x); }
     if let Some(x) = args.software_keyboard_regions { builder.add_software_keyboard_regions(x); }
     if let Some(x) = args.visible_surface_ids { builder.add_visible_surface_ids(x); }
     if let Some(x) = args.windows { builder.add_windows(x); }
@@ -3627,6 +3829,13 @@ impl<'a> InputLayout<'a> {
     // which contains a valid value in this slot
     unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, WireRect>>>(InputLayout::VT_SOFTWARE_KEYBOARD_REGIONS, None)}
   }
+  #[inline]
+  pub fn edge_swipe_regions(&self) -> Option<flatbuffers::Vector<'a, EdgeSwipeRegion>> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, EdgeSwipeRegion>>>(InputLayout::VT_EDGE_SWIPE_REGIONS, None)}
+  }
 }
 
 impl flatbuffers::Verifiable for InputLayout<'_> {
@@ -3642,6 +3851,7 @@ impl flatbuffers::Verifiable for InputLayout<'_> {
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, InputWindowRegion>>>("windows", Self::VT_WINDOWS, false)?
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, u64>>>("visible_surface_ids", Self::VT_VISIBLE_SURFACE_IDS, false)?
      .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, WireRect>>>("software_keyboard_regions", Self::VT_SOFTWARE_KEYBOARD_REGIONS, false)?
+     .visit_field::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'_, EdgeSwipeRegion>>>("edge_swipe_regions", Self::VT_EDGE_SWIPE_REGIONS, false)?
      .finish();
     Ok(())
   }
@@ -3653,6 +3863,7 @@ pub struct InputLayoutArgs<'a> {
     pub windows: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, InputWindowRegion>>>,
     pub visible_surface_ids: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, u64>>>,
     pub software_keyboard_regions: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, WireRect>>>,
+    pub edge_swipe_regions: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a, EdgeSwipeRegion>>>,
 }
 impl<'a> Default for InputLayoutArgs<'a> {
   #[inline]
@@ -3664,6 +3875,7 @@ impl<'a> Default for InputLayoutArgs<'a> {
       windows: None,
       visible_surface_ids: None,
       software_keyboard_regions: None,
+      edge_swipe_regions: None,
     }
   }
 }
@@ -3698,6 +3910,10 @@ impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> InputLayoutBuilder<'a, 'b, A> {
     self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(InputLayout::VT_SOFTWARE_KEYBOARD_REGIONS, software_keyboard_regions);
   }
   #[inline]
+  pub fn add_edge_swipe_regions(&mut self, edge_swipe_regions: flatbuffers::WIPOffset<flatbuffers::Vector<'b , EdgeSwipeRegion>>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(InputLayout::VT_EDGE_SWIPE_REGIONS, edge_swipe_regions);
+  }
+  #[inline]
   pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> InputLayoutBuilder<'a, 'b, A> {
     let start = _fbb.start_table();
     InputLayoutBuilder {
@@ -3721,6 +3937,7 @@ impl core::fmt::Debug for InputLayout<'_> {
       ds.field("windows", &self.windows());
       ds.field("visible_surface_ids", &self.visible_surface_ids());
       ds.field("software_keyboard_regions", &self.software_keyboard_regions());
+      ds.field("edge_swipe_regions", &self.edge_swipe_regions());
       ds.finish()
   }
 }

@@ -17,3 +17,21 @@ touch controller before the screen-off transition. On Roadstr, writing decimal
 49 to `/sys/class/touchscreen/primary/gesture` enables double tap independently
 of decimal 17 for FOD; both remain enabled. No new kernel is required for the
 audited touch-fod1 drivers. Full system suspend wake needs separate validation.
+
+## Ace3 / Aston S3910
+
+`aston-wake-gesture.json` selects the firmware-decoded `synaptics_tcm_gesture`
+node and KEY_WAKEUP (143). The kernel follows the DRM panel: display-off enters
+S3910 wakeup-gesture mode with the double-tap mask and screen-off TOUCH_HOLD;
+display-on restores normal mode and screen-on TOUCH_HOLD. Each volatile setting
+is read back. The dedicated gesture node is excluded from libinput, while this
+trusted reader receives its real evdev press frame. FOD down/up is reported as
+physical contact through the touchscreen node with firmware coordinates; it
+does not emit a display wake key or grant authentication.
+
+The touchscreen SPI device exposes `gesture_state` counters and verified mode
+state, and its `power/wakeup` controls system wake. A PM wake IRQ retains gesture
+sleep across system suspend, without resetting the controller on wake. Physical
+double-tap, FOD, and full system-suspend tests must be recorded separately from
+ordinary screen-off testing. Platform setup installs the profile and udev rule;
+no compositor rebuild is needed for this profile.

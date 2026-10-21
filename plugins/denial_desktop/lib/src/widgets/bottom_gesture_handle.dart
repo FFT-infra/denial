@@ -4,11 +4,13 @@ import 'package:denial_desktop/src/state/reference_shell_metrics.dart';
 
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:denial_flutter_sdk/motion.dart';
+import 'package:denial_flutter_sdk/rendering.dart' show CompositedTranslation;
 
 import 'gesture_pill.dart';
 
@@ -40,6 +42,20 @@ class _BottomGestureHandleState extends ConsumerState<BottomGestureHandle>
   Animation<double>? _switchAnimation;
   int _switchDirection = 0;
 
+  // The pill follows the drag without rebuilding: its lift moves a retained
+  // layer, and only a change of [_armed] rebuilds it.
+  late final ValueListenable<Offset> _drag;
+  final _lift = ValueNotifier(Offset.zero);
+  final _armed = ValueNotifier(false);
+  bool _overviewVisible = false;
+  bool _hasSwitchTarget = false;
+  double _recentsTravel = double.infinity;
+
+  // Swipes made while a switch animates wait for it, in order, instead of
+  // cutting it short.
+  bool _panQueued = false;
+  final _queuedPans = <({Offset drag, Offset velocity})>[];
+
   // Keep an independent velocity estimate for compositor-generated pointer
   // streams, where event coalescing can otherwise under-report a short flick.
   final Stopwatch _panClock = Stopwatch();
@@ -54,65 +70,88 @@ class _BottomGestureHandleState extends ConsumerState<BottomGestureHandle>
     _switchController = AnimationController(vsync: this)
       ..addListener(_syncSwitchAnimation)
       ..addStatusListener(_handleSwitchStatus);
+    _drag = ref.read(referenceShellProvider.notifier).gestureDrag
+      ..addListener(_syncPill);
   }
 
   @override
   void dispose() {
+    _drag.removeListener(_syncPill);
     _switchController.dispose();
+    _lift.dispose();
+    _armed.dispose();
     super.dispose();
+  }
+
+  void _syncPill() {
+    final drag = _drag.value;
+    final lift = (-drag.dy / ReferenceShellMetrics.gesturePillLiftTravel).clamp(
+      0.0,
+      1.0,
+    );
+    _lift.value = Offset(0, -lift * 8.0);
+    _armed.value = _overviewVisible
+        ? drag.dy > _closeDistance
+        : -drag.dy > _recentsTravel ||
+              _horizontalSwitchArmed(drag, hasTarget: _hasSwitchTarget);
   }
 
   @override
   Widget build(BuildContext context) {
-    final visual = ref.watch(
+    final shell = ref.watch(
       referenceShellProvider.select(
         (state) => (
-          gestureDrag: state.gestureDrag,
           overviewVisible: state.overviewVisible,
-          appSwitchTargetWindow: state.appSwitchTargetWindow,
+          hasSwitchTarget: state.appSwitchTargetWindow != null,
         ),
       ),
     );
+    _overviewVisible = shell.overviewVisible;
+    _hasSwitchTarget = shell.hasSwitchTarget;
+    _recentsTravel = MediaQuery.sizeOf(context).height * _recentsTravelFraction;
+    _syncPill();
     final controller = ref.read(referenceShellProvider.notifier);
-    final lift = (-visual.gestureDrag.dy / 280.0).clamp(0.0, 1.0);
-    final recentsTravel =
-        MediaQuery.sizeOf(context).height * _recentsTravelFraction;
-    final armed = visual.overviewVisible
-        ? visual.gestureDrag.dy > _closeDistance
-        : -visual.gestureDrag.dy > recentsTravel ||
-              _horizontalSwitchArmed(
-                visual.gestureDrag,
-                hasTarget: visual.appSwitchTargetWindow != null,
-              );
 
     return Positioned(
       left: 0,
       right: 0,
       bottom: ReferenceShellMetrics.gestureBottomInset,
       child: Center(
-        child: Transform.translate(
-          offset: Offset(0, -lift * 8.0),
+        child: RepaintBoundary(
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
             onPanStart: (_) {
-              _switchController.stop();
-              _switchAnimation = null;
-              _switchDirection = 0;
-              controller.resetGestureDrag();
               _beginPanTracking();
+              _panQueued = _switchAnimation != null;
+              if (_panQueued) return;
+              controller.resetGestureDrag();
             },
             onPanUpdate: (details) {
-              controller.updateGestureDrag(details.delta);
               _trackPan(details.delta);
+              if (!_panQueued) controller.updateGestureDrag(details.delta);
             },
-            onPanCancel: controller.resetGestureDrag,
+            onPanCancel: () {
+              if (_panQueued) {
+                _panQueued = false;
+              } else {
+                controller.resetGestureDrag();
+              }
+            },
             onPanEnd: (details) => _handlePanEnd(controller, details),
             child: SizedBox(
               width: ReferenceShellMetrics.gestureHitWidth,
               height: ReferenceShellMetrics.gestureHitHeight,
               child: Padding(
                 padding: const EdgeInsets.only(top: 20),
-                child: Center(child: GesturePill(armed: armed)),
+                child: Center(
+                  child: CompositedTranslation(
+                    translation: _lift,
+                    child: ValueListenableBuilder<bool>(
+                      valueListenable: _armed,
+                      builder: (context, armed, _) => GesturePill(armed: armed),
+                    ),
+                  ),
+                ),
               ),
             ),
           ),
@@ -126,7 +165,6 @@ class _BottomGestureHandleState extends ConsumerState<BottomGestureHandle>
     DragEndDetails details,
   ) {
     _panClock.stop();
-    final currentState = ref.read(referenceShellProvider);
     // Raw travel (not the axis-locked visual drag, which is zeroed for short
     // gestures) and the stronger of our / Flutter's velocity estimate.
     final drag = _panTravel;
@@ -134,6 +172,21 @@ class _BottomGestureHandleState extends ConsumerState<BottomGestureHandle>
       _panVelocity.getVelocity().pixelsPerSecond,
       details.velocity.pixelsPerSecond,
     );
+    final queued = _panQueued;
+    _panQueued = false;
+    if (queued && _switchAnimation != null) {
+      _queuedPans.add((drag: drag, velocity: velocity));
+      return;
+    }
+    _resolvePan(controller, drag, velocity);
+  }
+
+  void _resolvePan(
+    ReferenceShellController controller,
+    Offset drag,
+    Offset velocity,
+  ) {
+    final currentState = ref.read(referenceShellProvider);
 
     if (currentState.overviewVisible) {
       if (drag.dy > _closeDistance || velocity.dy > _flickVelocity) {
@@ -152,7 +205,6 @@ class _BottomGestureHandleState extends ConsumerState<BottomGestureHandle>
     if (switchDirection != 0) {
       _animateSwitch(
         controller: controller,
-        state: currentState,
         direction: switchDirection,
         velocityX: velocity.dx,
       );
@@ -167,7 +219,7 @@ class _BottomGestureHandleState extends ConsumerState<BottomGestureHandle>
     if (currentState.launchTransitionActive) {
       if (velocity.dy < -_homeFlickVelocity ||
           upTravel > screenHeight * _recentsTravelFraction) {
-        controller.goHome();
+        controller.goHome(releaseVelocity: velocity.dy);
       } else {
         controller.resetGestureDrag();
       }
@@ -175,14 +227,16 @@ class _BottomGestureHandleState extends ConsumerState<BottomGestureHandle>
     }
     if (velocity.dy < -_homeFlickVelocity) {
       if (hasForeground) {
-        controller.goHome();
+        controller.goHome(releaseVelocity: velocity.dy);
       } else {
-        controller.openOverview();
+        controller.openOverview(releaseVelocity: velocity.dy);
       }
     } else if (upTravel > screenHeight * _recentsTravelFraction) {
-      controller.openOverview();
+      controller.openOverview(releaseVelocity: velocity.dy);
+    } else if (currentState.gesture.horizontal) {
+      _animateSwitchBack();
     } else {
-      controller.resetGestureDrag();
+      controller.resetGestureDrag(releaseVelocity: velocity.dy);
     }
   }
 
@@ -252,7 +306,6 @@ class _BottomGestureHandleState extends ConsumerState<BottomGestureHandle>
   /// sooner) rather than a spring, which would creep at the tail.
   void _animateSwitch({
     required ReferenceShellController controller,
-    required ReferenceShellState state,
     required int direction,
     required double velocityX,
   }) {
@@ -262,7 +315,7 @@ class _BottomGestureHandleState extends ConsumerState<BottomGestureHandle>
       return;
     }
 
-    final startX = state.gestureDrag.dx;
+    final startX = _drag.value.dx;
     final travel = width + ReferenceShellMetrics.appSwitchGap;
     final endX = direction < 0 ? travel : -travel;
     final distance = (endX - startX).abs();
@@ -271,6 +324,19 @@ class _BottomGestureHandleState extends ConsumerState<BottomGestureHandle>
 
     _switchDirection = direction;
     _switchAnimation = Tween<double>(begin: startX, end: endX).animate(
+      CurvedAnimation(parent: _switchController, curve: Motion.emphasized),
+    );
+    _switchController.duration = Duration(milliseconds: durationMs.round());
+    _switchController.forward(from: 0.0);
+  }
+
+  /// Returns a switch the user did not commit, so the incoming app slides
+  /// back out instead of vanishing.
+  void _animateSwitchBack() {
+    final startX = _drag.value.dx;
+    final durationMs = ((startX.abs() / 1450.0) * 1000.0).clamp(170.0, 300.0);
+    _switchDirection = 0;
+    _switchAnimation = Tween<double>(begin: startX, end: 0.0).animate(
       CurvedAnimation(parent: _switchController, curve: Motion.emphasized),
     );
     _switchController.duration = Duration(milliseconds: durationMs.round());
@@ -288,14 +354,22 @@ class _BottomGestureHandleState extends ConsumerState<BottomGestureHandle>
   }
 
   void _handleSwitchStatus(AnimationStatus status) {
-    if (status != AnimationStatus.completed || _switchDirection == 0) {
+    if (status != AnimationStatus.completed || _switchAnimation == null) {
       return;
     }
     final direction = _switchDirection;
     _switchAnimation = null;
     _switchDirection = 0;
-    ref
-        .read(referenceShellProvider.notifier)
-        .completeAdjacentWindowSwitch(direction);
+    final controller = ref.read(referenceShellProvider.notifier);
+    if (direction == 0) {
+      controller.resetGestureDrag();
+    } else {
+      controller.completeAdjacentWindowSwitch(direction);
+    }
+    // Play queued swipes until one animates again.
+    while (_queuedPans.isNotEmpty && _switchAnimation == null && mounted) {
+      final pan = _queuedPans.removeAt(0);
+      _resolvePan(controller, pan.drag, pan.velocity);
+    }
   }
 }

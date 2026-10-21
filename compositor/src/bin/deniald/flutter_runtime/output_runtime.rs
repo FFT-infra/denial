@@ -163,6 +163,14 @@ impl FlutterRuntime {
         self.output_rotation_animation.is_some()
     }
 
+    /// Whether Flutter needs the next output tick: it awaits a vsync, staged
+    /// texture damage, or an output rotation sample.
+    pub fn wants_output_ticks(&self) -> bool {
+        self.handler.has_pending_vsync()
+            || self.has_output_updates()
+            || self.output_rotation_animation_active()
+    }
+
     /// Advances only the synthetic output projection. The engine applies this
     /// to its retained layer tree, so the Dart scene, external textures, EGL
     /// targets and native scanout buffers remain untouched between samples.

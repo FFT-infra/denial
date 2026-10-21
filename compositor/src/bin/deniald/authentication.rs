@@ -6,6 +6,8 @@ mod fingerprint;
 pub(super) mod fingerprint_settings;
 #[path = "authentication/lock_capability.rs"]
 mod lock_capability;
+#[path = "authentication/pin.rs"]
+pub(super) mod pin;
 #[path = "authentication/session_lock.rs"]
 mod session_lock;
 
@@ -13,7 +15,7 @@ use std::collections::VecDeque;
 use std::error::Error;
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::fmt;
-use std::io;
+use std::io::{self, BufRead};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering, compiler_fence};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -46,6 +48,13 @@ const KIND_STATE: u8 = 0x81;
 const KIND_PROMPT: u8 = 0x82;
 const KIND_RESULT: u8 = 0x83;
 const KIND_FINGERPRINT_FEEDBACK: u8 = 0x84;
+/// Argument: the configured PIN length, 0 when the password is the only
+/// typed credential. Sent on synchronize and after every lock.
+const KIND_CREDENTIAL: u8 = 0x85;
+
+/// Begin argument: 0 asks for the preferred credential (the PIN when one is
+/// set), 1 for the account password.
+const BEGIN_PASSWORD: u32 = 1;
 
 const STATE_LOCKED: u8 = 1 << 0;
 const STATE_AVAILABLE: u8 = 1 << 1;
@@ -102,7 +111,9 @@ impl Error for AuthenticationDecodeError {}
 enum AuthenticationCommand {
     Synchronize,
     Lock,
-    Begin,
+    Begin {
+        password_only: bool,
+    },
     Respond {
         attempt_id: u64,
         prompt_sequence: u32,
@@ -152,8 +163,10 @@ fn decode(packet: &[u8]) -> Result<AuthenticationCommand, AuthenticationDecodeEr
         KIND_LOCK if attempt_id == 0 && argument == 0 && payload.is_empty() => {
             Ok(AuthenticationCommand::Lock)
         }
-        KIND_BEGIN if attempt_id == 0 && argument == 0 && payload.is_empty() => {
-            Ok(AuthenticationCommand::Begin)
+        KIND_BEGIN if attempt_id == 0 && argument <= BEGIN_PASSWORD && payload.is_empty() => {
+            Ok(AuthenticationCommand::Begin {
+                password_only: argument == BEGIN_PASSWORD,
+            })
         }
         KIND_RESPOND if attempt_id != 0 && argument != 0 => Ok(AuthenticationCommand::Respond {
             attempt_id,
@@ -205,17 +218,75 @@ fn erase_bytes(bytes: &mut [u8]) {
     compiler_fence(Ordering::SeqCst);
 }
 
+/// Reads one stdin line of at most 4 KiB, erasing a rejected partial line.
+fn read_bounded_line(input: &mut impl BufRead) -> io::Result<Option<Vec<u8>>> {
+    let mut line = Vec::new();
+    loop {
+        let available = input.fill_buf()?;
+        if available.is_empty() {
+            return if line.is_empty() {
+                Ok(None)
+            } else {
+                Err(io::ErrorKind::UnexpectedEof.into())
+            };
+        }
+        let count = available
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(available.len(), |index| index + 1);
+        if line.len() + count > 4096 {
+            erase_bytes(&mut line);
+            return Err(io::ErrorKind::InvalidData.into());
+        }
+        line.extend_from_slice(&available[..count]);
+        input.consume(count);
+        if line.last() == Some(&b'\n') {
+            line.pop();
+            return Ok(Some(line));
+        }
+    }
+}
+
+/// Verifies the session user's password through a PAM stack that must ask
+/// for it. Shared by the privileged settings helpers.
+fn authenticate_password(
+    backend: &mut dyn AuthenticationBackend,
+    username: &str,
+    password: &SecureString,
+) -> BackendResult {
+    let mut prompted = false;
+    let result = backend.authenticate(
+        username,
+        &mut |style, _| match style {
+            PromptStyle::EchoOff => {
+                prompted = true;
+                Some(SecureString::new(password.as_bytes()))
+            }
+            PromptStyle::Info => Some(SecureString::new(&[])),
+            _ => None,
+        },
+        &|| false,
+    );
+    if prompted && !password.as_bytes().is_empty() {
+        result
+    } else {
+        BackendResult::Failure
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PromptStyle {
     EchoOff = 1,
     EchoOn = 2,
     Info = 3,
     Error = 4,
+    /// Denial's own numeric prompt; PAM never produces it.
+    Pin = 5,
 }
 
 impl PromptStyle {
     fn requires_response(self) -> bool {
-        matches!(self, Self::EchoOff | Self::EchoOn)
+        matches!(self, Self::EchoOff | Self::EchoOn | Self::Pin)
     }
 }
 
@@ -230,6 +301,8 @@ enum BackendResult {
 trait AuthenticationBackend: Send {
     fn available(&self) -> bool;
     fn unavailable_reason(&self) -> String;
+    /// Account policy alone, for credentials checked outside PAM.
+    fn validate_account(&self) -> Result<(), String>;
     fn authenticate(
         &mut self,
         username: &str,
@@ -249,6 +322,10 @@ impl AuthenticationBackend for UnavailableBackend {
 
     fn unavailable_reason(&self) -> String {
         self.reason.clone()
+    }
+
+    fn validate_account(&self) -> Result<(), String> {
+        Err(self.reason.clone())
     }
 
     fn authenticate(
@@ -338,45 +415,6 @@ struct PamBackend {
 }
 
 impl PamBackend {
-    /// Fingerprints replace the credential check, never PAM account policy.
-    fn validate_account(&self) -> Result<(), String> {
-        let username = CString::new(current_username()).map_err(|error| error.to_string())?;
-        let mut conversation = |_style: PromptStyle, _message: &str| None;
-        let cancelled = || false;
-        let mut context = PamConversationContext {
-            conversation: &mut conversation,
-            cancelled: &cancelled,
-        };
-        let adapter = PamConversation {
-            conv: Some(pam_conversation),
-            appdata_ptr: (&mut context as *mut PamConversationContext<'_>).cast(),
-        };
-        let mut handle = ptr::null_mut();
-        // SAFETY: all pointers remain live until the balanced pam_end below.
-        let mut result = unsafe {
-            (self.api.start)(
-                self.service.as_ptr(),
-                username.as_ptr(),
-                &adapter,
-                &mut handle,
-            )
-        };
-        if result != PAM_SUCCESS || handle.is_null() {
-            return Err(format!("PAM account initialization failed: {result}"));
-        }
-        // SAFETY: handle is owned by this call and ended exactly once.
-        unsafe {
-            (self.api.set_item)(handle, PAM_TTY, c"denial".as_ptr().cast());
-            result = (self.api.account_management)(handle, PAM_SILENT);
-            (self.api.end)(handle, result);
-        }
-        if result == PAM_SUCCESS {
-            Ok(())
-        } else {
-            Err(format!("PAM account denied fingerprint unlock: {result}"))
-        }
-    }
-
     fn load() -> Result<Self, String> {
         let service = configured_pam_service();
         Ok(Self {
@@ -538,6 +576,46 @@ impl AuthenticationBackend for PamBackend {
         String::new()
     }
 
+    /// Fingerprints and PINs replace the credential check, never PAM account
+    /// policy.
+    fn validate_account(&self) -> Result<(), String> {
+        let username = CString::new(current_username()).map_err(|error| error.to_string())?;
+        let mut conversation = |_style: PromptStyle, _message: &str| None;
+        let cancelled = || false;
+        let mut context = PamConversationContext {
+            conversation: &mut conversation,
+            cancelled: &cancelled,
+        };
+        let adapter = PamConversation {
+            conv: Some(pam_conversation),
+            appdata_ptr: (&mut context as *mut PamConversationContext<'_>).cast(),
+        };
+        let mut handle = ptr::null_mut();
+        // SAFETY: all pointers remain live until the balanced pam_end below.
+        let mut result = unsafe {
+            (self.api.start)(
+                self.service.as_ptr(),
+                username.as_ptr(),
+                &adapter,
+                &mut handle,
+            )
+        };
+        if result != PAM_SUCCESS || handle.is_null() {
+            return Err(format!("PAM account initialization failed: {result}"));
+        }
+        // SAFETY: handle is owned by this call and ended exactly once.
+        unsafe {
+            (self.api.set_item)(handle, PAM_TTY, c"denial".as_ptr().cast());
+            result = (self.api.account_management)(handle, PAM_SILENT);
+            (self.api.end)(handle, result);
+        }
+        if result == PAM_SUCCESS {
+            Ok(())
+        } else {
+            Err(format!("PAM account denied fingerprint unlock: {result}"))
+        }
+    }
+
     fn authenticate(
         &mut self,
         username: &str,
@@ -654,6 +732,7 @@ enum AuthenticationEventKind {
     Prompt { style: PromptStyle, sequence: u32 },
     Result { success: bool, cancelled: bool },
     FingerprintFeedback,
+    Credential { pin_length: u32 },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -681,6 +760,9 @@ impl AuthenticationEvent {
         let (kind, argument, payload) = match self.kind {
             AuthenticationEventKind::FingerprintFeedback => {
                 (KIND_FINGERPRINT_FEEDBACK, 0, self.message.as_str())
+            }
+            AuthenticationEventKind::Credential { pin_length } => {
+                (KIND_CREDENTIAL, pin_length, self.message.as_str())
             }
             AuthenticationEventKind::State => (
                 KIND_STATE,
@@ -727,6 +809,7 @@ struct PromptState {
 struct WorkItem {
     attempt_id: u64,
     generation: u64,
+    password_only: bool,
 }
 
 struct AuthenticationState {
@@ -744,6 +827,15 @@ struct AuthenticationState {
     pending_work: Option<WorkItem>,
     prompt: Option<PromptState>,
     response: Option<SecureString>,
+    /// Last PIN length read by the worker; the record itself stays on disk.
+    pin_length: u32,
+    /// A fingerprint reader with enrolled prints is armed for unlock.
+    fingerprint_ready: bool,
+    /// Under-display sensor as panel fractions: x, y, width, height.
+    fingerprint_sensor: Option<[f64; 4]>,
+    /// Asks the worker to re-read the PIN record, which Settings may have
+    /// changed while the session was unlocked.
+    credential_refresh: bool,
     available: bool,
     unavailable_reason: String,
     automatic_lock: lock_capability::Capability,
@@ -782,7 +874,11 @@ pub(super) struct AuthenticationController {
 
 impl AuthenticationController {
     pub(super) fn new(start_locked: bool) -> io::Result<Self> {
-        let controller = Self::with_backend(default_backend(), start_locked)?;
+        let controller = Self::with_backend(
+            default_backend(),
+            pin::PinStore::for_current_user(),
+            start_locked,
+        )?;
         match crate::haptics::HapticsClient::new() {
             Ok(client) => {
                 let _ = controller.shared.haptics.set(client);
@@ -820,6 +916,7 @@ impl AuthenticationController {
 
     fn with_backend(
         mut backend: Box<dyn AuthenticationBackend>,
+        pin_store: Option<pin::PinStore>,
         start_locked: bool,
     ) -> io::Result<Self> {
         let available = backend.available();
@@ -845,6 +942,10 @@ impl AuthenticationController {
                 pending_work: None,
                 prompt: None,
                 response: None,
+                pin_length: 0,
+                fingerprint_ready: false,
+                fingerprint_sensor: None,
+                credential_refresh: true,
                 available,
                 unavailable_reason,
                 automatic_lock: lock_capability::Capability::Unknown,
@@ -859,7 +960,12 @@ impl AuthenticationController {
             .name("denial-authentication".into())
             .spawn(move || {
                 crate::cpu_scheduling::normalize_current_worker("authentication");
-                run_authentication_worker(&worker_shared, &mut *backend, &username);
+                run_authentication_worker(
+                    &worker_shared,
+                    &mut *backend,
+                    pin_store.as_ref(),
+                    &username,
+                );
             })?;
         Ok(Self {
             shared,
@@ -926,7 +1032,7 @@ impl AuthenticationController {
         match decode(packet)? {
             AuthenticationCommand::Synchronize => self.synchronize(),
             AuthenticationCommand::Lock => self.lock(),
-            AuthenticationCommand::Begin => self.begin(),
+            AuthenticationCommand::Begin { password_only } => self.begin(password_only),
             AuthenticationCommand::Respond {
                 attempt_id,
                 prompt_sequence,
@@ -986,6 +1092,8 @@ impl AuthenticationController {
             state: snapshot.clone(),
             message: String::new(),
         });
+        self.shared
+            .push_event(credential_event(&self.shared, &state));
         if let Some(prompt) = state.prompt.as_ref() {
             self.shared.push_event(AuthenticationEvent {
                 kind: AuthenticationEventKind::Prompt {
@@ -998,7 +1106,7 @@ impl AuthenticationController {
         }
     }
 
-    fn begin(&self) {
+    fn begin(&self, password_only: bool) {
         let immediate = {
             let mut state = lock_unpoisoned(&self.shared.state);
             let now = Instant::now();
@@ -1034,6 +1142,7 @@ impl AuthenticationController {
                 state.pending_work = Some(WorkItem {
                     attempt_id: state.active_attempt_id,
                     generation: state.generation,
+                    password_only,
                 });
                 None
             }
@@ -1129,6 +1238,7 @@ impl Drop for AuthenticationController {
 
 fn apply_lock(shared: &SharedAuthentication, state: &mut AuthenticationState) {
     state.lock_epoch = state.lock_epoch.wrapping_add(1);
+    state.credential_refresh = true;
     state.fingerprint_unlock = None;
     shared
         .fingerprint_unlock_pending
@@ -1195,12 +1305,13 @@ fn snapshot_locked(
 fn run_authentication_worker(
     shared: &Arc<SharedAuthentication>,
     backend: &mut dyn AuthenticationBackend,
+    pin_store: Option<&pin::PinStore>,
     username: &str,
 ) {
     loop {
-        let work = {
+        let (work, refresh) = {
             let mut state = lock_unpoisoned(&shared.state);
-            while !state.stopping && state.pending_work.is_none() {
+            while !state.stopping && state.pending_work.is_none() && !state.credential_refresh {
                 state = match shared.condition.wait(state) {
                     Ok(state) => state,
                     Err(poisoned) => poisoned.into_inner(),
@@ -1209,10 +1320,18 @@ fn run_authentication_worker(
             if state.stopping {
                 return;
             }
-            state
-                .pending_work
-                .take()
-                .expect("authentication wakeup had pending work")
+            let refresh = std::mem::take(&mut state.credential_refresh);
+            (state.pending_work.take(), refresh)
+        };
+        // The record is read on this worker, never on the compositor thread,
+        // and again for every PIN attempt so Settings changes apply at once.
+        let pin = if refresh || work.is_some_and(|work| !work.password_only) {
+            load_pin(shared, pin_store)
+        } else {
+            None
+        };
+        let Some(work) = work else {
+            continue;
         };
 
         let conversation_shared = Arc::clone(shared);
@@ -1221,7 +1340,10 @@ fn run_authentication_worker(
         };
         let cancellation_shared = Arc::clone(shared);
         let cancelled = move || authentication_cancelled(&cancellation_shared, work.generation);
-        let result = backend.authenticate(username, &mut conversation, &cancelled);
+        let result = match pin.as_ref().filter(|_| !work.password_only) {
+            Some(pin) => pin::authenticate(pin, backend, &mut conversation, &cancelled),
+            None => backend.authenticate(username, &mut conversation, &cancelled),
+        };
 
         {
             let mut state = lock_unpoisoned(&shared.state);
@@ -1268,6 +1390,54 @@ fn run_authentication_worker(
                 message: String::new(),
             });
         }
+    }
+}
+
+/// An unreadable record falls back to the password and never blocks unlock.
+fn load_pin(
+    shared: &SharedAuthentication,
+    store: Option<&pin::PinStore>,
+) -> Option<pin::PinRecord> {
+    let record = store.and_then(|store| match store.load() {
+        Ok(record) => record,
+        Err(error) => {
+            warn!(%error, "ignored the lock PIN record; the password still unlocks");
+            None
+        }
+    });
+    let pin_length = record.as_ref().map_or(0, pin::PinRecord::length);
+    let mut state = lock_unpoisoned(&shared.state);
+    // Synchronize replays the current value, so only changes are pushed.
+    if state.pin_length != pin_length {
+        state.pin_length = pin_length;
+        shared.push_event(credential_event(shared, &state));
+    }
+    record
+}
+
+/// What can unlock besides the password: the PIN length as the argument, and
+/// fingerprint readiness with the sensor location as a JSON payload.
+fn credential_event(
+    shared: &SharedAuthentication,
+    state: &AuthenticationState,
+) -> AuthenticationEvent {
+    let message = if state.fingerprint_ready {
+        let sensor = state.fingerprint_sensor.map_or_else(
+            || serde_json::json!({}),
+            |[x, y, width, height]| {
+                serde_json::json!({"x": x, "y": y, "width": width, "height": height})
+            },
+        );
+        serde_json::json!({"fingerprint": {"sensor": sensor}}).to_string()
+    } else {
+        String::new()
+    };
+    AuthenticationEvent {
+        kind: AuthenticationEventKind::Credential {
+            pin_length: state.pin_length,
+        },
+        state: snapshot_locked(shared, state, Instant::now()),
+        message,
     }
 }
 

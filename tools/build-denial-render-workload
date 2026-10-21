@@ -9,7 +9,7 @@ import subprocess
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--output', type=Path, required=True, help='new output directory')
-parser.add_argument('--sysroot', type=Path, default=Path('/mnt/development/cross/sysroot'))
+parser.add_argument('--sysroot', type=Path, default=Path('/mnt/development/denial-os/cross/sysroot'))
 parser.add_argument('--cc', default='aarch64-linux-gnu-gcc')
 parser.add_argument('--protocols', type=Path, default=Path('/usr/share/wayland-protocols'))
 args = parser.parse_args()

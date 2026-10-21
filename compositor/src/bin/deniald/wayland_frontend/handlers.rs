@@ -1476,7 +1476,9 @@ impl CompositorHandler for RuntimeState {
                     managed.flush_pending_resize();
                 }
                 #[cfg(feature = "flutter")]
-                if frontend.mobile_shell && frontend.exact_window_geometry(&window).is_none() {
+                if frontend.mobile_shell
+                    && frontend.recorded_exact_window_geometry(&window).is_none()
+                {
                     frontend.configure_mobile_window(&window);
                 }
                 frontend.reconcile_committed_window_geometry(&window);

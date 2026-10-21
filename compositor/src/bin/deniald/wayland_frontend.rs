@@ -164,7 +164,7 @@ mod input;
 #[path = "wayland_frontend/input_deck.rs"]
 mod input_deck;
 #[cfg(feature = "flutter")]
-pub(super) use input_deck::{synchronize_input_deck, snapshot as input_deck_snapshot};
+pub(super) use input_deck::{snapshot as input_deck_snapshot, synchronize_input_deck};
 #[path = "wayland_frontend/input_method.rs"]
 pub(super) mod input_method;
 #[cfg(feature = "flutter")]
@@ -575,6 +575,10 @@ pub(super) struct WaylandFrontend {
     flutter_touch_slots: HashSet<i32>,
     #[cfg(feature = "flutter")]
     client_touch_routes: HashMap<i32, ClientInputRoute>,
+    /// Client contacts that started in a shell edge-swipe region and may
+    /// still be claimed by Flutter.
+    #[cfg(feature = "flutter")]
+    edge_swipe_candidates: HashMap<i32, input::edge_swipe::EdgeSwipeCandidate>,
     #[cfg(feature = "flutter")]
     client_touch_frame_pending: bool,
     #[cfg(feature = "flutter")]
@@ -1089,6 +1093,7 @@ fn input_routing_changed(
         current.flags != next.flags
             || current.shell_regions != next.shell_regions
             || current.software_keyboard_regions != next.software_keyboard_regions
+            || current.edge_swipe_regions != next.edge_swipe_regions
             || current.windows != next.windows
     })
 }

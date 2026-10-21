@@ -54,6 +54,60 @@ pub(in super::super) fn cancel_captured_touch_routes(
     cancel_client
 }
 
+/// Follows a client contact that started in a shell edge-swipe region. Once
+/// it travels inward, the client's touch is cancelled and the contact is
+/// handed to Flutter. Returns whether the contact now belongs to Flutter.
+#[cfg(feature = "flutter")]
+fn claim_edge_swipe(
+    state: &mut RuntimeState,
+    slot: i32,
+    position: Point<f64, Logical>,
+    time_usec: u64,
+) -> bool {
+    use super::edge_swipe::EdgeSwipeDecision;
+
+    let candidate = {
+        let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
+        let Some(candidate) = frontend.edge_swipe_candidates.get(&slot).copied() else {
+            return false;
+        };
+        if !frontend.client_touch_routes.contains_key(&slot) {
+            frontend.edge_swipe_candidates.remove(&slot);
+            return false;
+        }
+        match candidate.decide(position) {
+            EdgeSwipeDecision::Pending => return false,
+            EdgeSwipeDecision::Release => {
+                frontend.edge_swipe_candidates.remove(&slot);
+                return false;
+            }
+            EdgeSwipeDecision::Claim => candidate,
+        }
+    };
+    // wl_touch.cancel retires every contact of the client, including any
+    // other candidate.
+    cancel_captured_touch_routes(state, &[slot]);
+    let (down, current) = {
+        let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
+        frontend.edge_swipe_candidates.clear();
+        frontend.flutter_touch_slots.insert(slot);
+        let scale = frontend.atlas_scale;
+        let physical = |point: Point<f64, Logical>| {
+            let scene = point - frontend.atlas_origin;
+            (scene.x * scale, scene.y * scale)
+        };
+        (physical(candidate.origin), physical(position))
+    };
+    state.flutter_input.handle_claimed_touch(
+        slot,
+        down,
+        candidate.origin_time_usec,
+        current,
+        time_usec,
+    );
+    true
+}
+
 #[cfg(feature = "flutter")]
 pub(super) fn process_flutter_input_event(
     state: &mut RuntimeState,
@@ -164,6 +218,12 @@ pub(super) fn process_flutter_input_event(
         } => {
             let serial = SERIAL_COUNTER.next_serial();
             let slot = i32::from(touch_event.slot());
+            state
+                .wayland
+                .as_mut()
+                .expect("missing Wayland frontend")
+                .edge_swipe_candidates
+                .remove(&slot);
             let (position, scene_position, software_keyboard_touch, deck_touch) = {
                 let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
                 let position = {
@@ -287,17 +347,20 @@ pub(super) fn process_flutter_input_event(
                             time: touch_event.time_msec(),
                         },
                     );
-                    state
-                        .wayland
-                        .as_mut()
-                        .expect("missing Wayland frontend")
-                        .client_touch_routes
-                        .insert(slot, route);
-                    state
-                        .wayland
-                        .as_mut()
-                        .expect("missing Wayland frontend")
-                        .client_touch_frame_pending = true;
+                    let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
+                    frontend.client_touch_routes.insert(slot, route);
+                    frontend.client_touch_frame_pending = true;
+                    let candidate = frontend.input_layout.as_ref().and_then(|layout| {
+                        super::edge_swipe::EdgeSwipeCandidate::at(
+                            &layout.edge_swipe_regions,
+                            scene_position,
+                            position,
+                            touch_event.time(),
+                        )
+                    });
+                    if let Some(candidate) = candidate {
+                        frontend.edge_swipe_candidates.insert(slot, candidate);
+                    }
                     if scene_changed {
                         state.scene_sync.mark_dirty();
                     }
@@ -364,6 +427,9 @@ pub(super) fn process_flutter_input_event(
                 );
                 return false;
             }
+            if claim_edge_swipe(state, slot, position, touch_event.time()) {
+                return true;
+            }
             let focus = {
                 let frontend = state.wayland.as_ref().expect("missing Wayland frontend");
                 frontend
@@ -402,6 +468,12 @@ pub(super) fn process_flutter_input_event(
             event: touch_event, ..
         } => {
             let slot = i32::from(touch_event.slot());
+            state
+                .wayland
+                .as_mut()
+                .expect("missing Wayland frontend")
+                .edge_swipe_candidates
+                .remove(&slot);
             let deck_contact = state.input_deck.screen_gestures.contains(slot);
             if deck_contact {
                 let update = state
@@ -494,6 +566,12 @@ pub(super) fn process_flutter_input_event(
             event: touch_event, ..
         } => {
             let slot = i32::from(touch_event.slot());
+            state
+                .wayland
+                .as_mut()
+                .expect("missing Wayland frontend")
+                .edge_swipe_candidates
+                .remove(&slot);
             let deck_contact = state.input_deck.screen_gestures.contains(slot);
             if deck_contact {
                 let update = state
@@ -698,7 +776,15 @@ pub(crate) fn reconcile_flutter_pointer_route(state: &mut RuntimeState) {
         } else if let Some(route) = frontend.client_pointer_capture.as_ref() {
             PointerMotionTarget::client(route, position)
         } else {
-            frontend.pointer_motion_target(position)
+            let mut target = frontend.pointer_motion_target(position);
+            if !frontend.pointer_cursor_visible {
+                // A hidden cursor, which starts at the center of the screen
+                // and is left behind by touch, is nowhere a client can see:
+                // entering the window under its spot would show hover there.
+                // The shell side is routed as before.
+                target.focus = None;
+            }
+            target
         };
         (
             position,

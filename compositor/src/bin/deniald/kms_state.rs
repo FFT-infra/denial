@@ -19,8 +19,17 @@ const SCANOUT_BYTES_PER_PIXEL: u64 = 4;
 const MAX_SCANOUT_DIMENSION: u32 = 16_384;
 const MAX_SCANOUT_POOL_BYTES: u64 = 1024 * 1024 * 1024;
 const MAX_SCANOUT_BUFFERS: usize = 49;
+/// Scanout, a commit in KMS, a frame awaiting its GPU work, and the frame
+/// Flutter renders: an output that renders ahead needs a fourth buffer, or
+/// the frame it starts early leaves no free buffer for the next tick.
 #[cfg(feature = "flutter")]
-pub(super) const OUTPUT_POOL_LENGTH: usize = 3;
+fn output_pool_length() -> usize {
+    if super::output_scheduler::render_ahead() {
+        4
+    } else {
+        3
+    }
+}
 
 /// Request local scanout constraints only when the render device also owns
 /// KMS. A render-only GPU exports the atlas to another DRM device, so asking
@@ -44,6 +53,8 @@ pub(super) struct ConnectedOutput {
     pub(super) mode: Mode,
     pub(super) transform: OutputTransform,
     pub(super) vrr_enabled: bool,
+    /// The scale used when the configuration names none for this output.
+    pub(super) default_scale_120: u32,
 }
 
 pub(super) struct Scanout {
@@ -1001,7 +1012,7 @@ impl OutputSwapchains {
             let pool_bytes = u64::from(plan.target_size.width)
                 .checked_mul(u64::from(plan.target_size.height))
                 .and_then(|pixels| pixels.checked_mul(SCANOUT_BYTES_PER_PIXEL))
-                .and_then(|bytes| bytes.checked_mul(OUTPUT_POOL_LENGTH as u64))
+                .and_then(|bytes| bytes.checked_mul(output_pool_length() as u64))
                 .ok_or("physical output pool byte count overflow")?;
             let previous_bytes = allocated_bytes;
             allocated_bytes = allocated_bytes
@@ -1017,7 +1028,7 @@ impl OutputSwapchains {
             let buffers = allocate_scanout_pool(
                 allocator,
                 plan.target_size,
-                OUTPUT_POOL_LENGTH,
+                output_pool_length(),
                 &modifiers,
                 linear_render_targets,
                 MAX_SCANOUT_POOL_BYTES - previous_bytes,
