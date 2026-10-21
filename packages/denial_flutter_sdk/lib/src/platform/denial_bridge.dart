@@ -402,6 +402,12 @@ class DenialBridge {
   void dismissKeyboardPanel(int activationSerial) =>
       _input.dismissKeyboardPanel(activationSerial);
 
+  /// Tells applications laid out around the keyboard (denial-insets-v1) that
+  /// the keyboard panel starts moving to [height] logical pixels, zero when
+  /// hidden, over [duration]. Once per motion, never per frame.
+  void reportKeyboardPanelMotion(int height, Duration duration) =>
+      _input.reportKeyboardPanelMotion(height, duration);
+
   void pressKeyboardKey(String key) => _input.pressKeyboardKey(key);
 
   void releaseKeyboardKey(String key) => _input.releaseKeyboardKey(key);

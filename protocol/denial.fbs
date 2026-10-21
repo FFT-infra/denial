@@ -106,7 +106,10 @@ enum ShellActionKind : ubyte {
 enum KeyboardCommandKind : ubyte {
   Text = 0,
   Key = 1,
-  DismissPanel = 2
+  DismissPanel = 2,
+  // The keyboard panel starts moving to panel_height logical pixels over
+  // panel_duration_ms. Sent once per motion, never per frame.
+  PanelMotion = 3
 }
 
 enum SettingsRequestKind : ubyte {
@@ -469,6 +472,10 @@ table Window {
   pet_dragged:bool;
   // Appended for compatibility; absence keeps the original surface-tree path.
   client_texture:ClientTexture;
+  // Appended for compatibility. The client lays this window out around the
+  // on-screen keyboard (denial-insets-v1 get_keyboard_inset), so the mobile
+  // shell must not lift it while the keyboard is shown.
+  keyboard_inset:bool;
 }
 
 table WindowSnapshot {
@@ -631,6 +638,10 @@ table KeyboardCommand {
   flags:uint;
   // Echo the panel activation being dismissed; ignored for Text/Key.
   activation_serial:ulong;
+  // PanelMotion only: where the keyboard panel settles, zero when hidden,
+  // and how long the shell's motion there lasts.
+  panel_height:uint;
+  panel_duration_ms:uint;
 }
 
 table KeyboardLayout {

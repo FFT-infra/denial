@@ -1495,6 +1495,7 @@ impl WaylandFrontend {
                 content_kind: client_surface_content_kind(protocol_facts.override_redirect),
                 opacity_class,
                 pet: None,
+                keyboard_inset: self.keyboard_inset_surface(&surface),
             };
             if let Some(previous) = windows.get_mut(window_count) {
                 *previous = description;
@@ -1603,6 +1604,7 @@ impl WaylandFrontend {
                 content_kind: WindowContentKind::LocalFlutter,
                 opacity_class: WindowOpacityClass::FullyOpaque,
                 pet: None,
+                keyboard_inset: false,
             };
             if let Some(previous) = windows.get_mut(window_count) {
                 *previous = description;
@@ -1789,6 +1791,7 @@ impl WaylandFrontend {
                     content_kind: layer_shell_content_kind(layer.layer()),
                     opacity_class: WindowOpacityClass::ContentTranslucent,
                     pet,
+                    keyboard_inset: false,
                 };
                 if let Some(previous) = windows.get_mut(window_count) {
                     *previous = description;
@@ -1932,6 +1935,7 @@ impl WaylandFrontend {
                     content_kind: WindowContentKind::PopupSurface,
                     opacity_class: WindowOpacityClass::ContentTranslucent,
                     pet: None,
+                    keyboard_inset: false,
                 };
                 if let Some(previous) = windows.get_mut(window_count) {
                     *previous = description;

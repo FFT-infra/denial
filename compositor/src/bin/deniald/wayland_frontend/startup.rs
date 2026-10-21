@@ -498,6 +498,8 @@ impl WaylandFrontend {
             gamma_control,
             screencopy,
             text_input,
+            #[cfg(feature = "flutter")]
+            keyboard_insets: Default::default(),
             input_method,
             outputs,
             scrolling_layout_axes,

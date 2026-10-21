@@ -93,6 +93,8 @@ const KEYBOARD_PRESSED: u32 = 1 << 1;
 const KEYBOARD_RELEASED: u32 = 1 << 2;
 const KEYBOARD_PHASE_MASK: u32 = KEYBOARD_PRESSED | KEYBOARD_RELEASED;
 const KEYBOARD_FLAGS_MASK: u32 = KEYBOARD_CTRL | KEYBOARD_PHASE_MASK;
+const MAX_KEYBOARD_PANEL_HEIGHT: u32 = 16_384;
+const MAX_KEYBOARD_PANEL_DURATION_MS: u32 = 10_000;
 
 pub const INPUT_LAYOUT_KEYBOARD_CAPTURE: u32 = 1 << 0;
 pub const INPUT_LAYOUT_EXCLUSIVE_SHELL: u32 = 1 << 1;
@@ -198,6 +200,12 @@ pub enum KeyboardKeyPhase {
 pub enum KeyboardCommand {
     DismissPanel {
         activation_serial: u64,
+    },
+    /// The keyboard panel starts moving to `height` logical pixels, zero
+    /// when hidden, over `duration_ms`.
+    PanelMotion {
+        height: u32,
+        duration_ms: u32,
     },
     Text(String),
     Key {
@@ -708,6 +716,9 @@ pub struct WindowDescription {
     /// What the shell knows of this layer surface if it is a desktop pet
     /// (denial-pet-v1).
     pub pet: Option<PetDescription>,
+    /// The client lays the window out around the on-screen keyboard
+    /// (denial-insets-v1), so the mobile shell does not lift it.
+    pub keyboard_inset: bool,
 }
 
 /// A desktop pet (denial-pet-v1) as the shell knows it. A held pet is drawn

@@ -208,6 +208,37 @@ TickerFuture springTo(
   );
 }
 
+/// How long [springTo] with [spring] takes from [from] to [target] on a
+/// controller whose unit of travel spans [extent] logical pixels, until it is
+/// within [Motion.pixelTolerance] of rest. For telling another process how
+/// long a motion it follows lasts.
+Duration springSettleDuration(
+  double from,
+  double target, {
+  required double extent,
+  double velocity = 0.0,
+  SpringDescription spring = Motion.gentle,
+}) {
+  final pixels = extent > 0.0 ? extent : 1.0;
+  final simulation = SpringSimulation(
+    spring,
+    from * pixels,
+    target * pixels,
+    velocity * pixels,
+    tolerance: Motion.pixelTolerance,
+  );
+  const step = Duration(milliseconds: 1);
+  const limit = Duration(seconds: 2);
+  var elapsed = Duration.zero;
+  while (elapsed < limit &&
+      !simulation.isDone(
+        elapsed.inMicroseconds / Duration.microsecondsPerSecond,
+      )) {
+    elapsed += step;
+  }
+  return elapsed;
+}
+
 /// Opt-in animation and scheduler telemetry for the embedded shell.
 ///
 /// Enable with `DENIAL_DART_FRAME_TRACE=1`. It remains completely dormant in

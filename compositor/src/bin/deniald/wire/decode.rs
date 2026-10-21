@@ -504,6 +504,20 @@ fn decode_keyboard_command(command: fb::KeyboardCommand<'_>) -> Result<KeyboardC
                 activation_serial: command.activation_serial(),
             })
         }
+        fb::KeyboardCommandKind::PanelMotion => {
+            if command.flags() != 0
+                || command.text().is_some()
+                || command.key().is_some()
+                || command.panel_height() > MAX_KEYBOARD_PANEL_HEIGHT
+                || command.panel_duration_ms() > MAX_KEYBOARD_PANEL_DURATION_MS
+            {
+                return Err(WireError::Payload);
+            }
+            Ok(KeyboardCommand::PanelMotion {
+                height: command.panel_height(),
+                duration_ms: command.panel_duration_ms(),
+            })
+        }
         fb::KeyboardCommandKind::Text => {
             if command.flags() != 0 {
                 return Err(WireError::Flags);
