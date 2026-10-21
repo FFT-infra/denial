@@ -499,10 +499,10 @@ class _LockFingerprintRingPainter extends CustomPainter {
       oldDelegate.sensor != sensor;
 }
 
-/// Prototype depth effect: the subject cut out of the lock wallpaper, drawn
-/// over the clock so the clock sits behind it. The mask is an offline
-/// segmentation of the wallpaper, `~/.cache/denial/wallpaper-depth/
-/// lock-mask.png` (alpha marks the subject, in wallpaper space), with a
+/// Depth effect: the subject cut out of the lock wallpaper, drawn over the
+/// clock so the clock sits behind it. The mask comes from the optional
+/// `wallpaper-depth` program ([wallpaperDepthProvider]):
+/// `lock-mask.png` (alpha marks the subject, in wallpaper space) with a
 /// sidecar naming the wallpaper it belongs to. This layer is the backdrop
 /// again, kept where the mask is, with the mask blurred like the backdrop:
 /// away from the clock it matches the backdrop under it exactly.
@@ -516,6 +516,7 @@ class _LockDepthForeground extends ConsumerStatefulWidget {
 
 class _LockDepthForegroundState extends ConsumerState<_LockDepthForeground> {
   String? _wallpaper;
+  int? _masks;
   ui.Image? _source;
   ui.Image? _mask;
   (double, Size)? _maskKey;
@@ -542,11 +543,7 @@ class _LockDepthForegroundState extends ConsumerState<_LockDepthForeground> {
     final generation = _generation;
     ui.Image? image;
     try {
-      final configured = Platform.environment['XDG_CACHE_HOME'] ?? '';
-      final cache = configured.isNotEmpty
-          ? configured
-          : '${Platform.environment['HOME']}/.cache';
-      final directory = '$cache/denial/wallpaper-depth';
+      final directory = wallpaperDepthDirectory(ref.read(runtimePathsProvider));
       final sidecar = jsonDecode(
         await File('$directory/lock-mask.json').readAsString(),
       );
@@ -618,8 +615,11 @@ class _LockDepthForegroundState extends ConsumerState<_LockDepthForeground> {
             resource.kind == WallpaperResourceKind.file
         ? resource.path
         : null;
-    if (wallpaper != _wallpaper) {
+    // A new mask may be for this wallpaper: read the cache again.
+    final masks = ref.watch(wallpaperDepthProvider);
+    if (wallpaper != _wallpaper || masks != _masks) {
       _wallpaper = wallpaper;
+      _masks = masks;
       _forget();
       if (wallpaper != null) {
         _load(wallpaper);

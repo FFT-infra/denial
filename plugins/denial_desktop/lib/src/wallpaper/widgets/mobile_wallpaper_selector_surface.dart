@@ -1,4 +1,6 @@
 import 'package:denial_desktop/src/state/reference_shell_controller.dart';
+import 'package:denial_desktop/src/state/reference_shell_metrics.dart';
+import 'package:denial_desktop/src/widgets/back_gesture_layer.dart';
 
 import 'dart:async';
 import 'dart:math' as math;
@@ -169,6 +171,12 @@ class _MobileWallpaperSelectorSurfaceState
         event.logicalKey != LogicalKeyboardKey.escape) {
       return KeyEventResult.ignored;
     }
+    _stepBack();
+    return KeyEventResult.handled;
+  }
+
+  /// Escape and Back leave preview or positioning first, then the picker.
+  void _stepBack() {
     switch (_mode) {
       case _MobileWallpaperMode.preview:
         _leavePreviewMode();
@@ -177,7 +185,16 @@ class _MobileWallpaperSelectorSurfaceState
       case _MobileWallpaperMode.browse:
         widget.onDismiss();
     }
-    return KeyEventResult.handled;
+  }
+
+  /// The system Back gesture closes the keyboard before anything else.
+  void _navigateBack() {
+    if (ref.read(referenceShellProvider).edgePanelVisible) {
+      _searchFocusNode.unfocus();
+      ref.read(referenceShellProvider.notifier).closeEdgePanel();
+      return;
+    }
+    _stepBack();
   }
 
   @override
@@ -201,30 +218,45 @@ class _MobileWallpaperSelectorSurfaceState
     return Focus(
       autofocus: true,
       onKeyEvent: _handleKeyEvent,
-      child: switch (_mode) {
-        _MobileWallpaperMode.preview => _PreviewOnlySurface(
-          onRestore: _leavePreviewMode,
-        ),
-        _MobileWallpaperMode.position => _PositionSurface(
-          displaySize: widget.displaySize,
-          state: state,
-          onBack: _leavePositionMode,
-          onPreview: _enterPreviewMode,
-        ),
-        _MobileWallpaperMode.browse => _BrowseSurface(
-          state: state,
-          outputs: outputs,
-          searchController: _searchController,
-          searchFocusNode: _searchFocusNode,
-          onDismiss: widget.onDismiss,
-          onPreview: _enterPreviewMode,
-          onPosition: _enterPositionMode,
-          onCandidate: _applyCandidate,
-          onTarget: (target) =>
-              _selectTarget(target, outputs, displayLayout?.pixelSize),
-        ),
-      },
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          _modeSurface(state, outputs, displayLayout),
+          // The picker covers the shell's own Back strips.
+          MobileBackGestureLayer(onBack: _navigateBack),
+        ],
+      ),
     );
+  }
+
+  Widget _modeSurface(
+    WallpaperExperienceState state,
+    List<DisplayOutput> outputs,
+    DisplayLayout? displayLayout,
+  ) {
+    return switch (_mode) {
+      _MobileWallpaperMode.preview => _PreviewOnlySurface(
+        onRestore: _leavePreviewMode,
+      ),
+      _MobileWallpaperMode.position => _PositionSurface(
+        displaySize: widget.displaySize,
+        state: state,
+        onBack: _leavePositionMode,
+        onPreview: _enterPreviewMode,
+      ),
+      _MobileWallpaperMode.browse => _BrowseSurface(
+        state: state,
+        outputs: outputs,
+        searchController: _searchController,
+        searchFocusNode: _searchFocusNode,
+        onDismiss: widget.onDismiss,
+        onPreview: _enterPreviewMode,
+        onPosition: _enterPositionMode,
+        onCandidate: _applyCandidate,
+        onTarget: (target) =>
+            _selectTarget(target, outputs, displayLayout?.pixelSize),
+      ),
+    };
   }
 }
 
@@ -567,7 +599,12 @@ class _MobileWallpaperTopBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final top = math.max(MediaQuery.paddingOf(context).top, 18.0);
+    // Below the status bar strip: at 18 px the close button could not be
+    // tapped on the Ace 3.
+    final top =
+        MediaQuery.viewPaddingOf(context).top +
+        ReferenceShellMetrics.statusBarHeight +
+        8;
     return Positioned(
       top: top,
       left: 18,

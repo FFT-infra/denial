@@ -19,7 +19,11 @@ import 'package:denial_flutter_sdk/system_services.dart';
 /// the compositor hands the swipe to these strips as it moves inward; over
 /// shell surfaces they receive it directly.
 class MobileBackGestureLayer extends ConsumerStatefulWidget {
-  const MobileBackGestureLayer({super.key});
+  const MobileBackGestureLayer({super.key, this.onBack});
+
+  /// Handles Back in place of [ReferenceShellController.navigateBack], for a
+  /// surface that covers the shell's own strips.
+  final VoidCallback? onBack;
 
   @override
   ConsumerState<MobileBackGestureLayer> createState() =>
@@ -92,7 +96,7 @@ class _MobileBackGestureLayerState extends ConsumerState<MobileBackGestureLayer>
         // Disabling keeps a gesture in flight alive; its release then finds
         // nothing to go back from.
         IgnorePointer(
-          ignoring: !shell.enabled,
+          ignoring: !shell.enabled && widget.onBack == null,
           child: Stack(
             fit: StackFit.expand,
             children: [
@@ -211,7 +215,12 @@ class _MobileBackGestureLayerState extends ConsumerState<MobileBackGestureLayer>
       setState(() => _edge = null);
     });
     if (commit) {
-      ref.read(referenceShellProvider.notifier).navigateBack();
+      final onBack = widget.onBack;
+      if (onBack != null) {
+        onBack();
+      } else {
+        ref.read(referenceShellProvider.notifier).navigateBack();
+      }
     } else {
       _arm.reverse();
     }

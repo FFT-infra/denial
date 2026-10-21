@@ -2,7 +2,7 @@ import 'package:denial_desktop/src/state/reference_shell_metrics.dart';
 import 'package:denial_desktop/src/state/reference_shell_profile.dart';
 
 import 'dart:convert' show jsonDecode;
-import 'dart:io' show File, Platform;
+import 'dart:io' show File;
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'dart:ui' show ImageFilter, TileMode;
@@ -30,7 +30,11 @@ import 'package:denial_flutter_sdk/motion.dart';
 import 'package:denial_flutter_sdk/shell_theme.dart';
 import 'package:denial_flutter_sdk/tokens.dart';
 import 'package:denial_flutter_sdk/wallpaper.dart'
-    show WallpaperResourceKind, wallpaperControllerProvider;
+    show
+        WallpaperResourceKind,
+        wallpaperControllerProvider,
+        wallpaperDepthDirectory,
+        wallpaperDepthProvider;
 
 import '../edge_panel_layer.dart';
 
