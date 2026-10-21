@@ -1,7 +1,8 @@
 # Denial mobile app materials
 
 Status: accepted (Islands, 2026-10-21; smoke islands and the light appearance
-the same day).
+the same day; content under the groups and the keyboard without a fade, the
+tab bar and the tab slide the same day).
 Implemented in `denial-apps/libraries/denial-look`, `denial-look-gpui`,
 Messages and Calls. This governs native phone
 apps (Messages, Phone, Contacts, Settings and later ones). Desktop apps follow
@@ -28,7 +29,8 @@ stop at the first match:
    conversation rows, contact and setting rows, forms, the composer field,
    dial keys, dialogs, blocking states.
 3. **Glass group.** Navigation and commands that stay in place: the top bar,
-   the bottom search or To bar, action menus, in-call controls.
+   the search bar, the call bar, action menus, in-call controls. The one
+   exception is a tab bar, which is anchored (see Layout zones).
 4. **Chip.** A short label about what is around it: day, time, section name,
    count, status, hint, notice. One line, at most about 24 characters.
 
@@ -62,9 +64,11 @@ Rules that follow from the table:
 - Errors in chips use the error text color with an icon, not a red fill. The
   destructive action fill is #D2453B and appears only on a confirm button and
   the end-call button. The call fill #3E9B5B appears only on Call and Answer.
-- GPUI has no backdrop filter and deniald has no client blur protocol. Glass
-  groups and chips are tint only, over the compositor's frost. Do not fake blur
-  in the client and do not draw the wallpaper into the app.
+- Glass groups, text fields with their Send, and the tab bar blur what the
+  app drew under them (`backdrop_blur` in Denial's GPUI fork, as Flutter's
+  `BackdropFilter`), then tint it. The frost behind the window is the compositor's: deniald has no
+  client blur protocol, so do not draw the wallpaper into the app. Chips are
+  tint only.
 - A screen never sets an opaque region. At window opacity 1.0 the backing is
   canvas, and islands still read as islands.
 
@@ -85,6 +89,7 @@ for 225 ppi; 1 dp is 225/160 lp, as `dp()` in Messages computes it.
 | Chip floor | **0.50** dark, **0.70** light | Chips never go below it. |
 | Floating shadow | black, y 6, blur 24, alpha **0.18** dark, **0.08** light | `floating::SHADOW_*`. |
 | Floating edge | 0.75, foreground at **0.12** dark, **0.10** light | `floating::EDGE_*`. |
+| Backdrop blur | radius **40** (two standard deviations) | `floating::BACKDROP_BLUR`. Under glass groups and text fields. |
 | Touch target | 48 dp | Every tappable control. |
 | Top group height | 56 dp | Starts at y 56 (status strip plus gutter). |
 | Composer height | 48 dp | Field and Send are separate islands, same height. |
@@ -110,10 +115,12 @@ light. Apps select roles; they never copy hex values.
 | Zone | Size | Rule |
 | --- | --- | --- |
 | Status strip | **48** at the top | Denial paints it with the app buffer's pixel at (5, 5), alpha included. Keep that pixel on the window backing: the 8 lp gutter does this. |
-| Top group | y 56, 56 dp tall | Back, title or avatar and name, one or two actions. A screen's text field (search, the To field) takes the group's place while it is in use. |
-| Content | between the groups | Scrolls. See Scrolling. |
-| Bottom zone | above the gesture zone | Only the thread's composer, and the dialer's keys and call. Other screens leave it empty and their content scrolls to the gesture zone. |
-| Gesture zone | **52** at the bottom | Messages `GESTURE_INSET`. The shell's pill and home gesture. No controls. |
+| Top group | y 56, 56 dp tall | Back, title or avatar and name, one or two actions. A screen's text field (search, the To field) takes the group's place while it is in use. On the tabs of a tabbed app (Calls) the top holds the tab's search bar, a glass group, and a round glass menu button; a tab without search shows only the button. |
+| Content | from the top group's upper edge to the window's lower edge | Scrolls under the groups, the bars, the gesture zone and the keyboard. See Scrolling. |
+| Tab bar | the bottom edge up: the gesture zone, then **52** dp of tabs | A tabbed app's tabs. Anchored, not floating: the window's full width, island smoke over the backdrop blur (opaque raised in an opaque window), the floating edge along its top only, no radius, no shadow. The gesture zone lies under its tabs, inside the bar. Stays put while the keyboard is up, under its glass. |
+| Call bar | on the tab bar, else on the gesture zone, 56 dp | A call going on behind. A glass group. Stays put for the keyboard too. |
+| Bottom zone | on the bars, else on the gesture zone | The thread's composer, the dialer's number, keys and call, the in-call controls, confirmations. Of these only the composer rides on the keyboard. |
+| Gesture zone | **52** at the bottom | Messages `GESTURE_INSET`. The shell's pill and home gesture. No controls; content passes under it. |
 | Side edges | | The shell's Back swipe. No edge rails (no A to Z index). |
 
 Keyboard: a phone app lays itself out around the keyboard. It takes the
@@ -121,18 +128,22 @@ keyboard inset (`denial_keyboard_inset_v1`, `Window::handle_keyboard_inset` in
 gpui-touch, see [MOBILE_APP_INSETS.md](MOBILE_APP_INSETS.md#keyboard-inset))
 and the shell stops lifting its window. The window keeps its size; the app is
 told the keyboard height and the shell's motion time once per show, change and
-hide, and moves the bottom zone onto the keys while the content area above it
-shrinks. An app without the inset is lifted by min(30% of view height,
-**368**), and its top 368 lp leave the screen. Therefore:
+hide. An app without the inset is lifted by min(30% of view height, **368**),
+and its top 368 lp leave the screen. Therefore:
 
+- Only text fields at the bottom ride on the keys: the composer. Everything
+  else stays where it is, at full opacity, under the keyboard. The keyboard is
+  glass, and the shell refracts what is under it; nothing hides, fades or
+  moves out of its way.
+- Content keeps scrolling under the keys. Its last island can scroll a gutter
+  clear of them (`mobile::content_bottom`).
 - The top group stays on screen while typing. Search and the New
-  conversation To field are in it; the composer is the only bottom field.
+  conversation To field are at the top; the composer is the only bottom field.
 - Results and candidates for a top field list downward from it, best match
   first.
-- While the keyboard is up it replaces the 52 lp gesture inset: the gesture
-  zone lies under the keys. What rides on the keys keeps the gutter above
-  them, so the bottom inset is max(keyboard height + **8**, 52)
-  (`mobile::bottom_inset` in denial-look; never computed in an app).
+- What rides on the keys keeps the gutter above them, so it sits
+  max(keyboard height + **8**, 52) from the bottom (`mobile::bottom_inset` in
+  denial-look; never computed in an app).
 - When the keyboard goes away while a field has focus (dragged down, Back),
   the field lets go of the focus, so tapping it brings the keyboard back.
 
@@ -189,15 +200,30 @@ These are the decided shapes. The reference page shows each one.
   group with one action. A state that only blocks sending is a chip above the
   composer, and the draft stays. A sender that takes no replies replaces the
   composer with a chip.
+- **Tabs.** Calls switches Recents, Contacts and Keypad with the anchored tab
+  bar: each tab its icon over its name, the shown tab's icon on an accent
+  pill, the others in secondary. Recents and Contacts have the search bar at
+  the top, with the round menu button beside it; the keypad has only the
+  button.
+- **Scrolling top.** On a list screen whose top is a search bar or the
+  list's own top group (Calls' Recents and Contacts, the conversation list
+  and the archive), the top leaves with the content as it scrolls on, one to
+  one, and comes back the same way as soon as it scrolls back, wherever the
+  list is (`mobile::ScrollAway`). It stays while the search is in use.
 - **Contacts list.** A favourites island first, then one island per initial
-  letter with the letter inside it, as the list's section names are. Search
-  and Add in the top group. No letter rail.
+  letter with the letter inside it, as the list's section names are. The
+  search bar at the top. No letter rail.
 - **Contact detail.** Avatar bare, overlapping the top edge of the name island.
   Call, Message, Share in one glass group. Numbers, recent activity and birthday
   in islands; each number row has its own call and message buttons.
-- **Dialer.** Each key is its own island in a run. The number is an island above
-  the keys with backspace; the best contact match is a chip above that. A round
-  green call island sits centered above the gesture zone.
+- **Dialer.** On the tab bar, from the bottom: the round green call island
+  centered, with backspace as a round glass group beside it; the keys, each
+  its own island in a run, the digit large and its letters under it; the
+  number, large, on an island of its own, with the contact it belongs to
+  under it in accent text. Above, an island of up to three suggestions: the
+  contacts whose number holds the digits or whose name they spell on the
+  keys' letters, and recent numbers no one has, the matching part marked. A
+  tap puts a suggestion's number on the keypad; its button calls it.
 - **In call.** Caller island at the top with the avatar overlapping its edge.
   Six controls in one glass group. End is a round island in the destructive
   fill. The backing stays the neutral tint; it never takes the caller's color.
@@ -207,21 +233,21 @@ These are the decided shapes. The reference page shows each one.
 
 ## Scrolling
 
-GPUI cannot blur, so content passing under a glass group would show sharp text
-through the tint. Content fades instead:
+Content scrolls as it is, never faded:
 
-- The scroll viewport extends 16 lp under the lower edge of the top group and
-  under the upper edge of the composer, or to the gesture inset where a
-  screen has no bottom zone.
-- Content opacity ramps from 0 to 1 over the first and last 24 lp of the
-  viewport. Content padding is 24 lp, so at rest the first and last islands sit
-  a gutter clear of the groups at full opacity.
-- Islands never overlap content, so a fading island shows frost, not other
-  content.
+- The scroll viewport runs from the top group's upper edge to the window's
+  lower edge. Content passes under the top group, the bars, the composer, the
+  gesture zone and the keyboard at full opacity. Only the gutter above the
+  top group clips it, so the pixel Denial paints the status strip with stays
+  on the backing.
+- Content shows blurred through a group's or a field's tint (2026-10-21),
+  and the keyboard, drawn by the shell, refracts it.
+- Content padding: the first island sits a gutter under the top group
+  (`mobile::content_top`), the last a gutter clear of the bars, the composer
+  and the keyboard (`mobile::content_bottom`).
+- Islands never overlap content.
 - Chips scroll with the islands they label. Threads open at the bottom and
   anchor short histories to the bottom.
-- This fade is a mobile rule. The desktop no-fade rule in
-  APPLICATION_MATERIALS.md is unchanged.
 
 ## Motion
 
@@ -236,7 +262,9 @@ Glass groups stay in place and fade their contents. All durations go through
 | Thread to list | The same, reversed | Same |
 | New message | Bubble rises 16 dp and fades in; its chip reads "Sending…", then the time | 300 ms, ease-out cubic |
 | Long-press | Bubble lifts to 1.03; the rest dims; the action group fades in | 120 ms lift, 160 ms dim |
-| Keyboard | The bottom zone rides on the keys; the content area shrinks with it | The shell's motion time from the inset event |
+| Between tabs | The screens slide side by side in tab order, nothing fading; the tab bar's accent pill slides along; a search bar both tabs have stays | 300 ms, decelerate |
+| Tabs to another screen | The tab bar slides down past the window's edge and back up on return; the call bar moves down onto the gesture zone | As List to thread |
+| Keyboard | The composer rides on the keys; everything else stays, under them | The shell's motion time from the inset event |
 | Read | Unread count fades out after the thread opens | 420 ms |
 
 Reduced motion: every tween completes on its first frame, no stagger, no
@@ -268,14 +296,14 @@ durations in apps.
 - Floating edge and shadow tokens with the light-mode values, and the island
   edge for light appearance.
 - Layout constants: status strip 48, gesture inset 52, touch target 48 dp,
-  top group height, and `dp()`.
+  top group height, `dp()`, and the content padding `content_top` and
+  `content_bottom`.
 - Motion: `Look::tween`, `ease_out_cubic`, a decelerate curve, and a stagger
   helper (delay for item i).
 - Live settings: watch `denial/settings.json` (atomic replace) and update the
   `Look` without a restart. Today `Look::load` reads once at launch.
 - GPUI builders `island()`, `island_run()`, `glass_group()`, `chip()` and
-  `control_fill()` so apps do not repeat fills, edges and shadows, and a
-  scroll fade helper for lists.
+  `control_fill()` so apps do not repeat fills, edges and shadows.
 
 ## Validation
 
@@ -289,7 +317,6 @@ request. A successful build is not visual acceptance.
 
 1. Fixed floors or floors derived from frost brightness published by the shell.
 2. Pins are app-local (like drafts) until dmail stores them, if it should.
-3. Per-item opacity for the scroll fade in gpui-touch lists is not yet checked.
-4. `org.dmail.Voice1` returns NotSupported for everything. Until it is
+3. `org.dmail.Voice1` returns NotSupported for everything. Until it is
    implemented, Calls mocks calls on screen and its call screen's top group
    says "Mock call".
