@@ -306,13 +306,19 @@ class _UnlockVerticalStack extends StatelessWidget {
                 fallbackSize: constraints.biggest,
                 child: IgnorePointer(
                   ignoring: currentLockLayer != null,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      if (currentLockLayer != null) backdrop,
-                      scene,
-                      chrome,
-                    ],
+                  // At rest behind the lock the stage is a full output below
+                  // the screen. Keep its state and layout, but do not paint
+                  // the wallpaper, scene and chrome nobody can see.
+                  child: Offstage(
+                    offstage: currentLockLayer != null && slide <= 0,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        if (currentLockLayer != null) backdrop,
+                        scene,
+                        chrome,
+                      ],
+                    ),
                   ),
                 ),
               ),

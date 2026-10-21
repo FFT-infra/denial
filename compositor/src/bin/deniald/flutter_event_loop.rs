@@ -488,6 +488,28 @@ fn handle_screenshot_request(
     Ok(())
 }
 
+/// Whether anything consumes the next output tick. Otherwise the loop sleeps
+/// through output edges instead of waking at every refresh with nothing to
+/// render or deliver.
+fn output_ticks_wanted(
+    runtime: &flutter_runtime::FlutterRuntime,
+    frame_scheduler: &frame_scheduler::FrameScheduler,
+    screenshot_manager: &Option<screenshot::ScreenshotManager>,
+    events: &RuntimeState,
+) -> bool {
+    frame_scheduler.wants_ticks()
+        || runtime.wants_output_ticks()
+        || events.scene_sync.pending_metadata_revision().is_some()
+        || events.scene_sync.pending_buffer_revision().is_some()
+        || screenshot_manager
+            .as_ref()
+            .is_some_and(|manager| manager.request_id().is_some())
+        || events
+            .wayland
+            .as_ref()
+            .is_some_and(wayland_frontend::WaylandFrontend::wants_frame_ticks)
+}
+
 fn next_dispatch_timeout(
     now: Instant,
     runtime: &flutter_runtime::FlutterRuntime,
@@ -2628,6 +2650,7 @@ pub(super) fn run_flutter_event_loop(
     let mut pending_sensor_rotation = output_configuration.sensor_rotation;
     let mut outputs_disconnected = false;
     let mut operation_cadence = OperationCadence::new(Instant::now());
+    let mut ui_floor = cpu_scheduling::UiFloor::new(Instant::now());
     let mut gamma_topology = None;
 
     // Any native helper inadvertently created by an elevated Flutter thread
@@ -3073,8 +3096,18 @@ pub(super) fn run_flutter_event_loop(
             runtime,
         )?;
 
+        let frames_wanted =
+            output_ticks_wanted(runtime, &frame_scheduler, &screenshot_manager, &events);
+        frame_scheduler.idle_ticks(!frames_wanted);
+        let now = Instant::now();
+        // Frame requests stay pending while every display is powered off, but
+        // nothing can present then, so they do not hold the UI floor raised.
+        ui_floor.update(
+            frames_wanted && scanouts.iter().any(|scanout| scanout.powered),
+            now,
+        );
         let Some(dispatch_timeout) = next_dispatch_timeout(
-            Instant::now(),
+            now,
             runtime,
             &frame_scheduler,
             &operation_cadence,
@@ -3085,7 +3118,9 @@ pub(super) fn run_flutter_event_loop(
         ) else {
             break;
         };
+        let dispatch_timeout = ui_floor.limit_dispatch_timeout(now, dispatch_timeout);
         event_loop.dispatch(dispatch_timeout, &mut events)?;
+        frame_scheduler.resume_ticks(Instant::now());
     }
 
     shutdown_flutter_session(

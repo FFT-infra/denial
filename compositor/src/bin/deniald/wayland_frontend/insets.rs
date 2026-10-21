@@ -307,7 +307,7 @@ impl WaylandFrontend {
         }
         // An unchanged geometry target can still need a state-only configure.
         // Avoid rewriting geometry/authority when only XDG state has changed.
-        if self.exact_window_geometry(window) == Some(target) {
+        if self.recorded_exact_window_geometry(window) == Some(target) {
             return;
         }
         self.set_window_geometry_target_with_authority(

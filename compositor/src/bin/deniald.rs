@@ -108,6 +108,9 @@ mod runtime_state;
 #[path = "deniald/scene_sync.rs"]
 mod scene_sync;
 #[cfg(feature = "flutter")]
+#[path = "deniald/screen_off_touch.rs"]
+mod screen_off_touch;
+#[cfg(feature = "flutter")]
 #[path = "deniald/screenshot.rs"]
 mod screenshot;
 #[path = "deniald/session_activation.rs"]
@@ -369,6 +372,18 @@ fn main() {
         if let Err(error) = authentication::fingerprint_settings::run() {
             println!("{}", serde_json::json!({"event":"unavailable"}));
             eprintln!("deniald fingerprint settings: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    #[cfg(feature = "flutter")]
+    if std::env::args_os()
+        .skip(1)
+        .eq([std::ffi::OsString::from("--lock-pin")])
+    {
+        if let Err(error) = authentication::pin::run_settings() {
+            println!("{}", serde_json::json!({"event":"unavailable"}));
+            eprintln!("deniald lock PIN: {error}");
             std::process::exit(1);
         }
         return;

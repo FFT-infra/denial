@@ -14,15 +14,21 @@
 //! - An application that stays unfocused is capped to the little tier's
 //!   capacity. Its threads that still use the whole application CPU domain
 //!   are pinned to the little CPUs. Regaining focus restores both.
+//! - For the same interaction hold, a GPU that its platform lets Denial raise
+//!   runs at its highest frequency. See `gpu_floor`. The shell also reports
+//!   its own animations, such as an arriving banner, which no input drives;
+//!   those raise only the GPU, for the animation and a short hold after it.
 //!
 //! Configuration is read once:
-//! - DENIAL_CPU_HINTS=0 disables the hints.
+//! - DENIAL_CPU_HINTS=0 disables the CPU hints, DENIAL_GPU_HINTS=0 the GPU
+//!   floor.
 //! - DENIAL_CPU_HINTS_BOOST, _FOCUS and _BACKGROUND_MAX take utilization
 //!   values in 0..=1024.
 //! - _HOLD_MS and _DEMOTE_MS take milliseconds.
 //! - _PIN=0 keeps the caps but never changes affinity.
 //! - _THREADS adds comma-separated frame thread names.
 use super::capacity::SchedAttr;
+use super::gpu_floor::GpuFloor;
 use denial_core::cpu_affinity::{self, CpuSet, Groups, Pid, sched_getaffinity, sched_setaffinity};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
@@ -44,6 +50,12 @@ const MAX_TREE_PROCESSES: usize = 512;
 /// thread of a browser each time costs more than the hint itself.
 const FRAME_THREAD_REFRESH: Duration = Duration::from_secs(1);
 const UTIL_MAX: u32 = 1024;
+/// How long the GPU floor outlasts a shell animation, so back-to-back
+/// animations and the frame that completes one keep the clock.
+const ANIMATION_HOLD: Duration = Duration::from_millis(100);
+/// A shell animation that runs this long without input is a looping
+/// indicator rather than a transition, and no longer holds the GPU floor.
+const ANIMATION_LIMIT: Duration = Duration::from_secs(3);
 
 static SENDER: OnceLock<Sender<Event>> = OnceLock::new();
 static EPOCH: OnceLock<Instant> = OnceLock::new();
@@ -52,17 +64,24 @@ static EPOCH: OnceLock<Instant> = OnceLock::new();
 // Worker::expire for the race that this ordering closes.
 static LAST_INPUT_MS: AtomicU64 = AtomicU64::new(0);
 static INTERACTING: AtomicBool = AtomicBool::new(false);
+/// Set once a GPU floor exists, so animation reports cost nothing elsewhere.
+static GPU_FLOOR: AtomicBool = AtomicBool::new(false);
+static ANIMATING: AtomicBool = AtomicBool::new(false);
 
 enum Event {
     Focus(Option<libc::pid_t>),
     Interaction,
+    Animation(bool),
 }
 
 /// Starts the hint worker. This runs on the startup thread before
 /// elevation, so the worker begins life with ordinary scheduling.
 pub(super) fn start() {
-    if std::env::var("DENIAL_CPU_HINTS").as_deref() == Ok("0") {
+    let config = Config::from_env();
+    if !config.cpu {
         tracing::info!("semantic CPU hints disabled by DENIAL_CPU_HINTS");
+    }
+    if !config.cpu && !config.gpu {
         return;
     }
     let (sender, receiver) = mpsc::channel();
@@ -70,7 +89,7 @@ pub(super) fn start() {
         .name("denial-cpu-hint".into())
         .spawn(move || {
             super::normalize_current_worker("cpu-hints");
-            Worker::new(Config::from_env()).run(receiver);
+            Worker::new(config).run(receiver);
         });
     match spawn {
         Ok(_) => {
@@ -100,6 +119,20 @@ pub(super) fn note_interaction() {
     }
 }
 
+/// Called when the shell starts or stops animating. Only a GPU floor uses it;
+/// CPU placement follows input alone.
+pub(super) fn note_animation(active: bool) {
+    if !GPU_FLOOR.load(Ordering::Relaxed) {
+        return;
+    }
+    let Some(sender) = SENDER.get() else {
+        return;
+    };
+    if ANIMATING.swap(active, Ordering::Relaxed) != active {
+        let _ = sender.send(Event::Animation(active));
+    }
+}
+
 fn epoch() -> Instant {
     *EPOCH.get_or_init(Instant::now)
 }
@@ -110,6 +143,8 @@ fn now_ms() -> u64 {
 
 #[derive(Clone, Debug, PartialEq)]
 struct Config {
+    cpu: bool,
+    gpu: bool,
     boost: Option<u32>,
     focus: u32,
     background_max: Option<u32>,
@@ -139,6 +174,8 @@ impl Config {
                 .map_or(default, Duration::from_millis)
         };
         Self {
+            cpu: lookup("DENIAL_CPU_HINTS").as_deref() != Some("0"),
+            gpu: lookup("DENIAL_GPU_HINTS").as_deref() != Some("0"),
             boost: utilization("DENIAL_CPU_HINTS_BOOST"),
             focus: utilization("DENIAL_CPU_HINTS_FOCUS").unwrap_or(DEFAULT_FOCUS_MINIMUM),
             background_max: utilization("DENIAL_CPU_HINTS_BACKGROUND_MAX"),
@@ -325,6 +362,11 @@ struct Worker {
     demoted: HashSet<Process>,
     frame_threads: HashMap<Process, (Instant, Vec<libc::pid_t>)>,
     boosting: bool,
+    gpu: Option<GpuFloor>,
+    /// When the current shell animation started, while one runs.
+    animation: Option<Instant>,
+    /// Until when the GPU floor outlasts the last shell animation.
+    animation_hold: Option<Instant>,
     uid: u32,
     own_pid: libc::pid_t,
     warned: bool,
@@ -340,6 +382,9 @@ impl Worker {
             demoted: HashSet::new(),
             frame_threads: HashMap::new(),
             boosting: false,
+            gpu: None,
+            animation: None,
+            animation_hold: None,
             // SAFETY: getuid has no arguments and cannot fail.
             uid: unsafe { libc::getuid() },
             own_pid: std::process::id() as libc::pid_t,
@@ -348,6 +393,13 @@ impl Worker {
     }
 
     fn run(mut self, receiver: Receiver<Event>) {
+        if self.config.gpu {
+            self.gpu = GpuFloor::discover();
+            GPU_FLOOR.store(self.gpu.is_some(), Ordering::Relaxed);
+        }
+        if !self.config.cpu && self.gpu.is_none() {
+            return;
+        }
         loop {
             let event = match self.next_deadline() {
                 Some(deadline) => {
@@ -358,10 +410,12 @@ impl Worker {
             match event {
                 Ok(Event::Focus(pid)) => self.focus(pid),
                 Ok(Event::Interaction) => self.interaction_started(),
+                Ok(Event::Animation(active)) => self.animation(active),
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => return,
             }
             self.expire();
+            self.update_gpu();
         }
     }
 
@@ -412,7 +466,18 @@ impl Worker {
     fn next_deadline(&self) -> Option<Instant> {
         let interaction = self.boosting.then(|| self.interaction_deadline());
         let demotion = self.pending.iter().map(|(_, due)| *due).min();
-        interaction.into_iter().chain(demotion).min()
+        // A looping animation past its limit no longer holds the floor and
+        // needs no wakeup until it stops; an elapsed deadline would spin.
+        let animation = self
+            .animation
+            .map(|start| start + ANIMATION_LIMIT)
+            .filter(|limit| *limit > Instant::now());
+        interaction
+            .into_iter()
+            .chain(demotion)
+            .chain(animation)
+            .chain(self.animation_hold)
+            .min()
     }
 
     fn current_floor(&self, topology: &Topology) -> u32 {
@@ -424,6 +489,9 @@ impl Worker {
     }
 
     fn focus(&mut self, pid: Option<libc::pid_t>) {
+        if !self.config.cpu {
+            return;
+        }
         let topology = self.topology();
         let next = pid
             .filter(|pid| *pid > 0 && *pid != self.own_pid && self.owned(*pid))
@@ -454,9 +522,42 @@ impl Worker {
         if self.boosting {
             return;
         }
-        let topology = self.topology();
         self.boosting = true;
-        self.apply_floors(self.boost_for(&topology));
+        // The GPU first: a frame's GPU work starts later than its CPU work,
+        // but a frequency change takes longer than a clamp.
+        self.update_gpu();
+        if self.config.cpu {
+            let topology = self.topology();
+            self.apply_floors(self.boost_for(&topology));
+        }
+    }
+
+    fn animation(&mut self, active: bool) {
+        if active {
+            self.animation.get_or_insert_with(Instant::now);
+            self.animation_hold = None;
+        } else if self.animation.take().is_some() {
+            self.animation_hold = Some(Instant::now() + ANIMATION_HOLD);
+        }
+    }
+
+    /// Holds the GPU floor during input and its hold, and during a shell
+    /// animation, bounded by [`ANIMATION_LIMIT`], plus [`ANIMATION_HOLD`].
+    fn update_gpu(&mut self) {
+        let Some(gpu) = &mut self.gpu else {
+            return;
+        };
+        let now = Instant::now();
+        self.animation_hold = self.animation_hold.filter(|until| *until > now);
+        let animating = self
+            .animation
+            .is_some_and(|start| now < start + ANIMATION_LIMIT)
+            || self.animation_hold.is_some();
+        if self.boosting || animating {
+            gpu.raise();
+        } else {
+            gpu.lower();
+        }
     }
 
     fn apply_floors(&mut self, floor: u32) {
@@ -479,7 +580,9 @@ impl Worker {
                 INTERACTING.store(true, Ordering::SeqCst);
             } else {
                 self.boosting = false;
-                self.apply_floors(self.idle_floor());
+                if self.config.cpu {
+                    self.apply_floors(self.idle_floor());
+                }
             }
         }
         if self.pending.iter().any(|(_, due)| *due <= now) {
@@ -794,6 +897,21 @@ mod tests {
     }
 
     #[test]
+    fn a_looping_animation_past_its_limit_schedules_no_wakeup() {
+        let mut worker = Worker::new(Config::from_lookup(|_| None));
+        worker.animation(true);
+        assert!(worker.next_deadline().is_some());
+        worker.animation = Some(Instant::now() - ANIMATION_LIMIT);
+        assert_eq!(worker.next_deadline(), None);
+        worker.animation(false);
+        assert!(
+            worker
+                .next_deadline()
+                .is_some_and(|hold| hold > Instant::now())
+        );
+    }
+
+    #[test]
     fn parses_stat_with_spaces_and_parentheses_in_the_name() {
         let stat = "4242 (Web (Content) x) S 17 4242 4242 0 -1 4194560 1 0 0 0 0 0 0 0 20 0 9 0 123456 0 0";
         let (comm, fields) = parse_stat(stat).unwrap();
@@ -805,6 +923,7 @@ mod tests {
     #[test]
     fn configuration_defaults_and_validation() {
         let config = Config::from_lookup(|_| None);
+        assert!(config.cpu && config.gpu);
         assert_eq!(config.boost, None);
         assert_eq!(config.focus, DEFAULT_FOCUS_MINIMUM);
         assert_eq!(config.background_max, None);
@@ -814,6 +933,7 @@ mod tests {
         let config = Config::from_lookup(|key| {
             Some(
                 match key {
+                    "DENIAL_GPU_HINTS" => "0",
                     "DENIAL_CPU_HINTS_BOOST" => "900",
                     "DENIAL_CPU_HINTS_FOCUS" => "2048",
                     "DENIAL_CPU_HINTS_BACKGROUND_MAX" => "400",
@@ -825,6 +945,7 @@ mod tests {
                 .to_owned(),
             )
         });
+        assert!(config.cpu && !config.gpu);
         assert_eq!(config.boost, Some(900));
         assert_eq!(
             config.focus, DEFAULT_FOCUS_MINIMUM,

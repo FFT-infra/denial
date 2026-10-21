@@ -152,6 +152,90 @@ abstract class AppLocalizations {
   /// **'Resize widget'**
   String get homeResizeWidget;
 
+  /// Name of a new home screen folder whose apps share no category.
+  ///
+  /// In en, this message translates to:
+  /// **'Folder'**
+  String get homeFolderDefaultName;
+
+  /// Suggested name of a new home screen folder of games.
+  ///
+  /// In en, this message translates to:
+  /// **'Games'**
+  String get homeFolderGames;
+
+  /// Suggested name of a new home screen folder of network apps.
+  ///
+  /// In en, this message translates to:
+  /// **'Internet'**
+  String get homeFolderInternet;
+
+  /// Suggested name of a new home screen folder of office apps.
+  ///
+  /// In en, this message translates to:
+  /// **'Office'**
+  String get homeFolderOffice;
+
+  /// Suggested name of a new home screen folder of graphics apps.
+  ///
+  /// In en, this message translates to:
+  /// **'Graphics'**
+  String get homeFolderGraphics;
+
+  /// Suggested name of a new home screen folder of audio and video apps.
+  ///
+  /// In en, this message translates to:
+  /// **'Media'**
+  String get homeFolderMedia;
+
+  /// Suggested name of a new home screen folder of developer tools.
+  ///
+  /// In en, this message translates to:
+  /// **'Development'**
+  String get homeFolderDevelopment;
+
+  /// Suggested name of a new home screen folder of education apps.
+  ///
+  /// In en, this message translates to:
+  /// **'Education'**
+  String get homeFolderEducation;
+
+  /// Suggested name of a new home screen folder of science apps.
+  ///
+  /// In en, this message translates to:
+  /// **'Science'**
+  String get homeFolderScience;
+
+  /// Suggested name of a new home screen folder of system tools.
+  ///
+  /// In en, this message translates to:
+  /// **'System'**
+  String get homeFolderSystem;
+
+  /// Suggested name of a new home screen folder of utilities.
+  ///
+  /// In en, this message translates to:
+  /// **'Utilities'**
+  String get homeFolderUtilities;
+
+  /// Suggested name of a new home screen folder of settings apps.
+  ///
+  /// In en, this message translates to:
+  /// **'Settings'**
+  String get homeFolderSettings;
+
+  /// Accessible hint for the editable name of an open home screen folder.
+  ///
+  /// In en, this message translates to:
+  /// **'Rename folder'**
+  String get homeFolderRename;
+
+  /// Accessible label of a home screen folder: its name and how many apps it holds.
+  ///
+  /// In en, this message translates to:
+  /// **'{name}, {count, plural, =1{1 app} other{{count} apps}}'**
+  String homeFolderApps(String name, int count);
+
   /// English UI text for actionCancel.
   ///
   /// In en, this message translates to:
@@ -2214,11 +2298,11 @@ abstract class AppLocalizations {
   /// **'{watts} W'**
   String powerWattsDecimal(String watts);
 
-  /// English UI text for quickSettingsAutomatic.
+  /// Quick Settings toggle that is on while the screen follows the orientation sensor.
   ///
   /// In en, this message translates to:
-  /// **'Automatic'**
-  String get quickSettingsAutomatic;
+  /// **'Auto-rotate'**
+  String get quickSettingsAutoRotate;
 
   /// English UI text for quickSettingsBalanced.
   ///
@@ -2244,12 +2328,6 @@ abstract class AppLocalizations {
   /// **'Controls'**
   String get quickSettingsControls;
 
-  /// English UI text for quickSettingsDate.
-  ///
-  /// In en, this message translates to:
-  /// **'{weekday} {day}'**
-  String quickSettingsDate(String weekday, int day);
-
   /// English UI text for quickSettingsHighPerformance.
   ///
   /// In en, this message translates to:
@@ -2261,12 +2339,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Keyboard'**
   String get quickSettingsKeyboard;
-
-  /// English UI text for quickSettingsLocked.
-  ///
-  /// In en, this message translates to:
-  /// **'Locked'**
-  String get quickSettingsLocked;
 
   /// English UI text for quickSettingsNormal.
   ///
@@ -2303,12 +2375,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Performance'**
   String get quickSettingsPerformance;
-
-  /// English UI text for quickSettingsRotation.
-  ///
-  /// In en, this message translates to:
-  /// **'Rotation'**
-  String get quickSettingsRotation;
 
   /// English UI text for quickSettingsSettingsUnavailable.
   ///
@@ -8859,6 +8925,144 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Right click'**
   String get inputDeckRightClick;
+
+  /// Title above the lock screen PIN entry.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter PIN'**
+  String get lockEnterPin;
+
+  /// Screen reader label for the lock screen PIN dots.
+  ///
+  /// In en, this message translates to:
+  /// **'PIN, {entered} of {length} digits entered'**
+  String lockPinProgress(int entered, int length);
+
+  /// Screen reader label for the hidden PIN field.
+  ///
+  /// In en, this message translates to:
+  /// **'PIN, obscured'**
+  String get lockPinObscured;
+
+  /// Shown after a rejected lock screen PIN.
+  ///
+  /// In en, this message translates to:
+  /// **'Wrong PIN'**
+  String get lockWrongPin;
+
+  /// Switches the lock screen from the PIN to the account password.
+  ///
+  /// In en, this message translates to:
+  /// **'Use password'**
+  String get lockUsePassword;
+
+  /// Switches the lock screen from the account password back to the PIN.
+  ///
+  /// In en, this message translates to:
+  /// **'Use PIN'**
+  String get lockUsePin;
+
+  /// Lock screen PIN keypad key that removes the last digit.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete'**
+  String get lockPinDelete;
+
+  /// Lock screen settings section for the optional unlock PIN.
+  ///
+  /// In en, this message translates to:
+  /// **'PIN'**
+  String get settingsLockPinTitle;
+
+  /// Lock screen settings row title.
+  ///
+  /// In en, this message translates to:
+  /// **'Unlock with a PIN'**
+  String get settingsLockPinLabel;
+
+  /// Lock screen settings row description.
+  ///
+  /// In en, this message translates to:
+  /// **'Type a short numeric PIN on the lock screen instead of your password. The password still unlocks too, and everything else keeps asking for it.'**
+  String get settingsLockPinDescription;
+
+  /// Status of the unlock PIN.
+  ///
+  /// In en, this message translates to:
+  /// **'On, {length} digits'**
+  String settingsLockPinOn(int length);
+
+  /// Status when no unlock PIN is set.
+  ///
+  /// In en, this message translates to:
+  /// **'Off'**
+  String get settingsLockPinOff;
+
+  /// Button that starts creating an unlock PIN.
+  ///
+  /// In en, this message translates to:
+  /// **'Set up PIN'**
+  String get settingsLockPinSetUp;
+
+  /// Button that replaces the unlock PIN.
+  ///
+  /// In en, this message translates to:
+  /// **'Change PIN'**
+  String get settingsLockPinChange;
+
+  /// Button that removes the unlock PIN.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove PIN'**
+  String get settingsLockPinRemove;
+
+  /// Button that saves a new unlock PIN.
+  ///
+  /// In en, this message translates to:
+  /// **'Save PIN'**
+  String get settingsLockPinSave;
+
+  /// Field for the account password before changing the PIN.
+  ///
+  /// In en, this message translates to:
+  /// **'Account password'**
+  String get settingsLockPinPassword;
+
+  /// Field for the new unlock PIN.
+  ///
+  /// In en, this message translates to:
+  /// **'New PIN'**
+  String get settingsLockPinNew;
+
+  /// Field that repeats the new unlock PIN.
+  ///
+  /// In en, this message translates to:
+  /// **'Confirm PIN'**
+  String get settingsLockPinConfirm;
+
+  /// Helper text under the new PIN field.
+  ///
+  /// In en, this message translates to:
+  /// **'4 to 12 digits'**
+  String get settingsLockPinLengthHint;
+
+  /// Error when the confirmation differs from the new PIN.
+  ///
+  /// In en, this message translates to:
+  /// **'The PINs don’t match'**
+  String get settingsLockPinMismatch;
+
+  /// Error when the account password is rejected.
+  ///
+  /// In en, this message translates to:
+  /// **'Wrong password'**
+  String get settingsLockPinWrongPassword;
+
+  /// Error when deniald could not save or remove the PIN.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn’t change the PIN. Try again.'**
+  String get settingsLockPinUnavailable;
 }
 
 class _AppLocalizationsDelegate

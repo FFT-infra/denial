@@ -55,7 +55,9 @@ enum WindowRequestKind : ubyte {
   ConfigureSystemBar = 6,
   SwitchWorkspace = 7,
   MoveWindowToWorkspace = 8,
-  MinimizeWindow = 9
+  MinimizeWindow = 9,
+  // The system Back action for one client window.
+  NavigateBack = 10
 }
 
 enum WindowResponseKind : ubyte {
@@ -300,6 +302,21 @@ struct InputWindowRegion {
   flags:uint;
 }
 
+// The screen edge from which a shell edge swipe travels inward.
+enum InputEdge : ubyte {
+  Left = 0,
+  Right = 1
+}
+
+// A touch that starts inside rect over a client window is delivered to that
+// client until it travels inward from edge. The compositor then cancels the
+// client's touch and hands the contact to Flutter, starting from where it
+// went down. Touches that leave by another direction stay with the client.
+struct EdgeSwipeRegion {
+  rect:WireRect;
+  edge:InputEdge;
+}
+
 table InputLayout {
   epoch:ulong;
   flags:uint;
@@ -312,6 +329,7 @@ table InputLayout {
   // Compositor-owned software-keyboard surfaces. Touching these regions must
   // preserve the active client editor instead of behaving like an outside tap.
   software_keyboard_regions:[WireRect];
+  edge_swipe_regions:[EdgeSwipeRegion];
 }
 
 table SurfaceLayer {

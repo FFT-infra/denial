@@ -79,6 +79,11 @@ impl FlutterRuntime {
             self.host().respond(&mut message, &[])?;
             return Ok(());
         }
+        if message.channel == "denial/animation" {
+            crate::cpu_scheduling::note_animation(message.data.first() == Some(&1));
+            self.host().respond(&mut message, &[])?;
+            return Ok(());
+        }
         if message.channel == "denial/haptics" {
             let result = self.authentication.handle_haptics_packet(&message.data);
             self.host().respond(&mut message, &[])?;

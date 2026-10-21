@@ -208,6 +208,51 @@ fn dart_system_bar_request_updates_the_complete_native_work_area() {
 }
 
 #[test]
+fn dart_edge_swipe_regions_follow_window_regions_intact() {
+    // The Dart encoder writes this struct vector after the window regions;
+    // both must keep their 8-byte alignment for every field to decode.
+    let mut bridge = bridge();
+    bridge
+        .handle(include_bytes!(
+            "../../../../../protocol/golden/dart_input_edges.denw"
+        ))
+        .unwrap();
+    let layout = bridge.take_input_layout_update().unwrap();
+    assert_eq!(
+        layout
+            .windows
+            .iter()
+            .map(|window| (window.object_id, window.z, window.flags))
+            .collect::<Vec<_>>(),
+        [
+            (0x1_0000_0002, 2, 5),
+            (0x1_0000_0001, 1, 1),
+            (0x1_0000_0000, 0, 5),
+        ]
+    );
+    assert_eq!(layout.windows[0].rect.x, -6.0);
+    let strip = |x| InputRect {
+        x,
+        y: 48.0,
+        width: 24.0,
+        height: 1288.5,
+    };
+    assert_eq!(
+        layout.edge_swipe_regions,
+        [
+            EdgeSwipeRegion {
+                rect: strip(0.0),
+                edge: InputEdge::Left,
+            },
+            EdgeSwipeRegion {
+                rect: strip(586.25),
+                edge: InputEdge::Right,
+            },
+        ]
+    );
+}
+
+#[test]
 fn legacy_system_bar_request_retains_native_work_area_metrics() {
     let mut bridge = bridge();
     let request = system_bar_request(fb::SystemBarSide::Bottom, &[9], -1.0, -1.0);
@@ -489,6 +534,73 @@ fn taskbar_minimize_targets_native_window_state_without_geometry() {
 }
 
 #[test]
+fn navigate_back_targets_one_window() {
+    let mut wire = bridge();
+    assert!(
+        wire.handle(&window_request(
+            fb::WindowRequestKind::NavigateBack,
+            0,
+            42,
+            None
+        ))
+        .unwrap()
+        .is_none()
+    );
+    let commands = wire.drain_window_commands().collect::<Vec<_>>();
+    assert_eq!(
+        commands,
+        vec![WindowCommand::NavigateBack { window_id: 42 }]
+    );
+    assert_eq!(commands[0].window_id(), Some(42));
+    assert!(matches!(
+        bridge().handle(&request(fb::WindowRequestKind::NavigateBack, 0)),
+        Err(WireError::Identity)
+    ));
+}
+
+#[test]
+fn input_layout_decodes_edge_swipe_regions() {
+    let rect = |x| fb::WireRect::new(x, 48.0, 24.0, 700.0);
+    let edges = [
+        fb::EdgeSwipeRegion::new(&rect(0.0), fb::InputEdge::Left),
+        fb::EdgeSwipeRegion::new(&rect(376.0), fb::InputEdge::Right),
+    ];
+    let mut wire = bridge();
+    wire.handle(&input_layout_with_edges(&[], &[], &[], &edges, 0))
+        .unwrap();
+    let layout = wire.take_input_layout_update().unwrap();
+    assert_eq!(
+        layout.edge_swipe_regions,
+        vec![
+            EdgeSwipeRegion {
+                rect: InputRect {
+                    x: 0.0,
+                    y: 48.0,
+                    width: 24.0,
+                    height: 700.0,
+                },
+                edge: InputEdge::Left,
+            },
+            EdgeSwipeRegion {
+                rect: InputRect {
+                    x: 376.0,
+                    y: 48.0,
+                    width: 24.0,
+                    height: 700.0,
+                },
+                edge: InputEdge::Right,
+            },
+        ]
+    );
+
+    let unknown = [fb::EdgeSwipeRegion::new(&rect(0.0), fb::InputEdge(9))];
+    assert!(matches!(
+        bridge().handle(&input_layout_with_edges(&[], &[], &[], &unknown, 0)),
+        Err(WireError::Payload)
+    ));
+}
+
+#[test]
 fn taskbar_minimize_rejects_missing_identity_and_unknown_flags() {
     assert!(matches!(
         bridge().handle(&request(fb::WindowRequestKind::MinimizeWindow, 0)),
@@ -684,10 +796,22 @@ fn input_layout_with_visible(
     visible_surface_ids: &[u64],
     flags: u32,
 ) -> Vec<u8> {
+    input_layout_with_edges(shell_regions, windows, visible_surface_ids, &[], flags)
+}
+
+fn input_layout_with_edges(
+    shell_regions: &[fb::WireRect],
+    windows: &[fb::InputWindowRegion],
+    visible_surface_ids: &[u64],
+    edge_swipe_regions: &[fb::EdgeSwipeRegion],
+    flags: u32,
+) -> Vec<u8> {
     let mut builder = FlatBufferBuilder::new();
     let shell_regions = builder.create_vector(shell_regions);
     let windows = builder.create_vector(windows);
     let visible_surface_ids = builder.create_vector(visible_surface_ids);
+    let edge_swipe_regions =
+        (!edge_swipe_regions.is_empty()).then(|| builder.create_vector(edge_swipe_regions));
     let layout = fb::InputLayout::create(
         &mut builder,
         &fb::InputLayoutArgs {
@@ -697,6 +821,7 @@ fn input_layout_with_visible(
             windows: Some(windows),
             visible_surface_ids: Some(visible_surface_ids),
             software_keyboard_regions: None,
+            edge_swipe_regions,
         },
     );
     let envelope = fb::Envelope::create(

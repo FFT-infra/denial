@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/widgets.dart';
 
@@ -22,6 +24,8 @@ class OverviewCarousel extends StatefulWidget {
     required this.foregroundObjectId,
     this.foregroundInHero = false,
     this.focusingObjectId,
+    this.focusStartRect,
+    this.labelOpacity,
     required this.onDismissWindow,
     required this.onFocusWindow,
   });
@@ -33,6 +37,10 @@ class OverviewCarousel extends StatefulWidget {
   final int? foregroundObjectId;
   final bool foregroundInHero;
   final int? focusingObjectId;
+
+  /// Where the focusing preview starts its zoom to full screen, globally.
+  final Rect? focusStartRect;
+  final Animation<double>? labelOpacity;
   final ValueChanged<DenialWindow> onDismissWindow;
   final void Function(DenialWindow window, Rect startRect) onFocusWindow;
 
@@ -53,6 +61,8 @@ class _OverviewCarouselState extends State<OverviewCarousel>
   bool _reconcileScheduled = false;
   ScrollHoldController? _pointerHold;
   int? _heldPointer;
+  ({Animation<double> progress, double travel, Animation<Offset> slide})?
+  _entry;
 
   @override
   void initState() {
@@ -235,82 +245,102 @@ class _OverviewCarouselState extends State<OverviewCarousel>
                       overviewPageSpacing)
                   .clamp(0.0, constraints.maxWidth)
             : constraints.maxWidth;
-        return RetainedTranslation(
-          translation: widget.progress.drive(
-            Tween(begin: Offset(-entryTravel, 0), end: Offset.zero),
-          ),
-          child: ClipRect(
-            child: OverflowBox(
-              minWidth: viewportWidth,
-              maxWidth: viewportWidth,
-              child: SizedBox(
-                width: viewportWidth,
-                child: IgnorePointer(
-                  ignoring: _removing.isNotEmpty,
-                  child: Listener(
-                    onPointerDown: _holdForMouse,
-                    onPointerUp: _releaseMouse,
-                    onPointerCancel: _releaseMouse,
-                    child: PageView.builder(
-                      hitTestBehavior: HitTestBehavior.translucent,
-                      controller: widget.pageController,
-                      // Older tasks always sit to the physical left, including
-                      // while the foreground app is still entering overview.
-                      reverse: Directionality.of(context) == TextDirection.ltr,
-                      pageSnapping: false,
-                      physics: const OverviewScrollPhysics(),
-                      clipBehavior: Clip.hardEdge,
-                      itemCount: _items.length,
-                      findChildIndexCallback: (key) => switch (key) {
-                        ValueKey<int>(:final value) => _indexOf(value),
-                        _ => null,
-                      },
-                      itemBuilder: (context, index) {
-                        final window = _items[index];
-                        final targetIndex = _targetIndices[window.objectId];
-                        final shift = targetIndex == null
-                            ? 0.0
-                            : (targetIndex - _targetPage - index + _startPage) *
-                                  viewportWidth *
-                                  widget.pageController.viewportFraction *
-                                  -1;
-                        final focusShift = focusIndex == null
-                            ? 0.0
-                            : (focusIndex - index).sign * constraints.maxWidth;
-                        return RetainedTranslation(
-                          key: ValueKey<int>(window.objectId),
-                          translation: _reflow
-                              .drive(CurveTween(curve: Motion.standard))
-                              .drive(
-                                Tween(
-                                  begin: Offset.zero,
-                                  end: Offset(shift, 0),
-                                ),
-                              ),
-                          child: RetainedTranslation(
-                            translation: widget.focusProgress
+        return WindowBackdropMotion(
+          motion: _reflow,
+          child: CompositedTranslation(
+            translation: _entrySlide(entryTravel),
+            devicePixelRatio: MediaQuery.devicePixelRatioOf(context),
+            child: ClipRect(
+              child: OverflowBox(
+                minWidth: viewportWidth,
+                maxWidth: viewportWidth,
+                child: SizedBox(
+                  width: viewportWidth,
+                  child: IgnorePointer(
+                    ignoring: _removing.isNotEmpty,
+                    child: Listener(
+                      onPointerDown: _holdForMouse,
+                      onPointerUp: _releaseMouse,
+                      onPointerCancel: _releaseMouse,
+                      child: PageView.builder(
+                        hitTestBehavior: HitTestBehavior.translucent,
+                        controller: widget.pageController,
+                        // Older tasks always sit to the physical left, including
+                        // while the foreground app is still entering overview.
+                        reverse:
+                            Directionality.of(context) == TextDirection.ltr,
+                        pageSnapping: false,
+                        physics: const OverviewScrollPhysics(),
+                        clipBehavior: Clip.hardEdge,
+                        itemCount: _items.length,
+                        findChildIndexCallback: (key) => switch (key) {
+                          ValueKey<int>(:final value) => _indexOf(value),
+                          _ => null,
+                        },
+                        itemBuilder: (context, index) {
+                          final window = _items[index];
+                          final targetIndex = _targetIndices[window.objectId];
+                          final shift = targetIndex == null
+                              ? 0.0
+                              : (targetIndex -
+                                        _targetPage -
+                                        index +
+                                        _startPage) *
+                                    viewportWidth *
+                                    widget.pageController.viewportFraction *
+                                    -1;
+                          // Neighbors ride the edges of the zooming preview
+                          // and leave the view exactly as it fills it. Older
+                          // tasks sit to the physical left.
+                          final focusRect = widget.focusStartRect;
+                          final focusShift =
+                              focusIndex == null || focusRect == null
+                              ? 0.0
+                              : index > focusIndex
+                              ? -math.max(0.0, focusRect.left)
+                              : index < focusIndex
+                              ? math.max(
+                                  0.0,
+                                  constraints.maxWidth - focusRect.right,
+                                )
+                              : 0.0;
+                          return RetainedTranslation(
+                            key: ValueKey<int>(window.objectId),
+                            translation: _reflow
                                 .drive(CurveTween(curve: Motion.standard))
                                 .drive(
                                   Tween(
                                     begin: Offset.zero,
-                                    end: Offset(focusShift, 0),
+                                    end: Offset(shift, 0),
                                   ),
                                 ),
-                            child: OverviewWindowCard(
-                              window: window,
-                              cardSize: cardSize,
-                              foreground:
-                                  widget.foregroundInHero &&
-                                  widget.foregroundObjectId == window.objectId,
-                              focusing:
-                                  widget.focusingObjectId == window.objectId ||
-                                  _removing.contains(window.objectId),
-                              onDismiss: _dismissWindow,
-                              onFocus: widget.onFocusWindow,
+                            child: RetainedTranslation(
+                              translation: widget.focusProgress
+                                  .drive(CurveTween(curve: Motion.standard))
+                                  .drive(
+                                    Tween(
+                                      begin: Offset.zero,
+                                      end: Offset(focusShift, 0),
+                                    ),
+                                  ),
+                              child: OverviewWindowCard(
+                                window: window,
+                                cardSize: cardSize,
+                                foreground:
+                                    widget.foregroundInHero &&
+                                    widget.foregroundObjectId ==
+                                        window.objectId,
+                                focusing:
+                                    widget.focusingObjectId == window.objectId,
+                                removing: _removing.contains(window.objectId),
+                                labelOpacity: widget.labelOpacity,
+                                onDismiss: _dismissWindow,
+                                onFocus: widget.onFocusWindow,
+                              ),
                             ),
-                          ),
-                        );
-                      },
+                          );
+                        },
+                      ),
                     ),
                   ),
                 ),
@@ -320,6 +350,22 @@ class _OverviewCarouselState extends State<OverviewCarousel>
         );
       },
     );
+  }
+
+  /// The carousel's entry slide, kept across rebuilds so its layer keeps
+  /// one listener.
+  Animation<Offset> _entrySlide(double travel) {
+    final entry = _entry;
+    if (entry != null &&
+        entry.progress == widget.progress &&
+        entry.travel == travel) {
+      return entry.slide;
+    }
+    final slide = widget.progress.drive(
+      Tween(begin: Offset(-travel, 0), end: Offset.zero),
+    );
+    _entry = (progress: widget.progress, travel: travel, slide: slide);
+    return slide;
   }
 
   void _indexItems() {

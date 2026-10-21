@@ -14,6 +14,8 @@
 
 #[path = "cpu_scheduling/capacity.rs"]
 mod capacity;
+#[path = "cpu_scheduling/gpu_floor.rs"]
+mod gpu_floor;
 #[path = "cpu_scheduling/hints.rs"]
 mod hints;
 #[path = "cpu_scheduling/placement.rs"]
@@ -26,7 +28,7 @@ use std::io;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering};
 use std::sync::{Once, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[cfg(feature = "flutter")]
 use denial_flutter_engine::sys;
@@ -41,6 +43,9 @@ const RTKIT_DBUS_TIMEOUT: Duration = Duration::from_secs(2);
 const DEFAULT_RT_TIME_SOFT_US: libc::rlim_t = 200_000;
 const PREFERRED_NICE_LEVEL: libc::c_int = -10;
 const MAX_REGISTERED_PRIORITY_THREADS: usize = 8;
+/// How long the UI floor outlasts the last wanted frame, so content that
+/// updates at a steady pace below the refresh rate keeps it between frames.
+const UI_FLOOR_HOLD: Duration = Duration::from_millis(250);
 
 static INITIALIZE: Once = Once::new();
 
@@ -55,6 +60,7 @@ static PRIORITY_THREAD_IDS: [AtomicI32; MAX_REGISTERED_PRIORITY_THREADS] =
     [const { AtomicI32::new(0) }; MAX_REGISTERED_PRIORITY_THREADS];
 static PRIORITY_THREAD_ROLES: [AtomicU8; MAX_REGISTERED_PRIORITY_THREADS] =
     [const { AtomicU8::new(PriorityRole::Unknown as u8) }; MAX_REGISTERED_PRIORITY_THREADS];
+static UI_FLOOR_RAISED: AtomicBool = AtomicBool::new(true);
 
 pub(super) fn initialize_placement() -> Option<String> {
     placement::initialize()
@@ -98,6 +104,14 @@ impl PriorityRole {
             Self::FlutterRaster => "flutter-raster",
             Self::Volition => "volition",
         }
+    }
+
+    /// Threads that request DENIAL_UI_CPU_MIN.
+    const fn has_ui_floor(self) -> bool {
+        matches!(
+            self,
+            Self::Compositor | Self::FlutterDisplay | Self::FlutterRaster
+        )
     }
 
     const fn from_code(code: u8) -> Self {
@@ -216,6 +230,101 @@ pub(super) fn focus_changed(pid: Option<libc::pid_t>) {
 /// The user produced an input event.
 pub(super) fn note_interaction() {
     hints::note_interaction();
+}
+
+/// The shell started or stopped animating.
+pub(super) fn note_animation(active: bool) {
+    hints::note_animation(active);
+}
+
+/// Requests DENIAL_UI_CPU_MIN for the realtime frame threads only while the
+/// compositor produces frames. A floor acts whenever its thread runs, so each
+/// wake of an idle compositor, for a service or a timer, would otherwise raise
+/// its CPU cluster's clock and memory-bandwidth votes and drop them again a
+/// moment later.
+pub(super) struct UiFloor {
+    enabled: bool,
+    hold_until: Option<Instant>,
+}
+
+impl UiFloor {
+    /// Frame threads start with the floor; an idle compositor lowers it once
+    /// the hold expires.
+    pub(super) fn new(now: Instant) -> Self {
+        let enabled = capacity::configured().is_some_and(|minimum| minimum > 0);
+        if enabled {
+            info!(
+                hold_ms = UI_FLOOR_HOLD.as_millis() as u64,
+                "the UI CPU floor follows frame activity"
+            );
+        }
+        Self::with_state(enabled, now)
+    }
+
+    fn with_state(enabled: bool, now: Instant) -> Self {
+        Self {
+            enabled,
+            hold_until: enabled.then(|| hold_deadline(now)),
+        }
+    }
+
+    /// Called once per event-loop iteration, with whether any output wants
+    /// frames.
+    pub(super) fn update(&mut self, frames_wanted: bool, now: Instant) {
+        if let Some(raised) = self.transition(frames_wanted, now) {
+            set_ui_floor(raised);
+        }
+    }
+
+    fn transition(&mut self, frames_wanted: bool, now: Instant) -> Option<bool> {
+        if !self.enabled {
+            return None;
+        }
+        if frames_wanted {
+            return self
+                .hold_until
+                .replace(hold_deadline(now))
+                .is_none()
+                .then_some(true);
+        }
+        if self.hold_until.is_some_and(|until| now >= until) {
+            self.hold_until = None;
+            return Some(false);
+        }
+        None
+    }
+
+    /// A raised floor wakes the loop when its hold expires, so it never
+    /// outlives the frames into a long idle period.
+    pub(super) fn limit_dispatch_timeout(&self, now: Instant, timeout: Duration) -> Duration {
+        self.hold_until.map_or(timeout, |until| {
+            timeout.min(until.saturating_duration_since(now))
+        })
+    }
+}
+
+fn hold_deadline(now: Instant) -> Instant {
+    now.checked_add(UI_FLOOR_HOLD).unwrap_or(now)
+}
+
+fn set_ui_floor(raised: bool) {
+    let Some(minimum) = capacity::configured() else {
+        return;
+    };
+    UI_FLOOR_RAISED.store(raised, Ordering::Release);
+    let minimum = if raised { minimum } else { 0 };
+    for (thread, role) in PRIORITY_THREAD_IDS.iter().zip(&PRIORITY_THREAD_ROLES) {
+        let tid = thread.load(Ordering::Acquire);
+        if tid <= 0
+            || !PriorityRole::from_code(role.load(Ordering::Acquire)).has_ui_floor()
+            || !scheduler_policy(tid).is_ok_and(is_realtime_policy)
+        {
+            continue;
+        }
+        if let Err(error) = capacity::request_minimum(tid, minimum) {
+            debug!(tid, minimum, %error, "could not update the UI CPU capacity request");
+        }
+    }
 }
 
 fn initialize_once() {
@@ -381,12 +490,13 @@ fn promote_and_log(role: PriorityRole) {
         ),
     }
     // Apply at thread creation, including replacement Flutter engines after
-    // output changes. A startup PID scan cannot follow that lifecycle.
-    if matches!(
-        role,
-        PriorityRole::Compositor | PriorityRole::FlutterDisplay | PriorityRole::FlutterRaster
-    ) {
-        match capacity::apply_configured() {
+    // output changes. A startup PID scan cannot follow that lifecycle. Only a
+    // realtime thread follows an idle compositor's lowered floor; the hint
+    // worker owns the floors of ordinary-policy frame threads.
+    if role.has_ui_floor() {
+        let raised = UI_FLOOR_RAISED.load(Ordering::Acquire)
+            || !scheduler_policy(0).is_ok_and(is_realtime_policy);
+        match capacity::apply_configured(raised) {
             Ok(Some(minimum)) => info!(
                 thread = role.label(),
                 tid = current_tid(),
@@ -978,4 +1088,46 @@ fn flag_value_enabled(value: &str) -> bool {
         value.trim().to_ascii_lowercase().as_str(),
         "1" | "true" | "yes" | "on"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ui_floor_follows_frames_with_a_hold() {
+        let start = Instant::now();
+        let mut floor = UiFloor::with_state(true, start);
+        // Threads start raised; an idle compositor lowers them after the hold.
+        assert_eq!(floor.transition(false, start), None);
+        assert_eq!(
+            floor.limit_dispatch_timeout(start, Duration::from_secs(1)),
+            UI_FLOOR_HOLD
+        );
+        let expired = start + UI_FLOOR_HOLD;
+        assert_eq!(floor.transition(false, expired), Some(false));
+        assert_eq!(floor.transition(false, expired), None);
+        // Lowered, the floor never shortens an idle sleep.
+        let idle = Duration::from_secs(5);
+        assert_eq!(floor.limit_dispatch_timeout(expired, idle), idle);
+
+        let frame = expired + Duration::from_secs(1);
+        assert_eq!(floor.transition(true, frame), Some(true));
+        assert_eq!(floor.transition(true, frame), None);
+        // A gap shorter than the hold between frames keeps it.
+        let gap = frame + UI_FLOOR_HOLD / 2;
+        assert_eq!(floor.transition(false, gap), None);
+        assert_eq!(floor.transition(true, gap), None);
+        assert_eq!(floor.transition(false, gap + UI_FLOOR_HOLD), Some(false));
+    }
+
+    #[test]
+    fn unconfigured_ui_floor_changes_nothing() {
+        let start = Instant::now();
+        let mut floor = UiFloor::with_state(false, start);
+        assert_eq!(floor.transition(true, start), None);
+        assert_eq!(floor.transition(false, start + UI_FLOOR_HOLD), None);
+        let idle = Duration::from_secs(5);
+        assert_eq!(floor.limit_dispatch_timeout(start, idle), idle);
+    }
 }

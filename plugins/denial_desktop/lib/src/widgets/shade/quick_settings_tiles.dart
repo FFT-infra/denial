@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart'
     show CircularProgressIndicator, Icons, IconData, Tooltip;
 import 'package:flutter/services.dart';
@@ -30,6 +32,7 @@ class QuickSettingsTiles extends StatelessWidget {
     this.brightnessControl,
     this.volumeControl,
     this.expansionProgress,
+    this.footerTiles = const [],
     required this.wifi,
     required this.wifiSubtitle,
     required this.wifiEnabled,
@@ -53,6 +56,9 @@ class QuickSettingsTiles extends StatelessWidget {
   final Widget? brightnessControl;
   final Widget? volumeControl;
   final Animation<double>? expansionProgress;
+
+  /// Up to two wide tiles on a row below the grid, aligned with its halves.
+  final List<Widget> footerTiles;
   final bool wifi;
   final String wifiSubtitle;
   final bool wifiEnabled;
@@ -73,22 +79,20 @@ class QuickSettingsTiles extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    assert(footerTiles.length <= 2, 'the footer row has two halves');
     final l10n = context.l10n;
     return LayoutBuilder(
       builder: (context, constraints) {
-        Widget reveal(
-          int index,
-          Widget child, {
-          required double collapseTranslation,
-        }) {
+        final lastNode = 6 + footerTiles.length;
+        Widget reveal(int index, Widget child) {
           final progress = expansionProgress;
           if (progress == null) return child;
           return ColorOsShadeElementReveal(
             progress: progress,
             threshold: ColorOsShadeMotion.contentElementThreshold,
             delay: ColorOsShadeMotion.nodeStagger * index,
+            exitDelay: ColorOsShadeMotion.exitStagger * (lastNode - index),
             fade: false,
-            collapseTranslation: collapseTranslation,
             child: child,
           );
         }
@@ -104,14 +108,11 @@ class QuickSettingsTiles extends StatelessWidget {
         final pitch = column + gutter;
         final wide = column * 2 + gutter;
         final tall = capsule * 2 + gutter;
-        // The ColorOS collapse chain adds a larger negative-Y offset to each
-        // successive row. Include the node's bottom edge because Denial keeps
-        // live glass fully opaque instead of hiding it with a save-layer fade.
-        final firstRowExit = capsule + 28;
-        final secondRowExit = row + tall + 28;
-        final thirdRowExit = row * 3 + 28;
+        final footerTop = row * 3 + gutter;
         return SizedBox(
-          height: QuickSettingsGridMetrics.height * scale,
+          height: footerTiles.isEmpty
+              ? QuickSettingsGridMetrics.height * scale
+              : footerTop + capsule,
           child: Stack(
             children: [
               Positioned(
@@ -132,7 +133,6 @@ class QuickSettingsTiles extends StatelessWidget {
                     onDetails: onOpenWifi,
                     wide: true,
                   ),
-                  collapseTranslation: firstRowExit,
                 ),
               ),
               Positioned(
@@ -153,7 +153,6 @@ class QuickSettingsTiles extends StatelessWidget {
                     onDetails: onOpenBluetooth,
                     wide: true,
                   ),
-                  collapseTranslation: firstRowExit,
                 ),
               ),
               Positioned(
@@ -161,22 +160,14 @@ class QuickSettingsTiles extends StatelessWidget {
                 top: row,
                 width: column,
                 height: tall,
-                child: reveal(
-                  2,
-                  brightnessControl ?? const SizedBox.expand(),
-                  collapseTranslation: secondRowExit,
-                ),
+                child: reveal(2, brightnessControl ?? const SizedBox.expand()),
               ),
               Positioned(
                 left: pitch,
                 top: row,
                 width: column,
                 height: tall,
-                child: reveal(
-                  3,
-                  volumeControl ?? const SizedBox.expand(),
-                  collapseTranslation: secondRowExit,
-                ),
+                child: reveal(3, volumeControl ?? const SizedBox.expand()),
               ),
               if (mobileDataTile != null)
                 Positioned(
@@ -184,11 +175,7 @@ class QuickSettingsTiles extends StatelessWidget {
                   top: row,
                   width: wide,
                   height: capsule,
-                  child: reveal(
-                    4,
-                    mobileDataTile!,
-                    collapseTranslation: secondRowExit,
-                  ),
+                  child: reveal(4, mobileDataTile!),
                 ),
               Positioned(
                 left: pitch * 2,
@@ -203,7 +190,6 @@ class QuickSettingsTiles extends StatelessWidget {
                     active: profile != PowerProfile.balanced,
                     onTap: onCycleProfile,
                   ),
-                  collapseTranslation: thirdRowExit,
                 ),
               ),
               Positioned(
@@ -223,9 +209,16 @@ class QuickSettingsTiles extends StatelessWidget {
                     enabled: dndReady,
                     onTap: onToggleDnd,
                   ),
-                  collapseTranslation: thirdRowExit,
                 ),
               ),
+              for (final (index, tile) in footerTiles.indexed)
+                Positioned(
+                  left: pitch * 2 * index,
+                  top: footerTop,
+                  width: wide,
+                  height: capsule,
+                  child: reveal(7 + index, tile),
+                ),
             ],
           ),
         );
@@ -402,53 +395,83 @@ class _QuickTileState extends State<QuickTile> {
 
   Widget _buildSmall(Color background, Color foreground, double radius) {
     final visualScale = ShadeReferenceGeometry.inverseScaleOf(context);
-    return FittedBox(
-      fit: BoxFit.scaleDown,
-      alignment: Alignment.topCenter,
-      child: SizedBox(
-        width: QuickSettingsGridMetrics.capsule,
-        height: QuickSettingsGridMetrics.row,
-        child: Column(
-          children: [
-            SizedBox.square(
-              dimension: QuickSettingsGridMetrics.capsule,
-              child: _animatedSurface(
-                background: background,
-                radius: radius,
-                child: Center(
-                  child: widget.busy
-                      ? SizedBox.square(
-                          dimension: 22 * visualScale,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2 * visualScale,
-                            color: foreground,
-                          ),
-                        )
-                      : Icon(
-                          widget.icon,
-                          color: foreground,
-                          size: 30 * visualScale,
-                        ),
-                ),
-              ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Fill the column so the tile's edges line up with the capsules and
+        // sliders around it. A row shorter than the reference scales down.
+        final fit = constraints.hasBoundedHeight
+            ? math.min(
+                1.0,
+                constraints.maxHeight / QuickSettingsGridMetrics.row,
+              )
+            : 1.0;
+        final width = constraints.hasBoundedWidth
+            ? constraints.maxWidth / fit
+            : QuickSettingsGridMetrics.capsule;
+        return FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.topCenter,
+          child: SizedBox(
+            width: width,
+            height: QuickSettingsGridMetrics.row,
+            child: _buildSmallContent(
+              background,
+              foreground,
+              radius,
+              visualScale,
             ),
-            const SizedBox(height: 4),
-            Text(
-              widget.title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: context.shellColors.panelText,
-                fontSize: 10,
-                height: 1,
-                fontWeight: FontWeight.w500,
-                letterSpacing: 0,
-                decoration: TextDecoration.none,
-              ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildSmallContent(
+    Color background,
+    Color foreground,
+    double radius,
+    double visualScale,
+  ) {
+    return Column(
+      children: [
+        SizedBox(
+          height: QuickSettingsGridMetrics.capsule,
+          width: double.infinity,
+          child: _animatedSurface(
+            background: background,
+            radius: radius,
+            child: Center(
+              child: widget.busy
+                  ? SizedBox.square(
+                      dimension: 22 * visualScale,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2 * visualScale,
+                        color: foreground,
+                      ),
+                    )
+                  : Icon(
+                      widget.icon,
+                      color: foreground,
+                      size: 30 * visualScale,
+                    ),
             ),
-          ],
+          ),
         ),
-      ),
+        const SizedBox(height: 4),
+        Text(
+          widget.title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: context.shellColors.panelText,
+            fontSize: 10,
+            height: 1,
+            fontWeight: FontWeight.w500,
+            letterSpacing: 0,
+            decoration: TextDecoration.none,
+          ),
+        ),
+      ],
     );
   }
 
@@ -487,6 +510,8 @@ class _QuickTileState extends State<QuickTile> {
           theme.effectivePanelOpacity < 1,
       separateChild: true,
       borderRadius: borderRadius,
+      // The decoration rounds the tile itself.
+      clipUnfiltered: false,
       child: surface,
     );
   }
@@ -665,6 +690,7 @@ class _RoundButtonState extends State<_RoundButton> {
                   theme.effectivePanelOpacity < 1,
               separateChild: true,
               borderRadius: radius,
+              clipUnfiltered: false,
               child: surface,
             ),
           ),

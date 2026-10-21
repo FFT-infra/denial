@@ -36,6 +36,70 @@
   "@homeResizeWidget": {
     "description": "Accessible label for a home widget resize handle."
   },
+  "homeFolderDefaultName": "Folder",
+  "@homeFolderDefaultName": {
+    "description": "Name of a new home screen folder whose apps share no category."
+  },
+  "homeFolderGames": "Games",
+  "@homeFolderGames": {
+    "description": "Suggested name of a new home screen folder of games."
+  },
+  "homeFolderInternet": "Internet",
+  "@homeFolderInternet": {
+    "description": "Suggested name of a new home screen folder of network apps."
+  },
+  "homeFolderOffice": "Office",
+  "@homeFolderOffice": {
+    "description": "Suggested name of a new home screen folder of office apps."
+  },
+  "homeFolderGraphics": "Graphics",
+  "@homeFolderGraphics": {
+    "description": "Suggested name of a new home screen folder of graphics apps."
+  },
+  "homeFolderMedia": "Media",
+  "@homeFolderMedia": {
+    "description": "Suggested name of a new home screen folder of audio and video apps."
+  },
+  "homeFolderDevelopment": "Development",
+  "@homeFolderDevelopment": {
+    "description": "Suggested name of a new home screen folder of developer tools."
+  },
+  "homeFolderEducation": "Education",
+  "@homeFolderEducation": {
+    "description": "Suggested name of a new home screen folder of education apps."
+  },
+  "homeFolderScience": "Science",
+  "@homeFolderScience": {
+    "description": "Suggested name of a new home screen folder of science apps."
+  },
+  "homeFolderSystem": "System",
+  "@homeFolderSystem": {
+    "description": "Suggested name of a new home screen folder of system tools."
+  },
+  "homeFolderUtilities": "Utilities",
+  "@homeFolderUtilities": {
+    "description": "Suggested name of a new home screen folder of utilities."
+  },
+  "homeFolderSettings": "Settings",
+  "@homeFolderSettings": {
+    "description": "Suggested name of a new home screen folder of settings apps."
+  },
+  "homeFolderRename": "Rename folder",
+  "@homeFolderRename": {
+    "description": "Accessible hint for the editable name of an open home screen folder."
+  },
+  "homeFolderApps": "{name}, {count, plural, =1{1 app} other{{count} apps}}",
+  "@homeFolderApps": {
+    "description": "Accessible label of a home screen folder: its name and how many apps it holds.",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "actionCancel": "Cancel",
   "@actionCancel": {
     "description": "English UI text for actionCancel."
@@ -1744,9 +1808,9 @@
       }
     }
   },
-  "quickSettingsAutomatic": "Automatic",
-  "@quickSettingsAutomatic": {
-    "description": "English UI text for quickSettingsAutomatic."
+  "quickSettingsAutoRotate": "Auto-rotate",
+  "@quickSettingsAutoRotate": {
+    "description": "Quick Settings toggle that is on while the screen follows the orientation sensor."
   },
   "quickSettingsBalanced": "Balanced",
   "@quickSettingsBalanced": {
@@ -1764,18 +1828,6 @@
   "@quickSettingsControls": {
     "description": "English UI text for quickSettingsControls."
   },
-  "quickSettingsDate": "{weekday} {day}",
-  "@quickSettingsDate": {
-    "description": "English UI text for quickSettingsDate.",
-    "placeholders": {
-      "weekday": {
-        "type": "String"
-      },
-      "day": {
-        "type": "int"
-      }
-    }
-  },
   "quickSettingsHighPerformance": "High performance",
   "@quickSettingsHighPerformance": {
     "description": "English UI text for quickSettingsHighPerformance."
@@ -1783,10 +1835,6 @@
   "quickSettingsKeyboard": "Keyboard",
   "@quickSettingsKeyboard": {
     "description": "English UI text for quickSettingsKeyboard."
-  },
-  "quickSettingsLocked": "Locked",
-  "@quickSettingsLocked": {
-    "description": "English UI text for quickSettingsLocked."
   },
   "quickSettingsNormal": "Normal",
   "@quickSettingsNormal": {
@@ -1821,10 +1869,6 @@
   "quickSettingsPerformance": "Performance",
   "@quickSettingsPerformance": {
     "description": "English UI text for quickSettingsPerformance."
-  },
-  "quickSettingsRotation": "Rotation",
-  "@quickSettingsRotation": {
-    "description": "English UI text for quickSettingsRotation."
   },
   "quickSettingsSettingsUnavailable": "Settings are unavailable.",
   "@quickSettingsSettingsUnavailable": {
@@ -6627,5 +6671,110 @@
   "inputDeckRightClick": "Right click",
   "@inputDeckRightClick": {
     "description": "Touch display keyboard and touchpad mode."
+  },
+  "lockEnterPin": "Enter PIN",
+  "@lockEnterPin": {
+    "description": "Title above the lock screen PIN entry."
+  },
+  "lockPinProgress": "PIN, {entered} of {length} digits entered",
+  "@lockPinProgress": {
+    "description": "Screen reader label for the lock screen PIN dots.",
+    "placeholders": {
+      "entered": {
+        "type": "int"
+      },
+      "length": {
+        "type": "int"
+      }
+    }
+  },
+  "lockPinObscured": "PIN, obscured",
+  "@lockPinObscured": {
+    "description": "Screen reader label for the hidden PIN field."
+  },
+  "lockWrongPin": "Wrong PIN",
+  "@lockWrongPin": {
+    "description": "Shown after a rejected lock screen PIN."
+  },
+  "lockUsePassword": "Use password",
+  "@lockUsePassword": {
+    "description": "Switches the lock screen from the PIN to the account password."
+  },
+  "lockUsePin": "Use PIN",
+  "@lockUsePin": {
+    "description": "Switches the lock screen from the account password back to the PIN."
+  },
+  "lockPinDelete": "Delete",
+  "@lockPinDelete": {
+    "description": "Lock screen PIN keypad key that removes the last digit."
+  },
+  "settingsLockPinTitle": "PIN",
+  "@settingsLockPinTitle": {
+    "description": "Lock screen settings section for the optional unlock PIN."
+  },
+  "settingsLockPinLabel": "Unlock with a PIN",
+  "@settingsLockPinLabel": {
+    "description": "Lock screen settings row title."
+  },
+  "settingsLockPinDescription": "Type a short numeric PIN on the lock screen instead of your password. The password still unlocks too, and everything else keeps asking for it.",
+  "@settingsLockPinDescription": {
+    "description": "Lock screen settings row description."
+  },
+  "settingsLockPinOn": "On, {length} digits",
+  "@settingsLockPinOn": {
+    "description": "Status of the unlock PIN.",
+    "placeholders": {
+      "length": {
+        "type": "int"
+      }
+    }
+  },
+  "settingsLockPinOff": "Off",
+  "@settingsLockPinOff": {
+    "description": "Status when no unlock PIN is set."
+  },
+  "settingsLockPinSetUp": "Set up PIN",
+  "@settingsLockPinSetUp": {
+    "description": "Button that starts creating an unlock PIN."
+  },
+  "settingsLockPinChange": "Change PIN",
+  "@settingsLockPinChange": {
+    "description": "Button that replaces the unlock PIN."
+  },
+  "settingsLockPinRemove": "Remove PIN",
+  "@settingsLockPinRemove": {
+    "description": "Button that removes the unlock PIN."
+  },
+  "settingsLockPinSave": "Save PIN",
+  "@settingsLockPinSave": {
+    "description": "Button that saves a new unlock PIN."
+  },
+  "settingsLockPinPassword": "Account password",
+  "@settingsLockPinPassword": {
+    "description": "Field for the account password before changing the PIN."
+  },
+  "settingsLockPinNew": "New PIN",
+  "@settingsLockPinNew": {
+    "description": "Field for the new unlock PIN."
+  },
+  "settingsLockPinConfirm": "Confirm PIN",
+  "@settingsLockPinConfirm": {
+    "description": "Field that repeats the new unlock PIN."
+  },
+  "settingsLockPinLengthHint": "4 to 12 digits",
+  "@settingsLockPinLengthHint": {
+    "description": "Helper text under the new PIN field."
+  },
+  "settingsLockPinMismatch": "The PINs don’t match",
+  "@settingsLockPinMismatch": {
+    "description": "Error when the confirmation differs from the new PIN."
+  },
+  "settingsLockPinWrongPassword": "Wrong password",
+  "@settingsLockPinWrongPassword": {
+    "description": "Error when the account password is rejected."
+  },
+  "settingsLockPinUnavailable": "Couldn’t change the PIN. Try again.",
+  "@settingsLockPinUnavailable": {
+    "description": "Error when deniald could not save or remove the PIN."
   }
 }

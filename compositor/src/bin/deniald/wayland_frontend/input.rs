@@ -73,6 +73,9 @@ use super::touch_gestures::{
     WINDOW_TOUCH_STRIP_HEIGHT,
 };
 
+#[cfg(feature = "flutter")]
+#[path = "input/edge_swipe.rs"]
+pub(super) mod edge_swipe;
 #[path = "input/flutter_route.rs"]
 pub(super) mod flutter_route;
 #[path = "input/tablet.rs"]
@@ -414,6 +417,57 @@ pub(super) fn inject_shell_key_transition(
         )
     };
     accepted && process_keyboard_transition(state, keycode, key_state, time)
+}
+
+/// Linux evdev `KEY_BACK`: a phone's hardware Back key. XKB names it
+/// `XF86Back`, and Android, including Droidloom, maps it to `KEYCODE_BACK`.
+#[cfg(feature = "flutter")]
+const EVDEV_KEY_BACK: u32 = 158;
+
+/// Delivers the system Back action to a client window as one Back key tap.
+///
+/// Browsers, GTK, Qt and Droidloom's Android tasks treat this key as
+/// navigation back, so the action follows keyboard focus like Android's own
+/// Back. A dialog of the same client that already holds the focus keeps it:
+/// Back belongs to whatever the application presents on top.
+#[cfg(feature = "flutter")]
+pub(super) fn navigate_back(state: &mut RuntimeState, window: &smithay::desktop::Window) -> bool {
+    let (keyboard, time, focused) = {
+        let frontend = state.wayland.as_ref().expect("missing Wayland frontend");
+        let keyboard = frontend.seat.get_keyboard().expect("seat has no keyboard");
+        let client = frontend
+            .window_root_surface(window)
+            .and_then(|root| root.client())
+            .map(|client| client.id());
+        let focused = client.is_some()
+            && keyboard.current_focus().is_some_and(|focus| {
+                smithay::wayland::seat::WaylandFocus::wl_surface(&focus)
+                    .and_then(|surface| surface.client())
+                    .map(|client| client.id())
+                    == client
+            });
+        (
+            keyboard,
+            frontend.start_time.elapsed().as_millis() as u32,
+            focused,
+        )
+    };
+    if !focused
+        && !super::window_management::activate_window(state, window, SERIAL_COUNTER.next_serial())
+    {
+        warn!("ignored Back for a window that cannot take keyboard focus");
+        return false;
+    }
+    inject_shell_key_stroke(
+        state,
+        &keyboard,
+        ShellKeyStroke {
+            evdev_keycode: EVDEV_KEY_BACK,
+            shift: false,
+        },
+        false,
+        time,
+    )
 }
 
 #[cfg(feature = "flutter")]
@@ -1637,6 +1691,7 @@ fn process_input_event(
         #[cfg(feature = "flutter")]
         {
             state.touchscreen_devices.remove(device.sysname());
+            state.screen_off_touch.remove_device(device.sysname());
         }
         if Device::has_capability(device, DeviceCapability::Keyboard) {
             state.keyboard_devices.remove(device.sysname());
@@ -1684,6 +1739,51 @@ fn process_input_event(
             key_event.state(),
             key_event.time_msec(),
         );
+    }
+
+    #[cfg(feature = "flutter")]
+    {
+        use crate::screen_off_touch::Event as TouchPowerEvent;
+        let touch = match &event {
+            InputEvent::TouchDown { event, .. } => Some((
+                event.device(),
+                TouchPowerEvent::Down(i32::from(event.slot())),
+            )),
+            InputEvent::TouchMotion { event, .. } => Some((
+                event.device(),
+                TouchPowerEvent::Motion(i32::from(event.slot())),
+            )),
+            InputEvent::TouchUp { event, .. } => {
+                Some((event.device(), TouchPowerEvent::Up(i32::from(event.slot()))))
+            }
+            InputEvent::TouchCancel { event, .. } => {
+                Some((event.device(), TouchPowerEvent::Cancel))
+            }
+            InputEvent::TouchFrame { event, .. } => Some((event.device(), TouchPowerEvent::Frame)),
+            _ => None,
+        };
+        if let Some((device, touch)) = touch {
+            let powered = state
+                .wayland
+                .as_ref()
+                .and_then(|frontend| touch_output_for_device(frontend, &device))
+                .is_none_or(|output| {
+                    state
+                        .output_power_requests
+                        .get(&output.id)
+                        .copied()
+                        .unwrap_or(output.powered)
+                });
+            // The root fingerprint listener has its own read-only evdev stream.
+            // Only its bounded presentation or an explicit wake gesture/button
+            // may wake this panel; raw DOWN/MOTION must not expose the lock UI.
+            if state
+                .screen_off_touch
+                .suppress(device.sysname(), touch, powered)
+            {
+                return false;
+            }
+        }
     }
 
     #[cfg(feature = "flutter")]

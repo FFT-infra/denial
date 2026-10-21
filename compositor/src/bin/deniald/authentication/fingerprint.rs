@@ -36,16 +36,17 @@ pub(super) enum Verification {
 
 pub(super) trait FingerprintBackend {
     /// Match includes successful PAM account validation, not just a scan.
-    fn verify(&mut self, cancelled: &dyn Fn() -> bool) -> Verification;
+    /// `armed` runs once the reader is listening for a finger.
+    fn verify(&mut self, armed: &dyn Fn(), cancelled: &dyn Fn() -> bool) -> Verification;
 }
 
 pub(super) struct FprintBackend;
 
 impl FingerprintBackend for FprintBackend {
-    fn verify(&mut self, cancelled: &dyn Fn() -> bool) -> Verification {
+    fn verify(&mut self, armed: &dyn Fn(), cancelled: &dyn Fn() -> bool) -> Verification {
         let result = (|| {
             let connection = Builder::system()?.method_timeout(CALL_TIMEOUT).build()?;
-            let result = verify_connection(&connection, cancelled);
+            let result = verify_connection(&connection, armed, cancelled);
             // A separate connection per operation prevents old signals from
             // crossing a retry and ensures any abandoned claim is released.
             let _ = connection.close();
@@ -72,6 +73,7 @@ impl FingerprintBackend for FprintBackend {
 
 fn verify_connection(
     connection: &Connection,
+    armed: &dyn Fn(),
     cancelled: &dyn Fn() -> bool,
 ) -> zbus::Result<Verification> {
     if cancelled() {
@@ -112,7 +114,7 @@ fn verify_connection(
             continue;
         }
         device.call::<_, _, ()>("Claim", &("",))?;
-        let result = verify_claimed_device(&device, cancelled);
+        let result = verify_claimed_device(&device, armed, cancelled);
         // Always stop/release, including cancellation, no-match, malformed
         // signals and VerifyStart failure. Connection close is the fallback.
         let _ = device.call::<_, _, ()>("VerifyStop", &());
@@ -124,6 +126,7 @@ fn verify_connection(
 
 fn verify_claimed_device(
     device: &Proxy<'_>,
+    armed: &dyn Fn(),
     cancelled: &dyn Fn() -> bool,
 ) -> zbus::Result<Verification> {
     // Subscribe before starting, to retain even an immediate match. The proxy
@@ -135,6 +138,7 @@ fn verify_claimed_device(
     }
     device.call::<_, _, ()>("VerifyStart", &("any",))?;
     info!("Denial fingerprint reader is ready");
+    armed();
     loop {
         if cancelled() {
             return Ok(Verification::Cancelled);
@@ -191,6 +195,7 @@ pub(super) fn run_worker(
     let mut previous_epoch = None;
     let mut failures = 0u32;
     let mut unavailable_attempts = 0u32;
+    lock_unpoisoned(&shared.state).fingerprint_sensor = sensor_rect();
     loop {
         let epoch = {
             let mut state = lock_unpoisoned(&shared.state);
@@ -212,7 +217,12 @@ pub(super) fn run_worker(
             unavailable_attempts = 0;
             previous_epoch = Some(epoch);
         }
-        let result = backend.verify(&|| cancelled(shared, epoch));
+        let result = backend.verify(&|| publish_readiness(shared, true), &|| {
+            cancelled(shared, epoch)
+        });
+        if result == Verification::Unavailable {
+            publish_readiness(shared, false);
+        }
         if result == Verification::Match && complete_match(shared, epoch) {
             info!("Denial fingerprint validated; waiting for display readiness");
             continue;
@@ -240,6 +250,55 @@ pub(super) fn run_worker(
             })
             .unwrap_or_else(|error| error.into_inner());
     }
+}
+
+/// The lock screen marks the sensor while a reader with enrolled prints is
+/// armed. Readiness survives rejected scans and only an unusable reader
+/// clears it, so the mark does not flicker between attempts.
+fn publish_readiness(shared: &SharedAuthentication, ready: bool) {
+    let mut state = lock_unpoisoned(&shared.state);
+    if state.fingerprint_ready != ready {
+        state.fingerprint_ready = ready;
+        shared.push_event(credential_event(shared, &state));
+    }
+}
+
+/// The under-display sensor as fractions of its panel, from the profile the
+/// fingerprint presentation also reads. Hosts without one get no location.
+fn sensor_rect() -> Option<[f64; 4]> {
+    #[derive(serde::Deserialize)]
+    struct Profile {
+        panel_width: u32,
+        panel_height: u32,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+    }
+    let text = std::fs::read_to_string("/etc/denial/fingerprint.json").ok()?;
+    let profile: Profile = serde_json::from_str(&text).ok()?;
+    let (panel_width, panel_height) = (
+        f64::from(profile.panel_width),
+        f64::from(profile.panel_height),
+    );
+    (profile.width > 0
+        && profile.height > 0
+        && profile
+            .x
+            .checked_add(profile.width)
+            .is_some_and(|right| right <= profile.panel_width)
+        && profile
+            .y
+            .checked_add(profile.height)
+            .is_some_and(|bottom| bottom <= profile.panel_height))
+    .then(|| {
+        [
+            f64::from(profile.x) / panel_width,
+            f64::from(profile.y) / panel_height,
+            f64::from(profile.width) / panel_width,
+            f64::from(profile.height) / panel_height,
+        ]
+    })
 }
 
 fn fingerprint_retry(failures: u32) -> Duration {
@@ -359,6 +418,7 @@ mod tests {
             Box::new(UnavailableBackend {
                 reason: "test".into(),
             }),
+            None,
             locked,
         )
         .unwrap()
@@ -517,7 +577,7 @@ mod tests {
     }
 
     impl FingerprintBackend for ControlledBackend {
-        fn verify(&mut self, cancelled: &dyn Fn() -> bool) -> Verification {
+        fn verify(&mut self, _armed: &dyn Fn(), cancelled: &dyn Fn() -> bool) -> Verification {
             self.started.send(()).unwrap();
             loop {
                 if cancelled() {
@@ -562,6 +622,22 @@ mod tests {
         }
         assert!(starts.recv_timeout(Duration::from_millis(50)).is_err());
         // Drop joins the worker, covering cancellation and waking idle waits.
+    }
+
+    #[test]
+    fn armed_reader_is_announced_once_and_cleared_by_an_unusable_reader() {
+        let controller = controller(true);
+        publish_readiness(&controller.shared, true);
+        publish_readiness(&controller.shared, true);
+        let event = controller.try_event().expect("readiness event");
+        assert!(matches!(
+            event.kind,
+            AuthenticationEventKind::Credential { pin_length: 0 }
+        ));
+        assert!(event.message.starts_with(r#"{"fingerprint":"#));
+        assert!(controller.try_event().is_none());
+        publish_readiness(&controller.shared, false);
+        assert_eq!(controller.try_event().expect("cleared").message, "");
     }
 
     #[test]
@@ -613,6 +689,9 @@ mod tests {
         fn unavailable_reason(&self) -> String {
             String::new()
         }
+        fn validate_account(&self) -> Result<(), String> {
+            Ok(())
+        }
         fn authenticate(
             &mut self,
             _: &str,
@@ -628,8 +707,8 @@ mod tests {
     #[test]
     fn fingerprint_cancels_password_prompt_and_invalidates_its_late_success() {
         let controller =
-            AuthenticationController::with_backend(Box::new(PasswordBackend), true).unwrap();
-        controller.begin();
+            AuthenticationController::with_backend(Box::new(PasswordBackend), None, true).unwrap();
+        controller.begin(false);
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             if lock_unpoisoned(&controller.shared.state).prompt.is_some() {
@@ -750,7 +829,7 @@ mod tests {
                 .build()
                 .unwrap();
             let start = Instant::now();
-            let result = verify_connection(&client, &|| {
+            let result = verify_connection(&client, &|| {}, &|| {
                 signal == "silent" && start.elapsed() > Duration::from_millis(200)
             });
             match expected {
@@ -769,7 +848,7 @@ mod tests {
                 .method_timeout(CALL_TIMEOUT)
                 .build()
                 .unwrap();
-            let result = verify_connection(&client, &|| false);
+            let result = verify_connection(&client, &|| {}, &|| false);
             client.close().unwrap();
             finished.send(result).unwrap();
         });

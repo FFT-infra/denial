@@ -348,6 +348,7 @@ impl WireBridge {
             kind @ (fb::WindowRequestKind::CloseWindow
             | fb::WindowRequestKind::FocusWindow
             | fb::WindowRequestKind::MinimizeWindow
+            | fb::WindowRequestKind::NavigateBack
             | fb::WindowRequestKind::ConfigureWindow) => {
                 if self.pending_window_commands.len() >= MAX_PENDING_WINDOW_COMMANDS {
                     return Err(WireError::Count);
@@ -364,6 +365,12 @@ impl WireBridge {
                             return Err(WireError::Flags);
                         }
                         WindowCommand::Minimize { window_id }
+                    }
+                    fb::WindowRequestKind::NavigateBack => {
+                        if request.flags() != 0 {
+                            return Err(WireError::Flags);
+                        }
+                        WindowCommand::NavigateBack { window_id }
                     }
                     fb::WindowRequestKind::ConfigureWindow => {
                         const EXACT: u32 = 1 << 0;
@@ -1070,10 +1077,12 @@ fn decode_input_layout(
 ) -> Result<(), WireError> {
     let shell_regions = layout.shell_regions();
     let software_keyboard_regions = layout.software_keyboard_regions();
+    let edge_swipe_regions = layout.edge_swipe_regions();
     let windows = layout.windows();
     let visible_surface_ids = layout.visible_surface_ids();
     if shell_regions.is_some_and(|regions| regions.len() > MAX_REGIONS)
         || software_keyboard_regions.is_some_and(|regions| regions.len() > MAX_REGIONS)
+        || edge_swipe_regions.is_some_and(|regions| regions.len() > MAX_REGIONS)
         || windows.is_some_and(|regions| regions.len() > MAX_REGIONS)
         || visible_surface_ids.is_some_and(|ids| ids.len() > MAX_SURFACES)
     {
@@ -1084,6 +1093,7 @@ fn decode_input_layout(
     decoded.flags = layout.flags();
     decoded.shell_regions.clear();
     decoded.software_keyboard_regions.clear();
+    decoded.edge_swipe_regions.clear();
     decoded.windows.clear();
     decoded.visible_surface_ids.clear();
     identities.clear();
@@ -1103,6 +1113,21 @@ fn decode_input_layout(
             decoded
                 .software_keyboard_regions
                 .push(decode_input_rect(regions.get(index))?);
+        }
+    }
+
+    if let Some(regions) = edge_swipe_regions {
+        decoded.edge_swipe_regions.reserve(regions.len());
+        for region in regions.iter() {
+            let edge = match region.edge() {
+                fb::InputEdge::Left => InputEdge::Left,
+                fb::InputEdge::Right => InputEdge::Right,
+                _ => return Err(WireError::Payload),
+            };
+            decoded.edge_swipe_regions.push(EdgeSwipeRegion {
+                rect: decode_input_rect(region.rect())?,
+                edge,
+            });
         }
     }
 

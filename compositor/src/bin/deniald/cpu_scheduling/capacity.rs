@@ -33,10 +33,13 @@ fn parse_minimum(value: &str) -> Option<u32> {
         .filter(|value| *value <= 1024)
 }
 
-pub(super) fn apply_configured() -> io::Result<Option<u32>> {
+/// Applies the configured floor to the current thread, or clears it when the
+/// floor is lowered. Returns the applied value.
+pub(super) fn apply_configured(raised: bool) -> io::Result<Option<u32>> {
     match configured() {
         Some(minimum) => {
-            request_minimum(minimum)?;
+            let minimum = if raised { minimum } else { 0 };
+            request_minimum(0, minimum)?;
             Ok(Some(minimum))
         }
         None => Ok(None),
@@ -62,14 +65,16 @@ pub(super) fn configured() -> Option<u32> {
     })
 }
 
-fn request_minimum(minimum: u32) -> io::Result<()> {
+/// Sets the minimum of thread `tid` of this process, or of the current thread
+/// for 0.
+pub(super) fn request_minimum(tid: libc::pid_t, minimum: u32) -> io::Result<()> {
     if minimum > 1024 {
         return Err(io::Error::from_raw_os_error(libc::EINVAL));
     }
     // KEEP_POLICY preserves reset-on-fork as well as the scheduling class.
     // Require the guard already installed by Denial's RT promotion; otherwise
     // an ordinary fallback thread could leak its explicit hint into workers.
-    let policy = unsafe { libc::syscall(libc::SYS_sched_getscheduler, 0) };
+    let policy = unsafe { libc::syscall(libc::SYS_sched_getscheduler, tid) };
     if policy < 0 {
         return Err(io::Error::last_os_error());
     }
@@ -89,9 +94,9 @@ fn request_minimum(minimum: u32) -> io::Result<()> {
         | libc::SCHED_FLAG_UTIL_CLAMP_MIN) as u64;
     attr.sched_util_min = minimum;
     // RESET_ON_FORK also resets utilization clamps in new workers and apps.
-    // SAFETY: tid 0 addresses this thread; attr is initialized and lives
-    // through the syscall. No process-global scheduler setting is modified.
-    let result = unsafe { libc::syscall(libc::SYS_sched_setattr, 0, &attr, 0) };
+    // SAFETY: tid names one thread (0 for this one); attr is initialized and
+    // lives through the syscall. No process-global setting is modified.
+    let result = unsafe { libc::syscall(libc::SYS_sched_setattr, tid, &attr, 0) };
     if result == 0 {
         Ok(())
     } else {
@@ -146,7 +151,7 @@ mod tests {
                 panic!("could not install the test scheduling policy: {error}");
             }
             let before = attributes();
-            request_minimum(512).expect("kernel must support the tested utilization-clamp API");
+            request_minimum(0, 512).expect("kernel must support the tested utilization-clamp API");
             let after = attributes();
             assert_eq!(after.sched_util_min, 512);
             assert_eq!(after.sched_util_max, before.sched_util_max);
@@ -157,7 +162,7 @@ mod tests {
             std::thread::spawn(|| {
                 assert_eq!(attributes().sched_util_min, 0);
                 // An ordinary worker must not acquire a hint without its guard.
-                assert!(request_minimum(512).is_err());
+                assert!(request_minimum(0, 512).is_err());
                 let parameters = scheduler_parameters(0);
                 assert_eq!(
                     unsafe {
@@ -171,8 +176,12 @@ mod tests {
                     0
                 );
                 // A replacement UI thread promotes independently, then hints.
-                request_minimum(512).unwrap();
+                request_minimum(0, 512).unwrap();
                 assert_eq!(attributes().sched_util_min, 512);
+                // An idle compositor lowers the floor by thread ID.
+                let tid = unsafe { libc::syscall(libc::SYS_gettid) as libc::pid_t };
+                request_minimum(tid, 0).unwrap();
+                assert_eq!(attributes().sched_util_min, 0);
             })
             .join()
             .unwrap();

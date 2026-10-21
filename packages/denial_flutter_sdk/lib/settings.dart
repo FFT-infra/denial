@@ -11,6 +11,15 @@ export 'src/settings/fingerprint/fingerprint_service.dart'
         fingerprintDeviceProvider,
         fingerprintNames,
         fingerprintSessionProvider;
+export 'src/settings/lock_pin/lock_pin_service.dart'
+    show
+        LockPinOutcome,
+        LockPinService,
+        isValidLockPin,
+        lockPinLengthProvider,
+        lockPinMaxLength,
+        lockPinMinLength,
+        lockPinServiceProvider;
 export 'src/settings/monitor_arrangement.dart'
     show
         MonitorArrangementGeometry,

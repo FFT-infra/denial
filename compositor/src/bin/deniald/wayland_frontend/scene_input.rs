@@ -315,6 +315,19 @@ impl WaylandFrontend {
         Ok(())
     }
 
+    /// Whether an output tick would deliver anything to clients: a frame
+    /// callback, a grant to an armed frame timeline, or a screencopy.
+    #[cfg(feature = "flutter")]
+    pub fn wants_frame_ticks(&self) -> bool {
+        !self.pending_frame_callback_windows.is_empty()
+            || !self.pending_layer_frame_callback_roots.is_empty()
+            || !self.pending_cursor_frame_callback_roots.is_empty()
+            || !self.pending_drag_frame_callback_roots.is_empty()
+            || !self.pending_input_method_frame_callbacks.is_empty()
+            || self.frame_timeline.has_active_subscription()
+            || self.has_pending_screencopies()
+    }
+
     #[cfg(feature = "flutter")]
     pub fn frame_tick(&mut self, tick: FrameTick) -> Result<(), Box<dyn Error>> {
         let callback_time = self.presentation.timeline_time(tick.render_deadline);

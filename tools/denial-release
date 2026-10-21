@@ -749,6 +749,14 @@ source_audit() {
     fail 'bundled JetBrains Mono files failed source verification'
   fi
   if (
+    cd "$ROOT/packages/denial_flutter_sdk/assets/fonts/roboto_flex"
+    sha256sum --check --strict RobotoFlex.sha256
+  ) >/dev/null; then
+    pass 'bundled Roboto Flex files match their source manifest'
+  else
+    fail 'bundled Roboto Flex files failed source verification'
+  fi
+  if (
     cd "$ROOT"
     sha256sum --check --strict \
       packages/denial_flutter_sdk/assets/cursors/bibata_modern_ice.sha256

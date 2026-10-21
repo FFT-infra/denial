@@ -571,6 +571,7 @@ pub struct FlutterRuntime {
     frame_ready_observed: bool,
     first_frame_received: bool,
     last_pointer_timestamp_micros: usize,
+    touch_timing: input::TouchTimingAudit,
 }
 
 /// Keeps one published physical-output target unavailable to Flutter while an

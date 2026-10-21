@@ -20,6 +20,7 @@ class DesktopAppsRepository {
     required void Function() onChanged,
   }) async {
     final subscriptions = <StreamSubscription<FileSystemEvent>>[];
+    final watcher = DesktopAppsWatcher._(subscriptions);
     for (final directory in _paths.desktopApplicationDirs()) {
       try {
         if (!await directory.exists()) {
@@ -35,15 +36,17 @@ class DesktopAppsRepository {
             onError: (_) {
               // A periodic rescan remains active if a mount or directory stops
               // supporting filesystem notifications during the session.
+              watcher._complete = false;
             },
           ),
         );
       } on Object {
         // Some system and sandboxed application directories may be
         // inaccessible. Discovery still covers every readable directory.
+        watcher._complete = false;
       }
     }
-    return DesktopAppsWatcher._(subscriptions);
+    return watcher;
   }
 
   Future<List<DesktopApp>> loadApplications() async {
@@ -474,6 +477,12 @@ class DesktopAppsWatcher {
 
   final List<StreamSubscription<FileSystemEvent>> _subscriptions;
   bool _disposed = false;
+  bool _complete = true;
+
+  /// Every existing application directory is watched and none has failed.
+  /// Changes below a subdirectory or in a directory created later still
+  /// need the launcher's periodic rescan.
+  bool get complete => _complete && !_disposed;
 
   Future<void> dispose() async {
     if (_disposed) {
