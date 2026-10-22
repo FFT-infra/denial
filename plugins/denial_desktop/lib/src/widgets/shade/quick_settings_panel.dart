@@ -719,6 +719,7 @@ class _QuickSettingsTilesSection extends ConsumerWidget {
         bluetooth.available &&
         !bluetooth.powerChanging;
     final rotationLock = ref.watch(rotationLockProvider);
+    final recording = ref.watch(screenRecordingProvider);
     final presentation = ref.watch(referenceShellPresentationProvider);
     final singleOutput =
         (ref.watch(displayLayoutProvider)?.outputs.length ?? 0) <= 1;
@@ -735,8 +736,20 @@ class _QuickSettingsTilesSection extends ConsumerWidget {
           active: !rotationLock.locked,
           enabled: !rotationLock.busy,
           busy: rotationLock.busy,
-          wide: true,
           onTap: () => ref.read(rotationLockProvider.notifier).toggle(),
+        ),
+      if (recording.available)
+        QuickTile(
+          icon: recording.recording
+              ? Icons.stop_circle_rounded
+              : Icons.radio_button_checked_rounded,
+          title: recording.recording
+              ? l10n.quickSettingsRecording
+              : l10n.quickSettingsScreenRecording,
+          active: recording.recording,
+          enabled: !recording.busy,
+          busy: recording.busy,
+          onTap: () => ref.read(screenRecordingProvider.notifier).toggle(),
         ),
       if (singleOutput)
         QuickTile(

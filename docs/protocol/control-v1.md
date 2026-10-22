@@ -251,6 +251,7 @@ for mutations, after the native live update and persistent commit succeed.
 
 | Method | Parameters | Result or effect |
 | --- | --- | --- |
+| `denial.version` | none | `{"version":"…","build":"…"}`: the installed release version, or the build identity for source and candidate builds, and that build identity |
 | `settings.document.get` | none | Current document string and revision |
 | `settings.document.apply` | `{"expected_revision":3,"document":"{...}"}` | Replace shell-owned settings and return the committed document |
 | `settings.keyboard.get` | none | Layouts, XKB options, repeat settings, active layout, and revision |

@@ -1812,6 +1812,14 @@
   "@quickSettingsAutoRotate": {
     "description": "Quick Settings toggle that is on while the screen follows the orientation sensor."
   },
+  "quickSettingsScreenRecording": "Screen recording",
+  "@quickSettingsScreenRecording": {
+    "description": "Quick Settings tile that starts a screen recording, and stops it when tapped again."
+  },
+  "quickSettingsRecording": "Recording",
+  "@quickSettingsRecording": {
+    "description": "Subtitle of the Screen recording tile while it records."
+  },
   "quickSettingsBalanced": "Balanced",
   "@quickSettingsBalanced": {
     "description": "English UI text for quickSettingsBalanced."
@@ -6768,5 +6776,28 @@
   "settingsLockPinUnavailable": "Couldn’t change the PIN. Try again.",
   "@settingsLockPinUnavailable": {
     "description": "Error when deniald could not save or remove the PIN."
+  },
+  "timeTwelveHour": "{hour}:{minute} {period}",
+  "@timeTwelveHour": {
+    "description": "A time on a 12-hour clock: 5:45 PM.",
+    "placeholders": {
+      "hour": {
+        "type": "String"
+      },
+      "minute": {
+        "type": "String"
+      },
+      "period": {
+        "type": "String"
+      }
+    }
+  },
+  "timeMorning": "AM",
+  "@timeMorning": {
+    "description": "Before noon on a 12-hour clock."
+  },
+  "timeAfternoon": "PM",
+  "@timeAfternoon": {
+    "description": "From noon on a 12-hour clock."
   }
 }

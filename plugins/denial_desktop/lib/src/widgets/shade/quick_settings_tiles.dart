@@ -57,8 +57,9 @@ class QuickSettingsTiles extends StatelessWidget {
   final Widget? volumeControl;
   final Animation<double>? expansionProgress;
 
-  /// Up to two wide tiles on a row below the grid, aligned with its halves.
-  final List<Widget> footerTiles;
+  /// A row below the grid, aligned with its columns: a square tile takes
+  /// one column and a wide one two, four columns at most.
+  final List<QuickTile> footerTiles;
   final bool wifi;
   final String wifiSubtitle;
   final bool wifiEnabled;
@@ -79,7 +80,11 @@ class QuickSettingsTiles extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    assert(footerTiles.length <= 2, 'the footer row has two halves');
+    assert(
+      footerTiles.fold(0, (columns, tile) => columns + (tile.wide ? 2 : 1)) <=
+          4,
+      'the footer row has four columns',
+    );
     final l10n = context.l10n;
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -109,10 +114,19 @@ class QuickSettingsTiles extends StatelessWidget {
         final wide = column * 2 + gutter;
         final tall = capsule * 2 + gutter;
         final footerTop = row * 3 + gutter;
+        final footerHeight = footerTiles.any((tile) => !tile.wide)
+            ? row
+            : capsule;
+        final footerLefts = <double>[];
+        var footerColumn = 0;
+        for (final tile in footerTiles) {
+          footerLefts.add(pitch * footerColumn);
+          footerColumn += tile.wide ? 2 : 1;
+        }
         return SizedBox(
           height: footerTiles.isEmpty
               ? QuickSettingsGridMetrics.height * scale
-              : footerTop + capsule,
+              : footerTop + footerHeight,
           child: Stack(
             children: [
               Positioned(
@@ -213,10 +227,10 @@ class QuickSettingsTiles extends StatelessWidget {
               ),
               for (final (index, tile) in footerTiles.indexed)
                 Positioned(
-                  left: pitch * 2 * index,
+                  left: footerLefts[index],
                   top: footerTop,
-                  width: wide,
-                  height: capsule,
+                  width: tile.wide ? wide : column,
+                  height: tile.wide ? capsule : row,
                   child: reveal(7 + index, tile),
                 ),
             ],

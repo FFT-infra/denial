@@ -82,6 +82,7 @@ class DenialShell extends ConsumerWidget {
           appearance: settings.appearance,
           animationDurationScale: settings.animations.durationScale,
           locale: settings.localization.localeOverride,
+          twentyFourHourClock: settings.localization.twentyFourHourClock,
         ),
       ),
     );
@@ -172,6 +173,7 @@ class DenialShell extends ConsumerWidget {
         ),
         child: DenialLocalizationScope(
           locale: presentation.locale,
+          twentyFourHourClock: presentation.twentyFourHourClock,
           child: LowBatteryNotificationBinding(
             child: _ShellEnvironment(
               profile: effectivePresentation,

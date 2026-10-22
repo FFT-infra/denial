@@ -9,6 +9,7 @@ void main() {
     const settings = ShellSettings(
       localization: ShellLocalizationSettings(
         locale: ShellLocalePreference.simplifiedChinese,
+        twentyFourHourClock: false,
       ),
       appearance: ShellAppearanceSettings(
         colorSchemePreference: DesktopColorSchemePreference.preferLight,

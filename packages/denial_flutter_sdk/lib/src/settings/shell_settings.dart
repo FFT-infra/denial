@@ -72,9 +72,15 @@ enum ShellLocalePreference { system, english, simplifiedChinese }
 
 @immutable
 class ShellLocalizationSettings {
-  const ShellLocalizationSettings({this.locale = ShellLocalePreference.system});
+  const ShellLocalizationSettings({
+    this.locale = ShellLocalePreference.system,
+    this.twentyFourHourClock = true,
+  });
 
   final ShellLocalePreference locale;
+
+  /// Clocks show 17:45; otherwise 5:45 PM, as the language writes it.
+  final bool twentyFourHourClock;
 
   Locale? get localeOverride => switch (locale) {
     ShellLocalePreference.system => null,
@@ -82,17 +88,25 @@ class ShellLocalizationSettings {
     ShellLocalePreference.simplifiedChinese => const Locale('zh'),
   };
 
-  ShellLocalizationSettings copyWith({ShellLocalePreference? locale}) {
-    return ShellLocalizationSettings(locale: locale ?? this.locale);
+  ShellLocalizationSettings copyWith({
+    ShellLocalePreference? locale,
+    bool? twentyFourHourClock,
+  }) {
+    return ShellLocalizationSettings(
+      locale: locale ?? this.locale,
+      twentyFourHourClock: twentyFourHourClock ?? this.twentyFourHourClock,
+    );
   }
 
   @override
   bool operator ==(Object other) {
-    return other is ShellLocalizationSettings && other.locale == locale;
+    return other is ShellLocalizationSettings &&
+        other.locale == locale &&
+        other.twentyFourHourClock == twentyFourHourClock;
   }
 
   @override
-  int get hashCode => locale.hashCode;
+  int get hashCode => Object.hash(locale, twentyFourHourClock);
 }
 
 @immutable
@@ -1065,6 +1079,10 @@ class ShellSettings {
       if (localization.locale != previous.localization.locale) {
         section['locale'] = localization.locale.name;
       }
+      if (localization.twentyFourHourClock !=
+          previous.localization.twentyFourHourClock) {
+        section['twentyFourHourClock'] = localization.twentyFourHourClock;
+      }
       patch['localization'] = section;
     }
 
@@ -1313,7 +1331,10 @@ class ShellSettings {
   Map<String, Object> toJson() {
     return <String, Object>{
       'version': schemaVersion,
-      'localization': <String, Object>{'locale': localization.locale.name},
+      'localization': <String, Object>{
+        'locale': localization.locale.name,
+        'twentyFourHourClock': localization.twentyFourHourClock,
+      },
       'appearance': <String, Object>{
         'colorSchemePreference': appearance.colorSchemePreference.name,
         'accentSource': appearance.accentSource.name,
@@ -1486,6 +1507,9 @@ class ShellSettings {
           localizationJson['locale'],
           defaults.localization.locale,
         ),
+        twentyFourHourClock: localizationJson['twentyFourHourClock'] is bool
+            ? localizationJson['twentyFourHourClock'] as bool
+            : defaults.localization.twentyFourHourClock,
       ),
       appearance: ShellAppearanceSettings(
         colorSchemePreference: _enumValue(

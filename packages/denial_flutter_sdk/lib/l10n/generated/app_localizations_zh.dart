@@ -1242,6 +1242,12 @@ class AppLocalizationsZh extends AppLocalizations {
   String get quickSettingsAutoRotate => '自动旋转';
 
   @override
+  String get quickSettingsScreenRecording => '屏幕录制';
+
+  @override
+  String get quickSettingsRecording => '正在录制';
+
+  @override
   String get quickSettingsBalanced => '均衡';
 
   @override
@@ -4829,4 +4835,15 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get settingsLockPinUnavailable => '无法更改 PIN 码，请重试。';
+
+  @override
+  String timeTwelveHour(String hour, String minute, String period) {
+    return '$period$hour:$minute';
+  }
+
+  @override
+  String get timeMorning => '上午';
+
+  @override
+  String get timeAfternoon => '下午';
 }

@@ -2304,6 +2304,18 @@ abstract class AppLocalizations {
   /// **'Auto-rotate'**
   String get quickSettingsAutoRotate;
 
+  /// Quick Settings tile that starts a screen recording, and stops it when tapped again.
+  ///
+  /// In en, this message translates to:
+  /// **'Screen recording'**
+  String get quickSettingsScreenRecording;
+
+  /// Subtitle of the Screen recording tile while it records.
+  ///
+  /// In en, this message translates to:
+  /// **'Recording'**
+  String get quickSettingsRecording;
+
   /// English UI text for quickSettingsBalanced.
   ///
   /// In en, this message translates to:
@@ -9051,6 +9063,24 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Couldn’t change the PIN. Try again.'**
   String get settingsLockPinUnavailable;
+
+  /// A time on a 12-hour clock: 5:45 PM.
+  ///
+  /// In en, this message translates to:
+  /// **'{hour}:{minute} {period}'**
+  String timeTwelveHour(String hour, String minute, String period);
+
+  /// Before noon on a 12-hour clock.
+  ///
+  /// In en, this message translates to:
+  /// **'AM'**
+  String get timeMorning;
+
+  /// From noon on a 12-hour clock.
+  ///
+  /// In en, this message translates to:
+  /// **'PM'**
+  String get timeAfternoon;
 }
 
 class _AppLocalizationsDelegate

@@ -1287,6 +1287,12 @@ class AppLocalizationsEn extends AppLocalizations {
   String get quickSettingsAutoRotate => 'Auto-rotate';
 
   @override
+  String get quickSettingsScreenRecording => 'Screen recording';
+
+  @override
+  String get quickSettingsRecording => 'Recording';
+
+  @override
   String get quickSettingsBalanced => 'Balanced';
 
   @override
@@ -5084,4 +5090,15 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get settingsLockPinUnavailable =>
       'Couldn’t change the PIN. Try again.';
+
+  @override
+  String timeTwelveHour(String hour, String minute, String period) {
+    return '$hour:$minute $period';
+  }
+
+  @override
+  String get timeMorning => 'AM';
+
+  @override
+  String get timeAfternoon => 'PM';
 }

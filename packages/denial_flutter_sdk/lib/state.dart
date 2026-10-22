@@ -75,6 +75,11 @@ export 'src/state/output_configuration.dart'
         OutputConfigurationController,
         OutputConfigurationState,
         outputConfigurationProvider;
+export 'src/state/screen_recording.dart'
+    show
+        ScreenRecordingController,
+        ScreenRecordingState,
+        screenRecordingProvider;
 export 'src/state/screenshot_selection.dart'
     show
         ScreenshotSelectionController,

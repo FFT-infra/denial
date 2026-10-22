@@ -367,6 +367,8 @@
   "powerWatts": "{watts} W",
   "powerWattsDecimal": "{watts} W",
   "quickSettingsAutoRotate": "自动旋转",
+  "quickSettingsScreenRecording": "屏幕录制",
+  "quickSettingsRecording": "正在录制",
   "quickSettingsBalanced": "均衡",
   "quickSettingsBatterySaver": "省电",
   "quickSettingsClose": "关闭快速设置",
@@ -1518,5 +1520,8 @@
   "settingsLockPinLengthHint": "4 到 12 位数字",
   "settingsLockPinMismatch": "两次输入的 PIN 码不一致",
   "settingsLockPinWrongPassword": "密码错误",
-  "settingsLockPinUnavailable": "无法更改 PIN 码，请重试。"
+  "settingsLockPinUnavailable": "无法更改 PIN 码，请重试。",
+  "timeTwelveHour": "{period}{hour}:{minute}",
+  "timeMorning": "上午",
+  "timeAfternoon": "下午"
 }
