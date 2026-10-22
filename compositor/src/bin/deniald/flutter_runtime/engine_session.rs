@@ -299,7 +299,7 @@ impl FlutterRuntime {
             input_deck_commands: VecDeque::new(),
             input_deck_snapshot: None,
             pending_idle_policy: None,
-            pending_dpms_off: false,
+            pending_display_power: None,
             pending_vm_service_uri: None,
             generation,
             scheduled_tasks: BinaryHeap::with_capacity(INITIAL_PLATFORM_TASK_BATCH_CAPACITY),

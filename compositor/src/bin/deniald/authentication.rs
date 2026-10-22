@@ -845,6 +845,8 @@ struct AuthenticationState {
     /// The lock screen shows its fingerprint face rather than a typed
     /// credential; the reader is armed only then.
     fingerprint_offered: bool,
+    /// The user's switch in Settings; off keeps the reader unarmed.
+    fingerprint_enabled: bool,
     /// Under-display sensor as panel fractions: x, y, width, height.
     fingerprint_sensor: Option<[f64; 4]>,
     /// Asks the worker to re-read the PIN record, which Settings may have
@@ -959,6 +961,7 @@ impl AuthenticationController {
                 pin_length: 0,
                 fingerprint_ready: false,
                 fingerprint_offered: true,
+                fingerprint_enabled: true,
                 fingerprint_sensor: None,
                 credential_refresh: true,
                 available,
@@ -1075,6 +1078,22 @@ impl AuthenticationController {
             return;
         }
         state.fingerprint_offered = offered;
+        drop(state);
+        self.shared.condition.notify_all();
+    }
+
+    /// Turns fingerprint unlock on or off; the lock screen learns at once
+    /// whether to show the sensor.
+    pub(super) fn enable_fingerprint(&self, enabled: bool) {
+        let mut state = lock_unpoisoned(&self.shared.state);
+        if state.fingerprint_enabled == enabled {
+            return;
+        }
+        state.fingerprint_enabled = enabled;
+        if self.locked() {
+            self.shared
+                .push_event(credential_event(&self.shared, &state));
+        }
         drop(state);
         self.shared.condition.notify_all();
     }
@@ -1456,7 +1475,7 @@ fn credential_event(
     shared: &SharedAuthentication,
     state: &AuthenticationState,
 ) -> AuthenticationEvent {
-    let message = if state.fingerprint_ready {
+    let message = if state.fingerprint_ready && state.fingerprint_enabled {
         let sensor = state.fingerprint_sensor.map_or_else(
             || serde_json::json!({}),
             |[x, y, width, height]| {

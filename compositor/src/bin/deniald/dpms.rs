@@ -279,21 +279,30 @@ pub(super) fn synchronize_idle_dpms_configuration(
 }
 
 #[cfg(feature = "flutter")]
-pub(super) fn synchronize_requested_dpms_off(
+pub(super) fn synchronize_requested_display_power(
     runtime: &mut flutter_runtime::FlutterRuntime,
     scanouts: &[Scanout],
     events: &mut RuntimeState,
 ) {
-    if !runtime.take_dpms_off_requested() {
-        return;
+    match runtime.take_display_power_request() {
+        None => {}
+        Some(idle_policy::DisplayPowerRequest::Off) => {
+            let requests = events.idle_policy.blank_now(
+                scanouts
+                    .iter()
+                    .map(|scanout| (scanout.output.id, scanout.powered)),
+            );
+            events.queue_idle_power_requests(requests);
+            info!("requested immediate compositor-owned display power-off");
+        }
+        Some(idle_policy::DisplayPowerRequest::On) => {
+            // The idle timer starts again, so the screen stays on for the
+            // usual timeout; clients are not told of user activity.
+            let requests = events.idle_policy.note_activity(Instant::now());
+            events.queue_idle_power_requests(requests);
+            info!("requested compositor-owned display power-on");
+        }
     }
-    let requests = events.idle_policy.blank_now(
-        scanouts
-            .iter()
-            .map(|scanout| (scanout.output.id, scanout.powered)),
-    );
-    events.queue_idle_power_requests(requests);
-    info!("requested immediate compositor-owned display power-off");
 }
 
 #[cfg(feature = "flutter")]

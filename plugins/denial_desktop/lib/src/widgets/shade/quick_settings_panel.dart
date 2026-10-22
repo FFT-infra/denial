@@ -693,11 +693,13 @@ class _QuickSettingsTilesSection extends ConsumerWidget {
     final networkController = ref.read(networkConnectivityProvider.notifier);
     final bluetooth = ref.watch(bluetoothProvider);
     final bluetoothController = ref.read(bluetoothProvider.notifier);
-    final notificationPolicy = ref.watch(
-      desktopNotificationsProvider.select(
-        (state) =>
-            (doNotDisturb: state.doNotDisturb, loaded: state.policyLoaded),
+    final notificationPolicy = (
+      doNotDisturb: ref.watch(
+        desktopNotificationsProvider.select((state) => state.doNotDisturb),
       ),
+      loaded:
+          ref.watch(shellSettingsSyncStatusProvider).phase ==
+          ShellSettingsSyncPhase.ready,
     );
     final notificationController = ref.read(
       desktopNotificationsProvider.notifier,

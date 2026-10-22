@@ -901,7 +901,10 @@ fn panel_motion_decodes_height_and_duration_within_bounds() {
     bridge.handle(&panel_motion(368, 420)).unwrap();
     bridge.handle(&panel_motion(0, 0)).unwrap();
     assert_eq!(
-        bridge.pending_keyboard_commands.drain(..).collect::<Vec<_>>(),
+        bridge
+            .pending_keyboard_commands
+            .drain(..)
+            .collect::<Vec<_>>(),
         [
             KeyboardCommand::PanelMotion {
                 height: 368,

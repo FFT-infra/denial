@@ -83,6 +83,21 @@ class ReferenceShellState {
   List<DenialWindow> get positionedPopupSurfaces =>
       platform.positionedPopupSurfaces;
   List<DenialWindow> get layerSurfaces => platform.layerSurfaces;
+
+  /// Denial's own overlay on top, such as the authentication prompt, which a
+  /// phone shows above everything but the keyboard.
+  DenialWindow? get systemOverlay {
+    for (final surface in layerSurfaces.reversed) {
+      if (surface.contentKind == DenialWindowContentKind.layerShellOverlay &&
+          surface.appId.startsWith('dev.denial.') &&
+          surface.geometry != null &&
+          surface.surfaceLayers.isNotEmpty) {
+        return surface;
+      }
+    }
+    return null;
+  }
+
   int get windowSnapshotSequence => platform.windowSnapshotSequence;
   bool get locked => platform.locked;
 

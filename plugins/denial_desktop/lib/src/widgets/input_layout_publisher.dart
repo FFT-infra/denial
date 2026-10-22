@@ -35,6 +35,7 @@ class _InputLayoutPublisherState extends ConsumerState<InputLayoutPublisher> {
           edgePanelProgress: state.edgePanelDragProgress,
           edgePanelViewportScroll: state.edgePanelViewportScroll,
           lockLayerVisible: state.lockLayerVisible,
+          systemOverlay: state.systemOverlay,
         ),
       ),
     );

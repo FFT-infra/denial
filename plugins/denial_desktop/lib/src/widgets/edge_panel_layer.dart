@@ -6,6 +6,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:denial_flutter_sdk/platform.dart';
+import 'package:denial_flutter_sdk/settings.dart';
 import 'package:denial_flutter_sdk/system_services.dart';
 import 'package:denial_flutter_sdk/state.dart';
 import 'package:denial_flutter_sdk/motion.dart';
@@ -368,6 +369,11 @@ class _EdgePanelContent extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final bridge = ref.read(denialBridgeProvider);
     final haptics = ref.read(hapticsServiceProvider);
+    final vibrate = ref.watch(
+      shellSettingsProvider.select(
+        (settings) => settings.sound.keyboardVibration,
+      ),
+    );
     final theme = ShellTheme.of(context);
     return ShellBackdropBlur(
       separateChild: true,
@@ -388,7 +394,7 @@ class _EdgePanelContent extends ConsumerWidget {
           // editor before its command is delivered.
           child: TextFieldTapRegion(
             child: ShellOskPanel(
-              onKeyTap: haptics.pulse,
+              onKeyTap: vibrate ? haptics.pulse : null,
               onKey: (intent) => _sendOskIntent(bridge, intent),
             ),
           ),

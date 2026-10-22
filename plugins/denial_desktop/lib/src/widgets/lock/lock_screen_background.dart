@@ -667,3 +667,85 @@ class _LockDepthForegroundState extends ConsumerState<_LockDepthForeground> {
     );
   }
 }
+
+/// The phone's notifications under the clock, as many as fit, newest first,
+/// unless the lock screen settings hide them. They fade and lift with the
+/// clock when a credential comes up, and let touches through to the swipe.
+class _LockNotifications extends ConsumerWidget {
+  const _LockNotifications({required this.scale, required this.opacity});
+
+  /// The clock's scale, which moves its lower edge.
+  final double scale;
+  final Animation<double> opacity;
+
+  static const int _shown = 3;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final state = ref.watch(desktopNotificationsProvider);
+    final notifications = ref.read(desktopNotificationsProvider.notifier);
+    if (state.lockPreview == NotificationPreviewMode.hidden) {
+      return const SizedBox.shrink();
+    }
+    // The shade's history: a notification stays after its popup is gone.
+    final records = state.history.take(_shown).toList(growable: false);
+    if (records.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    // The same block _LockClockBlock lays the mobile time out in.
+    final size = MediaQuery.sizeOf(context);
+    final clockTop = math.max(48.0, size.height * 0.25 - 96.0);
+    final clockHeight = math.min(250.0, size.height * 0.34);
+    final clockBottom = clockTop + clockHeight * (1 + scale) / 2;
+    final metrics = MobileUiMetrics.of(context);
+    final padding = MediaQuery.viewPaddingOf(context);
+    return Positioned(
+      left: padding.left,
+      right: padding.right,
+      top: clockBottom + metrics.visual(24),
+      // The fingerprint ring and the swipe pill keep the lower part.
+      bottom: size.height * 0.3,
+      child: FadeTransition(
+        opacity: opacity,
+        child: ClipRect(
+          child: SingleChildScrollView(
+            physics: const NeverScrollableScrollPhysics(),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (final record in records)
+                  Padding(
+                    key: ValueKey(record.notification.id),
+                    padding: EdgeInsets.fromLTRB(
+                      metrics.visual(MobileNotificationCard.horizontalMargin),
+                      0,
+                      metrics.visual(MobileNotificationCard.horizontalMargin),
+                      metrics.visual(MobileNotificationMetrics.rowSpacing),
+                    ),
+                    // Swiped aside, it leaves the history; a swipe up
+                    // still opens the phone.
+                    child: Dismissible(
+                      key: ValueKey(record.notification.id),
+                      confirmDismiss: (_) async {
+                        // The controller drops the row when it can.
+                        notifications.dismissFromHistory(
+                          record.notification.id,
+                        );
+                        return false;
+                      },
+                      child: MobileNotificationCard(
+                        notification: record.notification,
+                        interactive: false,
+                        previewMode: state.lockPreview,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}

@@ -532,7 +532,7 @@ pub struct FlutterRuntime {
     pub(super) input_deck_commands: VecDeque<super::input_deck::Command>,
     pub(super) input_deck_snapshot: Option<super::input_deck::Snapshot>,
     pending_idle_policy: Option<idle_policy::IdlePolicyConfiguration>,
-    pending_dpms_off: bool,
+    pending_display_power: Option<idle_policy::DisplayPowerRequest>,
     pending_vm_service_uri: Option<String>,
     generation: u64,
     scheduled_tasks: BinaryHeap<QueuedPlatformTask>,

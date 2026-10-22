@@ -158,13 +158,21 @@ pub(super) fn publish_session_activation_environment(
     polkit_agent: bool,
 ) -> Result<SessionActivation, Box<dyn Error>> {
     let qt_platform_theme = std::env::var_os("QT_QPA_PLATFORMTHEME");
-    let environment = session_activation_environment(
+    let mut environment = session_activation_environment(
         wayland_display,
         x11_display,
         output_control_socket,
         qt_platform_theme.as_deref(),
         polkit_agent,
     )?;
+    // Session programs that look different on a phone, such as the
+    // authentication prompt, follow the shell's profile. Always set, so a
+    // desktop session does not inherit a phone's.
+    environment.insert(
+        "DENIAL_SHELL_PROFILE",
+        denial_core::environment::var("DENIAL_SHELL_PROFILE")
+            .unwrap_or_else(|_| String::from("desktop")),
+    );
     let connection = zbus::blocking::Connection::session()?;
     update_dbus_activation_environment(&connection, &environment)?;
 

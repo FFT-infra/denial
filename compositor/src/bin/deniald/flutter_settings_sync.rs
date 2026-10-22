@@ -764,10 +764,22 @@ fn publish_settings_document(events: &mut RuntimeState) -> Result<(), Box<dyn Er
     if events.published_settings_document_revision == Some(revision) {
         return Ok(());
     }
+    synchronize_fingerprint_unlock(events);
     if publisher.publish_settings_document(revision, frontend.settings.document_json()?) {
         events.published_settings_document_revision = Some(revision);
     }
     Ok(())
+}
+
+/// Hands the lock screen's fingerprint switch to authentication: at start
+/// and after every settings revision.
+#[cfg(feature = "flutter")]
+pub(super) fn synchronize_fingerprint_unlock(events: &RuntimeState) {
+    if let (Some(authentication), Some(frontend)) =
+        (events.authentication.as_ref(), events.wayland.as_ref())
+    {
+        authentication.enable_fingerprint(frontend.settings.fingerprint_unlock());
+    }
 }
 
 #[cfg(feature = "flutter")]

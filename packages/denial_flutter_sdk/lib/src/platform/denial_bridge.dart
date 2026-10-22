@@ -449,6 +449,7 @@ class DenialBridge {
     required bool suspendEnabled,
     required Duration suspendTimeout,
     required SuspendMode suspendMode,
+    Duration? lockAfterScreenOff,
   }) => _session.setIdlePolicy(
     powerButtonAction: powerButtonAction,
     lockEnabled: lockEnabled,
@@ -458,11 +459,16 @@ class DenialBridge {
     suspendEnabled: suspendEnabled,
     suspendTimeout: suspendTimeout,
     suspendMode: suspendMode,
+    lockAfterScreenOff: lockAfterScreenOff,
   );
 
   /// Requests compositor-owned DPMS-off for every currently powered output.
   /// The next physical input wakes outputs through the native idle policy.
   void requestDpmsOff() => _session.requestDpmsOff();
+
+  /// Lights the dark outputs as an input would; the idle timeout starts
+  /// again.
+  void requestDisplayOn() => _session.requestDisplayOn();
 
   int queryUiDevelopmentState() => _session.queryUiDevelopmentState();
 

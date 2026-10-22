@@ -124,6 +124,26 @@ class ReferenceShellMetrics {
     );
   }
 
+  /// Where a system overlay of `surface`'s size sits on a phone: centred
+  /// across, and down the space between the status bar and the keyboard as
+  /// far as it is open.
+  static Rect systemOverlayRect(
+    Size viewSize,
+    Size surface,
+    double keyboardProgress,
+  ) {
+    final bottom = edgePanelRect(viewSize, keyboardProgress).top;
+    final top = statusBarHeight.clamp(0.0, bottom).toDouble();
+    return Rect.fromLTWH(
+      (viewSize.width - surface.width) / 2.0,
+      (top + (bottom - top - surface.height) / 2.0)
+          .clamp(0.0, double.infinity)
+          .toDouble(),
+      surface.width,
+      surface.height,
+    );
+  }
+
   static Rect statusRect(Size viewSize) {
     return Rect.fromLTWH(
       0,

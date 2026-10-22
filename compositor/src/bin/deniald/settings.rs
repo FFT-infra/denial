@@ -25,7 +25,7 @@ use denial_core::topology::OutputTransform;
 
 use super::window_layout::WindowLayoutKind;
 
-pub(super) const SETTINGS_SCHEMA_VERSION: u64 = 29;
+pub(super) const SETTINGS_SCHEMA_VERSION: u64 = 30;
 pub(super) const MIN_WORKSPACE_COUNT: u8 = 2;
 pub(super) const MAX_WORKSPACE_COUNT: u8 = 9;
 pub(super) const DEFAULT_WORKSPACE_COUNT: u8 = 4;
@@ -741,6 +741,16 @@ impl SettingsManager {
         parse_scrolling_layout_wheel_settings(&self.document).unwrap_or_default()
     }
 
+    /// The lock screen offers the fingerprint unless the user turned it off.
+    pub(super) fn fingerprint_unlock(&self) -> bool {
+        self.document
+            .get("lockScreen")
+            .and_then(Value::as_object)
+            .and_then(|lock| lock.get("fingerprintUnlock"))
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
+    }
+
     pub(super) fn workspace_settings(&self) -> WorkspaceSettings {
         parse_workspace_settings(&self.document).unwrap_or_default()
     }
@@ -1431,6 +1441,7 @@ fn parse_document(bytes: &[u8]) -> Result<ParsedSettingsDocument, SettingsError>
         WorkspaceSettings::default()
     };
     set_workspace_settings(&mut document, workspace_settings)?;
+    migrate_idle_timeouts(&mut document);
     let migrated = version != SETTINGS_SCHEMA_VERSION
         || !document.contains_key("revision")
         || !document.contains_key("keyboard")
@@ -1551,6 +1562,22 @@ fn parse_color_scheme_preference(
             "unsupported appearance.colorSchemePreference {value:?}"
         ))
     })
+}
+
+/// Schema 30 counts the idle timeouts in seconds; earlier documents kept
+/// whole minutes.
+fn migrate_idle_timeouts(document: &mut Map<String, Value>) {
+    let Some(power) = document.get_mut("power").and_then(Value::as_object_mut) else {
+        return;
+    };
+    for action in ["Lock", "Dpms", "Suspend"] {
+        let minutes = power.remove(&format!("idle{action}TimeoutMinutes"));
+        if let Some(minutes) = minutes.as_ref().and_then(Value::as_u64) {
+            power
+                .entry(format!("idle{action}TimeoutSeconds"))
+                .or_insert_with(|| Value::from(minutes.saturating_mul(60)));
+        }
+    }
 }
 
 fn set_color_scheme_preference(

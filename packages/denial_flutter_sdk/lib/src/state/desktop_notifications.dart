@@ -1,20 +1,15 @@
-import 'dart:async';
-
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../launcher/launcher_providers.dart';
 import '../models/desktop_notification.dart';
+import '../models/notification_policy.dart';
 import '../platform/denial_bridge_provider.dart';
-import '../services/notification_policy_repository.dart';
+import '../settings/settings_controller.dart';
+import '../settings/shell_settings.dart';
 import 'desktop_notification_reducer.dart';
 import 'desktop_notifications_state.dart';
 import 'notifier_lifecycle.dart';
 
 export 'desktop_notifications_state.dart';
-
-final notificationPolicyStoreProvider = Provider<NotificationPolicyStore?>(
-  (ref) => NotificationPolicyRepository(paths: ref.watch(runtimePathsProvider)),
-);
 
 final desktopNotificationLoggerProvider = Provider<void Function(String)?>(
   (ref) => null,
@@ -33,27 +28,26 @@ class DesktopNotificationsController extends Notifier<DesktopNotificationsState>
     _dismiss = bridge.dismissNotification;
     _invokeAction = bridge.invokeNotificationAction;
     _invokeDefaultAction = bridge.invokeDefaultNotificationAction;
-    _policyStore = ref.watch(notificationPolicyStoreProvider);
+    _lightDisplay = bridge.requestDisplayOn;
     _logger = ref.watch(desktopNotificationLoggerProvider);
     _invokedActions.clear();
     _reducer = DesktopNotificationReducer();
-    _policyMutated = false;
-    _policyWriteRunning = false;
-    _pendingPolicyWrite = null;
     _buildGeneration = beginBuildGeneration();
     final generation = _buildGeneration;
     final subscription = bridge.notificationEvents.listen(
       (event) => _handleEvent(event, generation),
     );
     cancelOnDispose(subscription);
-    if (_policyStore != null) {
-      scheduleMicrotask(() {
-        if (isBuildGenerationActive(generation)) {
-          unawaited(_loadPolicy(generation));
-        }
-      });
-    }
-    return DesktopNotificationsState(policyLoaded: _policyStore == null);
+    // The policy lives in Denial's settings, which other programs edit too.
+    ref.listen<ShellNotificationSettings>(
+      shellSettingsProvider.select((settings) => settings.notifications),
+      (_, policy) => _applyPolicy(policy),
+    );
+    final policy = ref.read(shellSettingsProvider).notifications;
+    return DesktopNotificationsState(
+      doNotDisturb: policy.doNotDisturb,
+      lockPreview: policy.lockPreview,
+    );
   }
 
   static const int maxActiveNotifications =
@@ -66,14 +60,11 @@ class DesktopNotificationsController extends Notifier<DesktopNotificationsState>
   late bool Function(int notificationId) _dismiss;
   late bool Function(int notificationId, String actionKey) _invokeAction;
   late bool Function(int notificationId) _invokeDefaultAction;
-  late NotificationPolicyStore? _policyStore;
+  late void Function() _lightDisplay;
   late int _buildGeneration;
 
   final Map<int, Set<String>> _invokedActions = <int, Set<String>>{};
   late DesktopNotificationReducer _reducer;
-  bool _policyMutated = false;
-  bool _policyWriteRunning = false;
-  NotificationPolicy? _pendingPolicyWrite;
 
   bool dismiss(int notificationId) {
     if (!state.active.containsKey(notificationId) ||
@@ -167,36 +158,28 @@ class DesktopNotificationsController extends Notifier<DesktopNotificationsState>
   }
 
   void setDoNotDisturb(bool enabled) {
-    if (state.doNotDisturb == enabled && state.policyLoaded) {
-      return;
-    }
-    _policyMutated = true;
-    final queue = enabled
-        ? state.bannerQueue
-              .where((id) {
-                final notification = state.active[id];
-                return notification != null &&
-                    notification.urgency == DesktopNotificationUrgency.critical;
-              })
-              .toList(growable: false)
-        : state.bannerQueue;
-    state = state.copyWith(
-      doNotDisturb: enabled,
-      policyLoaded: true,
-      bannerQueue: List<int>.unmodifiable(queue),
-    );
-    _schedulePolicyWrite();
+    ref.read(shellSettingsProvider.notifier).setDoNotDisturb(enabled);
   }
 
   void toggleDoNotDisturb() => setDoNotDisturb(!state.doNotDisturb);
 
   void setLockPreview(NotificationPreviewMode mode) {
-    if (state.lockPreview == mode && state.policyLoaded) {
-      return;
-    }
-    _policyMutated = true;
-    state = state.copyWith(lockPreview: mode, policyLoaded: true);
-    _schedulePolicyWrite();
+    ref.read(shellSettingsProvider.notifier).setLockPreview(mode);
+  }
+
+  void _applyPolicy(ShellNotificationSettings policy) {
+    final queue = policy.doNotDisturb && !state.doNotDisturb
+        ? state.bannerQueue.where((id) {
+            final notification = state.active[id];
+            return notification != null &&
+                notification.urgency == DesktopNotificationUrgency.critical;
+          })
+        : state.bannerQueue;
+    state = state.copyWith(
+      doNotDisturb: policy.doNotDisturb,
+      lockPreview: policy.lockPreview,
+      bannerQueue: List<int>.unmodifiable(queue),
+    );
   }
 
   void markAllRead() {
@@ -267,52 +250,20 @@ class DesktopNotificationsController extends Notifier<DesktopNotificationsState>
     }
     state = result.state;
     _logger?.call(event.toReadableString());
+    _wakeFor(event);
   }
 
-  Future<void> _loadPolicy(int generation) async {
-    final policy = await _policyStore!.read();
-    if (!isBuildGenerationActive(generation)) {
+  /// A notification that pops up turns the screen on, when the settings
+  /// ask for it; Do not disturb keeps it dark.
+  void _wakeFor(DesktopNotificationEvent event) {
+    final notification = event.notification;
+    if (event.kind == DesktopNotificationEventKind.closed ||
+        notification == null ||
+        notification.historyOnly ||
+        !state.bannerQueue.contains(notification.id) ||
+        !ref.read(shellSettingsProvider).notifications.wakeScreen) {
       return;
     }
-    if (_policyMutated) {
-      state = state.copyWith(policyLoaded: true);
-      return;
-    }
-    state = state.copyWith(
-      doNotDisturb: policy.doNotDisturb,
-      lockPreview: policy.lockPreview,
-      policyLoaded: true,
-    );
-  }
-
-  void _schedulePolicyWrite() {
-    if (_policyStore == null) {
-      return;
-    }
-    _pendingPolicyWrite = NotificationPolicy(
-      doNotDisturb: state.doNotDisturb,
-      lockPreview: state.lockPreview,
-    );
-    if (!_policyWriteRunning) {
-      unawaited(_drainPolicyWrites(_buildGeneration));
-    }
-  }
-
-  Future<void> _drainPolicyWrites(int generation) async {
-    _policyWriteRunning = true;
-    try {
-      while (isBuildGenerationActive(generation)) {
-        final policy = _pendingPolicyWrite;
-        if (policy == null) {
-          return;
-        }
-        _pendingPolicyWrite = null;
-        await _policyStore!.write(policy);
-      }
-    } finally {
-      if (isBuildGenerationActive(generation)) {
-        _policyWriteRunning = false;
-      }
-    }
+    _lightDisplay();
   }
 }

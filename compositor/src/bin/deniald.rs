@@ -228,7 +228,8 @@ const DEFAULT_QT_QPA_PLATFORMTHEME: &str = "xdgdesktopportal";
 #[cfg(feature = "flutter")]
 use dpms::{
     apply_output_power_requests, collect_output_power_requests, synchronize_idle_dpms,
-    synchronize_idle_dpms_configuration, synchronize_power_button, synchronize_requested_dpms_off,
+    synchronize_idle_dpms_configuration, synchronize_power_button,
+    synchronize_requested_display_power,
 };
 #[cfg(feature = "flutter")]
 use flutter_event_loop::{FlutterEventLoopContext, run_flutter_event_loop};
@@ -253,9 +254,9 @@ use flutter_session::{
 #[cfg(feature = "flutter")]
 use flutter_settings_sync::{
     apply_automatic_orientation, apply_resident_output_geometry, send_flutter_window_event,
-    synchronize_flutter_window_commands, synchronize_flutter_window_management,
-    synchronize_resident_flutter_geometry_state, synchronize_settings,
-    synchronize_system_bar_configuration,
+    synchronize_fingerprint_unlock, synchronize_flutter_window_commands,
+    synchronize_flutter_window_management, synchronize_resident_flutter_geometry_state,
+    synchronize_settings, synchronize_system_bar_configuration,
 };
 use frame_loop::{FrameLoopContext, run_frame_loop};
 use hotplug_transaction::{

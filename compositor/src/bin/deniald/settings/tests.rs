@@ -70,6 +70,28 @@ fn shell_document(value: Value) -> String {
 }
 
 #[test]
+fn migrates_idle_timeouts_from_minutes_to_seconds() {
+    let temporary = TemporaryDirectory::new("settings-idle-seconds");
+    let path = temporary.settings_path();
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        &path,
+        br#"{"version":29,"power":{"idleDpmsEnabled":true,"idleDpmsTimeoutMinutes":2,"idleLockTimeoutMinutes":16}}"#,
+    )
+    .unwrap();
+
+    let manager = SettingsManager::load_path(path).unwrap();
+    let document: Value = serde_json::from_str(&manager.document_json().unwrap()).unwrap();
+    let power = document["power"].as_object().unwrap();
+    assert_eq!(power["idleDpmsTimeoutSeconds"], 120);
+    assert_eq!(power["idleLockTimeoutSeconds"], 960);
+    assert_eq!(power["idleDpmsEnabled"], true);
+    assert!(!power.contains_key("idleDpmsTimeoutMinutes"));
+    assert!(!power.contains_key("idleLockTimeoutMinutes"));
+    assert!(!power.contains_key("idleSuspendTimeoutSeconds"));
+}
+
+#[test]
 fn migrates_existing_shell_document_without_losing_sections() {
     let temporary = TemporaryDirectory::new("settings-migrate");
     let path = temporary.settings_path();

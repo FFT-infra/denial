@@ -188,6 +188,7 @@ fn cancelled(shared: &SharedAuthentication, epoch: u64) -> bool {
     state.stopping
         || state.lock_epoch != epoch
         || !state.fingerprint_offered
+        || !state.fingerprint_enabled
         || !shared.locked.load(Ordering::Acquire)
 }
 
@@ -205,7 +206,8 @@ pub(super) fn run_worker(
             while !state.stopping
                 && (!shared.locked.load(Ordering::Acquire)
                     || state.fingerprint_unlock.is_some()
-                    || !state.fingerprint_offered)
+                    || !state.fingerprint_offered
+                    || !state.fingerprint_enabled)
             {
                 state = shared
                     .condition
@@ -490,6 +492,32 @@ mod tests {
         publish_no_match(&controller.shared, 0);
         assert!(controller.try_event().is_none());
         assert!(requests.try_recv().is_err());
+    }
+
+    #[test]
+    fn switched_off_fingerprint_hides_the_sensor_and_stops_the_reader() {
+        let controller = controller(true);
+        publish_readiness(&controller.shared, true);
+        while controller.try_event().is_some() {}
+        assert!(!cancelled(&controller.shared, 0));
+        controller.enable_fingerprint(false);
+        let event = controller.try_event().unwrap();
+        assert!(matches!(
+            event.kind,
+            AuthenticationEventKind::Credential { .. }
+        ));
+        assert!(event.message.is_empty());
+        assert!(cancelled(&controller.shared, 0));
+        controller.enable_fingerprint(false);
+        assert!(controller.try_event().is_none());
+        controller.enable_fingerprint(true);
+        assert!(
+            controller
+                .try_event()
+                .unwrap()
+                .message
+                .contains("fingerprint")
+        );
     }
 
     #[test]

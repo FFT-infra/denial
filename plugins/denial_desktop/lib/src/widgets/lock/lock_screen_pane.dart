@@ -346,6 +346,10 @@ class _LockScreenPaneState extends ConsumerState<_LockScreenPane>
                         parts: const {HomeClockPart.date, HomeClockPart.status},
                       ),
                     if (!widget.desktop && widget.authenticationEnabled) ...[
+                      _LockNotifications(
+                        scale: lockSettings.clockScale,
+                        opacity: _clockOpacity,
+                      ),
                       _LockGlyph(opacity: _clockOpacity),
                       _LockSwipePill(opacity: _clockOpacity),
                       _LockFingerprintRing(

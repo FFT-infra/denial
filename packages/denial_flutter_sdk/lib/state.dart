@@ -36,8 +36,7 @@ export 'src/state/desktop_notifications.dart'
     show
         DesktopNotificationsController,
         desktopNotificationLoggerProvider,
-        desktopNotificationsProvider,
-        notificationPolicyStoreProvider;
+        desktopNotificationsProvider;
 export 'src/state/desktop_notifications_state.dart'
     show DesktopNotificationRecord, DesktopNotificationsState;
 export 'src/state/desktop_power_modes.dart'

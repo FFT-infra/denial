@@ -2090,7 +2090,7 @@ fn synchronize_periodic_power_configuration(
         events.flutter_reload_requested = true;
     }
     synchronize_idle_dpms_configuration(runtime, events);
-    synchronize_requested_dpms_off(runtime, scanouts, events);
+    synchronize_requested_display_power(runtime, scanouts, events);
     Ok(())
 }
 
@@ -2591,6 +2591,7 @@ pub(super) fn run_flutter_event_loop(
         output_control: Some(output_control.clone()),
         ..RuntimeState::default()
     };
+    synchronize_fingerprint_unlock(&events);
     if let Some(settings_path) = events
         .wayland
         .as_ref()

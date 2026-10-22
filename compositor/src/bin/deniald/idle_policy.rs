@@ -20,12 +20,15 @@ const LEGACY_PACKET_BYTES: usize = size_of::<u64>();
 const PACKET_BYTES: usize = 32;
 const LEGACY_CONFIGURATION_PACKET_VERSION: u8 = 1;
 const SUSPEND_MODE_CONFIGURATION_PACKET_VERSION: u8 = 2;
-const PACKET_VERSION: u8 = 3;
+const POWER_BUTTON_CONFIGURATION_PACKET_VERSION: u8 = 3;
+const PACKET_VERSION: u8 = 4;
 const LOCK_ENABLED: u8 = 1 << 0;
 const DPMS_ENABLED: u8 = 1 << 1;
 const SUSPEND_ENABLED: u8 = 1 << 2;
+const SCREEN_OFF_LOCK_ENABLED: u8 = 1 << 3;
 const ENABLED_MASK: u8 = LOCK_ENABLED | DPMS_ENABLED | SUSPEND_ENABLED;
 const DISPLAY_POWER_OFF: u8 = 1;
+const DISPLAY_POWER_ON: u8 = 2;
 const MAX_TIMEOUT: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 const LOCK_AFTER_DPMS_DELAY: Duration = Duration::from_secs(5);
 
@@ -42,6 +45,11 @@ pub(super) struct IdlePolicyConfiguration {
     pub(super) suspend_timeout: Option<Duration>,
     pub(super) suspend_mode: SuspendMode,
     pub(super) power_button_action: PowerButtonAction,
+    /// How long a session stays unlocked once its screen goes dark, by the
+    /// power button or by the idle timeout. None locks at once on the power
+    /// button, unless idle locking is off too, and leaves idle locking to
+    /// `lock_timeout`.
+    pub(super) lock_after_screen_off: Option<Duration>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -190,17 +198,29 @@ pub(super) enum DisplayPowerPacketError {
 
 impl fmt::Display for DisplayPowerPacketError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("display power packet must contain the one-byte DPMS-off command")
+        formatter.write_str("display power packet must contain a one-byte DPMS command")
     }
 }
 
 impl Error for DisplayPowerPacketError {}
 
-pub(super) fn decode_display_power_off(packet: &[u8]) -> Result<(), DisplayPowerPacketError> {
-    if packet == [DISPLAY_POWER_OFF] {
-        Ok(())
-    } else {
-        Err(DisplayPowerPacketError::InvalidPacket)
+/// What the shell asks of the displays.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum DisplayPowerRequest {
+    /// Every lit display goes dark until the next input.
+    Off,
+    /// The dark displays light up, as an input would light them: a
+    /// notification arrived.
+    On,
+}
+
+pub(super) fn decode_display_power(
+    packet: &[u8],
+) -> Result<DisplayPowerRequest, DisplayPowerPacketError> {
+    match packet {
+        [DISPLAY_POWER_OFF] => Ok(DisplayPowerRequest::Off),
+        [DISPLAY_POWER_ON] => Ok(DisplayPowerRequest::On),
+        _ => Err(DisplayPowerPacketError::InvalidPacket),
     }
 }
 
@@ -223,6 +243,8 @@ pub(super) fn decode_configuration(
     if packet.len() != PACKET_BYTES {
         return Err(IdlePolicyPacketError::InvalidSize(packet.len()));
     }
+    let mut lock_after_screen_off = None;
+    let mut enabled_mask = ENABLED_MASK;
     let (suspend_mode, power_button_action) = match packet[0] {
         LEGACY_CONFIGURATION_PACKET_VERSION => {
             if packet[2..8].iter().any(|byte| *byte != 0) {
@@ -240,8 +262,28 @@ pub(super) fn decode_configuration(
                 PowerButtonAction::Dpms,
             )
         }
-        PACKET_VERSION => {
+        POWER_BUTTON_CONFIGURATION_PACKET_VERSION => {
             if packet[4..8].iter().any(|byte| *byte != 0) {
+                return Err(IdlePolicyPacketError::NonZeroReservedBytes);
+            }
+            (
+                SuspendMode::decode(packet[2])
+                    .ok_or(IdlePolicyPacketError::InvalidSuspendMode(packet[2]))?,
+                PowerButtonAction::decode(packet[3])
+                    .ok_or(IdlePolicyPacketError::InvalidPowerButtonAction(packet[3]))?,
+            )
+        }
+        PACKET_VERSION => {
+            enabled_mask |= SCREEN_OFF_LOCK_ENABLED;
+            let milliseconds = u32::from_le_bytes(
+                packet[4..8]
+                    .try_into()
+                    .expect("screen-off lock delay has a fixed packet width"),
+            );
+            if packet[1] & SCREEN_OFF_LOCK_ENABLED != 0 {
+                lock_after_screen_off =
+                    Some(decode_timeout("screen-off lock", u64::from(milliseconds))?);
+            } else if milliseconds != 0 {
                 return Err(IdlePolicyPacketError::NonZeroReservedBytes);
             }
             (
@@ -254,7 +296,7 @@ pub(super) fn decode_configuration(
         version => return Err(IdlePolicyPacketError::UnsupportedVersion(version)),
     };
     let flags = packet[1];
-    if flags & !ENABLED_MASK != 0 {
+    if flags & !enabled_mask != 0 {
         return Err(IdlePolicyPacketError::InvalidFlags(flags));
     }
     let lock_timeout = decode_packet_timeout("lock", &packet[8..16])?;
@@ -275,6 +317,7 @@ pub(super) fn decode_configuration(
         suspend_timeout: (flags & SUSPEND_ENABLED != 0).then_some(suspend_timeout),
         suspend_mode,
         power_button_action,
+        lock_after_screen_off,
     })
 }
 
@@ -345,6 +388,8 @@ pub(super) struct IdlePolicy {
     suspend_triggered: bool,
     blanked_outputs: BTreeSet<OutputId>,
     manually_blanked: bool,
+    /// When the dark screen locks, while `lock_after_screen_off` counts.
+    screen_off_lock_at: Option<Instant>,
 }
 
 impl Default for IdlePolicy {
@@ -361,6 +406,7 @@ impl Default for IdlePolicy {
             suspend_triggered: false,
             blanked_outputs: BTreeSet::new(),
             manually_blanked: false,
+            screen_off_lock_at: None,
         }
     }
 }
@@ -382,12 +428,15 @@ impl IdlePolicy {
         if outputs.iter().any(|(_, powered)| *powered) {
             IdlePolicyActions {
                 power_requests: self.blank_now(outputs),
-                lock: true,
+                lock: self
+                    .screen_went_off(now)
+                    .unwrap_or(self.configuration.lock_timeout.is_some()),
                 ..IdlePolicyActions::default()
             }
         } else {
             self.blanked_outputs.clear();
             self.manually_blanked = false;
+            self.screen_off_lock_at = None;
             IdlePolicyActions {
                 power_requests: outputs
                     .into_iter()
@@ -442,6 +491,7 @@ impl IdlePolicy {
         self.reset_idle_interval(now);
         self.blanked_outputs.remove(&output);
         self.manually_blanked &= !self.blanked_outputs.is_empty();
+        self.screen_off_lock_at = None;
         IdlePowerRequest {
             output,
             powered: true,
@@ -468,6 +518,12 @@ impl IdlePolicy {
         I: IntoIterator<Item = (OutputId, bool)>,
         I::IntoIter: Clone,
     {
+        // The dark screen locks on time even while playback holds idling
+        // off: the user chose to turn it off.
+        let screen_off_lock = self.screen_off_lock_at.is_some_and(|at| now >= at);
+        if screen_off_lock {
+            self.screen_off_lock_at = None;
+        }
         if inhibited {
             if !std::mem::replace(&mut self.inhibited, true) {
                 self.reset_idle_interval(now);
@@ -483,6 +539,7 @@ impl IdlePolicy {
                 } else {
                     self.wake_blanked_outputs()
                 },
+                lock: screen_off_lock,
                 ..IdlePolicyActions::default()
             };
         }
@@ -495,7 +552,10 @@ impl IdlePolicy {
         self.blanked_outputs
             .retain(|blanked| outputs.clone().any(|(output, _)| output == *blanked));
         let elapsed = now.saturating_duration_since(self.last_activity);
-        let mut actions = IdlePolicyActions::default();
+        let mut actions = IdlePolicyActions {
+            lock: screen_off_lock,
+            ..IdlePolicyActions::default()
+        };
 
         if !self.lock_triggered
             && self
@@ -521,6 +581,9 @@ impl IdlePolicy {
                     });
                 }
             }
+            if !actions.power_requests.is_empty() && self.screen_went_off(now) == Some(true) {
+                actions.lock = true;
+            }
         }
 
         // If display-off and suspend share a threshold, give the compositor
@@ -543,6 +606,14 @@ impl IdlePolicy {
     /// compositor independently. Between those edges the idle policy needs no
     /// polling; this deadline is the only timer it contributes.
     pub(super) fn next_deadline(&self) -> Option<Instant> {
+        let idle = self.next_idle_deadline();
+        match (idle, self.screen_off_lock_at) {
+            (Some(idle), Some(lock)) => Some(idle.min(lock)),
+            (idle, lock) => idle.or(lock),
+        }
+    }
+
+    fn next_idle_deadline(&self) -> Option<Instant> {
         if self.inhibited {
             return None;
         }
@@ -584,6 +655,18 @@ impl IdlePolicy {
         self.suspend_triggered = false;
     }
 
+    /// The screen just went dark: with a screen-off delay configured,
+    /// whether to lock now, else when, kept for `evaluate`. None when no
+    /// delay is configured.
+    fn screen_went_off(&mut self, now: Instant) -> Option<bool> {
+        let delay = self.configuration.lock_after_screen_off?;
+        if delay.is_zero() {
+            return Some(true);
+        }
+        self.screen_off_lock_at.get_or_insert(now + delay);
+        Some(false)
+    }
+
     fn effective_lock_timeout(&self) -> Option<Duration> {
         self.configuration.lock_timeout.map(|timeout| {
             if self.configuration.dpms_timeout == Some(timeout) {
@@ -603,6 +686,7 @@ impl IdlePolicy {
 
     fn wake_blanked_outputs(&mut self) -> Vec<IdlePowerRequest> {
         self.manually_blanked = false;
+        self.screen_off_lock_at = None;
         std::mem::take(&mut self.blanked_outputs)
             .into_iter()
             .map(|output| IdlePowerRequest {

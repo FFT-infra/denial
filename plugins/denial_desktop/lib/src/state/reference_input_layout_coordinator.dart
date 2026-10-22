@@ -68,6 +68,39 @@ class ReferenceInputLayoutCoordinator {
       return;
     }
 
+    // Denial's own overlay is modal: it takes the touches inside its card's
+    // canvas, the shell those around it, and the app none.
+    final overlay = state.systemOverlay;
+    if (overlay != null) {
+      final rect = ReferenceShellMetrics.systemOverlayRect(
+        viewSize,
+        overlay.geometry!.size,
+        edgePanelProgress,
+      );
+      _publishInputLayout(
+        viewSize: viewSize,
+        shellRegions: <Rect>[
+          Rect.fromLTRB(0, 0, viewSize.width, rect.top),
+          Rect.fromLTRB(0, rect.bottom, viewSize.width, viewSize.height),
+          Rect.fromLTRB(0, rect.top, rect.left, rect.bottom),
+          Rect.fromLTRB(rect.right, rect.top, viewSize.width, rect.bottom),
+        ].where((region) => !region.isEmpty).toList(growable: false),
+        windows: <InputWindowRegion>[
+          InputWindowRegion(
+            window: overlay,
+            rect: rect,
+            sourceRect: Offset.zero & rect.size,
+            z: 0,
+            geometryLocked: true,
+          ),
+        ],
+        softwareKeyboardRegions: softwareKeyboardRegions(
+          scrollStripVisible: state.edgePanelVisible,
+        ),
+      );
+      return;
+    }
+
     // An app laid out around the keyboard stays in place, so its input
     // regions do too, and there is no lifted scene for the strip to pan.
     final appLifted = !state.primaryWindowHandlesKeyboard;

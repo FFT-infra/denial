@@ -47,6 +47,9 @@ class _ShellRuntimeBindingsState extends ConsumerState<ShellRuntimeBindings> {
         oldWidget.mobilePresentation != widget.mobilePresentation) {
       _scheduleLayoutSync(ref.read(shellSettingsProvider).layout);
     }
+    if (oldWidget.mobilePresentation != widget.mobilePresentation) {
+      _schedulePowerSync(ref.read(shellSettingsProvider).power);
+    }
   }
 
   @override
@@ -154,13 +157,18 @@ class _ShellRuntimeBindingsState extends ConsumerState<ShellRuntimeBindings> {
           .read(denialBridgeProvider)
           .setIdlePolicy(
             powerButtonAction: power.powerButtonAction,
-            lockEnabled: power.idleLockEnabled,
-            lockTimeout: Duration(minutes: power.idleLockTimeoutMinutes),
+            // A phone locks a set time after its screen goes dark, or never.
+            lockEnabled: power.idleLockEnabled && !widget.mobilePresentation,
+            lockTimeout: Duration(seconds: power.idleLockTimeoutSeconds),
             dpmsEnabled: power.idleDpmsEnabled,
-            dpmsTimeout: Duration(minutes: power.idleDpmsTimeoutMinutes),
+            dpmsTimeout: Duration(seconds: power.idleDpmsTimeoutSeconds),
             suspendEnabled: power.idleSuspendEnabled,
-            suspendTimeout: Duration(minutes: power.idleSuspendTimeoutMinutes),
+            suspendTimeout: Duration(seconds: power.idleSuspendTimeoutSeconds),
             suspendMode: power.suspendMode,
+            lockAfterScreenOff:
+                power.idleLockEnabled && widget.mobilePresentation
+                ? Duration(seconds: power.screenOffLockDelaySeconds)
+                : null,
           );
     });
   }

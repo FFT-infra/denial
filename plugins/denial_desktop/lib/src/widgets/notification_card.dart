@@ -134,12 +134,19 @@ class NotificationCard extends StatelessWidget {
         color: panelSurface
             ? null
             : theme.cardColor(context.shellColors.surfaceContainerLow),
-        gradient: panelSurface
-            ? theme.panelGradient(
+        // A phone's notifications are cards, wherever they show; in glass
+        // their opacity is the panels' anyway.
+        gradient: !panelSurface
+            ? null
+            : mobile
+            ? theme.cardGradient(
                 context.shellColors.panelBackground,
                 context.shellColors.panelBackgroundBottom,
               )
-            : null,
+            : theme.panelGradient(
+                context.shellColors.panelBackground,
+                context.shellColors.panelBackgroundBottom,
+              ),
         borderRadius: radius,
         border: mobile && theme.transparencyMode == ShellTransparencyMode.glass
             ? null
