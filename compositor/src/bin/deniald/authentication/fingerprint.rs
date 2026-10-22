@@ -185,7 +185,10 @@ fn classify_status(status: &str, done: bool) -> Option<Verification> {
 
 fn cancelled(shared: &SharedAuthentication, epoch: u64) -> bool {
     let state = lock_unpoisoned(&shared.state);
-    state.stopping || state.lock_epoch != epoch || !shared.locked.load(Ordering::Acquire)
+    state.stopping
+        || state.lock_epoch != epoch
+        || !state.fingerprint_offered
+        || !shared.locked.load(Ordering::Acquire)
 }
 
 pub(super) fn run_worker(
@@ -200,7 +203,9 @@ pub(super) fn run_worker(
         let epoch = {
             let mut state = lock_unpoisoned(&shared.state);
             while !state.stopping
-                && (!shared.locked.load(Ordering::Acquire) || state.fingerprint_unlock.is_some())
+                && (!shared.locked.load(Ordering::Acquire)
+                    || state.fingerprint_unlock.is_some()
+                    || !state.fingerprint_offered)
             {
                 state = shared
                     .condition
@@ -301,11 +306,12 @@ fn sensor_rect() -> Option<[f64; 4]> {
     })
 }
 
+/// A rejected scan retries at once a few times, then once a second.
 fn fingerprint_retry(failures: u32) -> Duration {
     if failures <= 4 {
         Duration::from_millis(150)
     } else {
-        cooldown_for(failures - 4)
+        Duration::from_secs(1)
     }
 }
 
@@ -625,6 +631,31 @@ mod tests {
     }
 
     #[test]
+    fn reader_answers_only_while_the_lock_screen_offers_it() {
+        let controller = controller(false);
+        let (started, starts) = mpsc::channel();
+        let (results, result) = mpsc::channel();
+        let shared = Arc::clone(&controller.shared);
+        let worker =
+            thread::spawn(move || run_worker(&shared, &mut ControlledBackend { started, result }));
+        *lock_unpoisoned(&controller.fingerprint_worker) = Some(worker);
+        // Ignored while unlocked: every lock opens on the fingerprint face.
+        controller.offer_fingerprint(false);
+        controller.lock();
+        starts.recv_timeout(Duration::from_secs(2)).unwrap();
+        // A typed credential cancels the armed reader and keeps it idle, also
+        // across a repeated lock.
+        controller.offer_fingerprint(false);
+        controller.lock();
+        assert!(starts.recv_timeout(Duration::from_millis(100)).is_err());
+        // Back on the fingerprint face the reader arms again.
+        controller.offer_fingerprint(true);
+        starts.recv_timeout(Duration::from_secs(2)).unwrap();
+        results.send(Verification::NoMatch).unwrap();
+        starts.recv_timeout(Duration::from_secs(2)).unwrap();
+    }
+
+    #[test]
     fn armed_reader_is_announced_once_and_cleared_by_an_unusable_reader() {
         let controller = controller(true);
         publish_readiness(&controller.shared, true);
@@ -675,8 +706,8 @@ mod tests {
         assert_eq!(unavailable_retry(u32::MAX), MAX_UNAVAILABLE_RETRY);
         assert_eq!(fingerprint_retry(1), Duration::from_millis(150));
         assert_eq!(fingerprint_retry(4), Duration::from_millis(150));
-        assert_eq!(fingerprint_retry(5), Duration::from_millis(750));
-        assert_eq!(fingerprint_retry(u32::MAX), Duration::from_secs(30));
+        assert_eq!(fingerprint_retry(5), Duration::from_secs(1));
+        assert_eq!(fingerprint_retry(u32::MAX), Duration::from_secs(1));
         assert_eq!(cooldown_for(1), Duration::from_millis(750));
         assert_eq!(cooldown_for(u32::MAX), Duration::from_secs(30));
     }

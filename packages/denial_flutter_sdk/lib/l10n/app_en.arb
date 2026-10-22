@@ -5449,10 +5449,8 @@
   "mobileUnavailable": "Mobile network unavailable",
   "mobileChangeFailed": "Unable to change mobile data",
   "simPinTitle": "Unlock SIM",
-  "simPinLabel": "SIM PIN",
   "simPinUnlock": "Unlock SIM",
   "simPinLater": "Later",
-  "simPinFailed": "SIM could not be unlocked. Check your PIN and remaining attempts.",
   "simPukRequired": "SIM requires a PUK. Contact your carrier.",
   "simLocked": "SIM locked",
   "simPinRetries": "{count} attempts remaining",
@@ -5481,16 +5479,10 @@
   "@simPinTitle": {
     "description": "Mobile connectivity and SIM authentication UI."
   },
-  "@simPinLabel": {
-    "description": "Mobile connectivity and SIM authentication UI."
-  },
   "@simPinUnlock": {
     "description": "Mobile connectivity and SIM authentication UI."
   },
   "@simPinLater": {
-    "description": "Mobile connectivity and SIM authentication UI."
-  },
-  "@simPinFailed": {
     "description": "Mobile connectivity and SIM authentication UI."
   },
   "@simPukRequired": {

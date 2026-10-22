@@ -4075,17 +4075,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get simPinTitle => 'Unlock SIM';
 
   @override
-  String get simPinLabel => 'SIM PIN';
-
-  @override
   String get simPinUnlock => 'Unlock SIM';
 
   @override
   String get simPinLater => 'Later';
-
-  @override
-  String get simPinFailed =>
-      'SIM could not be unlocked. Check your PIN and remaining attempts.';
 
   @override
   String get simPukRequired => 'SIM requires a PUK. Contact your carrier.';

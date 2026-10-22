@@ -7,7 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:denial_flutter_sdk/settings.dart';
 import 'package:denial_flutter_sdk/state.dart';
 
-import '../widgets/lock/sim_pin_panel.dart';
+import '../widgets/lock/sim_pin_lock.dart';
 
 import 'package:denial_flutter_sdk/motion.dart';
 
@@ -61,7 +61,7 @@ class ShellSecureStage extends ConsumerWidget {
     );
     return ref.watch(referenceShellProfileProvider) ==
             ReferenceShellProfile.mobile
-        ? MobileSimPromptStage(child: stage)
+        ? MobileSimLockGuard(child: stage)
         : stage;
   }
 }

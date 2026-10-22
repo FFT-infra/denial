@@ -344,6 +344,8 @@ impl WaylandFrontend {
             #[cfg(feature = "flutter")]
             pending_frame_callback_windows: HashSet::new(),
             #[cfg(feature = "flutter")]
+            minimized_windows: Default::default(),
+            #[cfg(feature = "flutter")]
             pending_layer_frame_callback_roots: HashSet::new(),
             #[cfg(feature = "flutter")]
             pending_input_method_frame_callbacks: HashSet::new(),

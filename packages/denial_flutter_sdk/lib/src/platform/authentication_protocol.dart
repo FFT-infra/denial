@@ -16,6 +16,10 @@ enum AuthenticationPacketKind {
   begin(3),
   respond(4),
   cancel(5),
+
+  /// Argument 1: the lock screen offers the fingerprint; 0: it asks for a
+  /// typed credential and the reader must not answer.
+  fingerprint(6),
   state(0x81),
   prompt(0x82),
   result(0x83),

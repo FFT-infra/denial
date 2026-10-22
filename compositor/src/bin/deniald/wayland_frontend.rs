@@ -180,6 +180,9 @@ pub(super) use input::{dispatch_shell_keyboard, reconcile_flutter_pointer_route}
 mod input_source;
 #[path = "wayland_frontend/layer_shell.rs"]
 mod layer_shell;
+#[cfg(feature = "flutter")]
+#[path = "wayland_frontend/minimized.rs"]
+mod minimized;
 #[path = "wayland_frontend/output_power.rs"]
 mod output_power;
 #[cfg(feature = "flutter")]
@@ -474,6 +477,8 @@ pub(super) struct WaylandFrontend {
     output_window_membership: OutputWindowMembership<ObjectId, Window>,
     #[cfg(feature = "flutter")]
     pending_frame_callback_windows: HashSet<ObjectId>,
+    #[cfg(feature = "flutter")]
+    minimized_windows: minimized::MinimizedWindows,
     #[cfg(feature = "flutter")]
     pending_layer_frame_callback_roots: HashSet<ObjectId>,
     #[cfg(feature = "flutter")]

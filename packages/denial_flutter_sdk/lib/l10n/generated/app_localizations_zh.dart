@@ -3881,16 +3881,10 @@ class AppLocalizationsZh extends AppLocalizations {
   String get simPinTitle => '解锁 SIM 卡';
 
   @override
-  String get simPinLabel => 'SIM PIN';
-
-  @override
   String get simPinUnlock => '解锁 SIM 卡';
 
   @override
   String get simPinLater => '稍后';
-
-  @override
-  String get simPinFailed => '无法解锁 SIM 卡。请检查 PIN 和剩余尝试次数。';
 
   @override
   String get simPukRequired => 'SIM 卡需要 PUK。请联系运营商。';

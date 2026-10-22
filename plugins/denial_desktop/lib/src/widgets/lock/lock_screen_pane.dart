@@ -28,6 +28,8 @@ class _DesktopLockEntrance extends StatelessWidget {
   }
 }
 
+enum _LockCredential { pin, password, sim }
+
 class _LockScreenPane extends ConsumerStatefulWidget {
   const _LockScreenPane({
     super.key,
@@ -97,9 +99,13 @@ class _LockScreenPaneState extends ConsumerState<_LockScreenPane>
   );
   bool _credentialShown = false;
 
-  /// Which credential the reveal last showed, so the PIN keypad keeps fading
-  /// out after it is dismissed and the password panel never borrows it.
-  bool _revealedPin = false;
+  /// Which credential the reveal last showed, so a keypad keeps fading out
+  /// after it is dismissed and the password panel never borrows it.
+  _LockCredential _revealed = _LockCredential.password;
+
+  /// What deniald last heard: the reader answers only on the fingerprint
+  /// face. Null until this pane has said it, and again after a new lock.
+  bool? _fingerprintOffered;
 
   @override
   void initState() {
@@ -156,6 +162,19 @@ class _LockScreenPaneState extends ConsumerState<_LockScreenPane>
     });
   }
 
+  /// Sent after the frame, so build stays free of platform messages.
+  void _syncFingerprintOffer(bool offered) {
+    if (offered == _fingerprintOffered) {
+      return;
+    }
+    _fingerprintOffered = offered;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && offered == _fingerprintOffered) {
+        ref.read(authenticationProvider.notifier).offerFingerprint(offered);
+      }
+    });
+  }
+
   void _beginIfIdle(AuthenticationState authentication) {
     if (!_beginWhenIdle ||
         authentication.busy ||
@@ -187,20 +206,40 @@ class _LockScreenPaneState extends ConsumerState<_LockScreenPane>
   Widget build(BuildContext context) {
     final authentication = ref.watch(authenticationProvider);
     if (widget.authenticationEnabled) {
-      ref.listen<AuthenticationState>(
-        authenticationProvider,
-        (_, next) => _beginIfIdle(next),
-      );
+      ref.listen<AuthenticationState>(authenticationProvider, (previous, next) {
+        // deniald opens every new lock on the fingerprint face; the rebuild
+        // this change causes tells it again what the pane shows.
+        if (next.locked && !(previous?.locked ?? false)) {
+          _fingerprintOffered = null;
+        }
+        _beginIfIdle(next);
+      });
+    }
+    // A pending SIM PIN comes first and needs no swipe.
+    final simPending =
+        widget.authenticationEnabled && ref.watch(simPinPendingProvider);
+    if (widget.authenticationEnabled) {
+      ref.listen<bool>(simPinPendingProvider, (_, pending) {
+        if (pending) _cancelAuthentication();
+      });
     }
     final pinMode = widget.authenticationEnabled && _pinMode(authentication);
     final credentialShown =
-        !widget.desktop &&
-        widget.authenticationEnabled &&
-        (_authenticationVisible || authentication.busy);
+        simPending ||
+        (!widget.desktop &&
+            widget.authenticationEnabled &&
+            (_authenticationVisible || authentication.busy));
     if (credentialShown) {
-      _revealedPin = pinMode;
+      _revealed = simPending
+          ? _LockCredential.sim
+          : pinMode
+          ? _LockCredential.pin
+          : _LockCredential.password;
     }
     _syncCredentialReveal(credentialShown);
+    if (widget.authenticationEnabled) {
+      _syncFingerprintOffer(!credentialShown);
+    }
     final lockSettings = ref.watch(
       shellSettingsProvider.select((settings) => settings.lockScreen),
     );
@@ -236,8 +275,9 @@ class _LockScreenPaneState extends ConsumerState<_LockScreenPane>
         // Mobile opens only by swiping up; a stray touch leaves the clock.
         final allowsSwipe =
             widget.authenticationEnabled && !widget.desktop && !credentialShown;
-        final pinStageVisible =
-            _revealedPin && (credentialShown || _credentialReveal.value > 0.0);
+        final revealed = credentialShown || _credentialReveal.value > 0.0
+            ? _revealed
+            : null;
 
         final content = GestureDetector(
           behavior: HitTestBehavior.opaque,
@@ -318,6 +358,7 @@ class _LockScreenPaneState extends ConsumerState<_LockScreenPane>
                     ],
                     if (widget.desktop &&
                         widget.authenticationEnabled &&
+                        !simPending &&
                         !_authenticationVisible &&
                         !authentication.busy &&
                         authentication.resultMessage == null)
@@ -326,6 +367,7 @@ class _LockScreenPaneState extends ConsumerState<_LockScreenPane>
                 ),
               ),
               if (widget.authenticationEnabled &&
+                  !simPending &&
                   (widget.desktop
                       ? _authenticationVisible ||
                             authentication.busy ||
@@ -346,7 +388,13 @@ class _LockScreenPaneState extends ConsumerState<_LockScreenPane>
                       : null,
                   usingPin: pinMode,
                 ),
-              if (pinStageVisible)
+              if (revealed == _LockCredential.sim)
+                _MobileSimPinStage(
+                  key: const ValueKey<String>('mobile-sim-pin-stage'),
+                  reveal: _pinStageReveal,
+                  onLater: ref.read(simPinDeferralProvider.notifier).defer,
+                ),
+              if (revealed == _LockCredential.pin)
                 _MobileLockPinStage(
                   key: const ValueKey<String>('mobile-lock-pin-stage'),
                   reveal: _pinStageReveal,
@@ -432,7 +480,9 @@ class _LockScreenPaneState extends ConsumerState<_LockScreenPane>
   }
 
   void _showAuthentication() {
-    if (!widget.authenticationEnabled || widget.unlockProgress.value > 0.0) {
+    if (!widget.authenticationEnabled ||
+        widget.unlockProgress.value > 0.0 ||
+        ref.read(simPinPendingProvider)) {
       return;
     }
     if (!_authenticationVisible) {

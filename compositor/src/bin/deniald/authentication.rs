@@ -44,6 +44,9 @@ const KIND_LOCK: u8 = 2;
 const KIND_BEGIN: u8 = 3;
 const KIND_RESPOND: u8 = 4;
 const KIND_CANCEL: u8 = 5;
+/// Argument 1: the lock screen offers the fingerprint; 0: it asks for a typed
+/// credential (PIN, password or SIM PIN) and the reader must not answer.
+const KIND_FINGERPRINT: u8 = 6;
 const KIND_STATE: u8 = 0x81;
 const KIND_PROMPT: u8 = 0x82;
 const KIND_RESULT: u8 = 0x83;
@@ -122,6 +125,9 @@ enum AuthenticationCommand {
     Cancel {
         attempt_id: u64,
     },
+    OfferFingerprint {
+        offered: bool,
+    },
 }
 
 fn decode(packet: &[u8]) -> Result<AuthenticationCommand, AuthenticationDecodeError> {
@@ -176,7 +182,12 @@ fn decode(packet: &[u8]) -> Result<AuthenticationCommand, AuthenticationDecodeEr
         KIND_CANCEL if argument == 0 && payload.is_empty() => {
             Ok(AuthenticationCommand::Cancel { attempt_id })
         }
-        KIND_SYNC | KIND_LOCK | KIND_BEGIN | KIND_RESPOND | KIND_CANCEL => {
+        KIND_FINGERPRINT if attempt_id == 0 && argument <= 1 && payload.is_empty() => {
+            Ok(AuthenticationCommand::OfferFingerprint {
+                offered: argument == 1,
+            })
+        }
+        KIND_SYNC | KIND_LOCK | KIND_BEGIN | KIND_RESPOND | KIND_CANCEL | KIND_FINGERPRINT => {
             Err(AuthenticationDecodeError::UnexpectedMetadata)
         }
         _ => Err(AuthenticationDecodeError::UnsupportedKind(kind)),
@@ -831,6 +842,9 @@ struct AuthenticationState {
     pin_length: u32,
     /// A fingerprint reader with enrolled prints is armed for unlock.
     fingerprint_ready: bool,
+    /// The lock screen shows its fingerprint face rather than a typed
+    /// credential; the reader is armed only then.
+    fingerprint_offered: bool,
     /// Under-display sensor as panel fractions: x, y, width, height.
     fingerprint_sensor: Option<[f64; 4]>,
     /// Asks the worker to re-read the PIN record, which Settings may have
@@ -944,6 +958,7 @@ impl AuthenticationController {
                 response: None,
                 pin_length: 0,
                 fingerprint_ready: false,
+                fingerprint_offered: true,
                 fingerprint_sensor: None,
                 credential_refresh: true,
                 available,
@@ -1041,12 +1056,27 @@ impl AuthenticationController {
                 self.respond(attempt_id, prompt_sequence, response);
             }
             AuthenticationCommand::Cancel { attempt_id } => self.cancel(attempt_id),
+            AuthenticationCommand::OfferFingerprint { offered } => {
+                self.offer_fingerprint(offered);
+            }
         }
         Ok(())
     }
 
     pub(super) fn lock(&self) {
         lock_session(&self.shared);
+    }
+
+    /// The reader arms only while the lock screen offers the fingerprint. A
+    /// session that is not locked keeps the default every lock starts from.
+    fn offer_fingerprint(&self, offered: bool) {
+        let mut state = lock_unpoisoned(&self.shared.state);
+        if !self.locked() || state.fingerprint_offered == offered {
+            return;
+        }
+        state.fingerprint_offered = offered;
+        drop(state);
+        self.shared.condition.notify_all();
     }
 
     /// Explicit locks remain unconditional. Only compositor-owned automatic
@@ -1237,6 +1267,11 @@ impl Drop for AuthenticationController {
 }
 
 fn apply_lock(shared: &SharedAuthentication, state: &mut AuthenticationState) {
+    // Every lock screen opens on its fingerprint face, also with the display
+    // off, where the shell may not draw a frame before the finger arrives.
+    if !shared.locked.load(Ordering::Acquire) {
+        state.fingerprint_offered = true;
+    }
     state.lock_epoch = state.lock_epoch.wrapping_add(1);
     state.credential_refresh = true;
     state.fingerprint_unlock = None;

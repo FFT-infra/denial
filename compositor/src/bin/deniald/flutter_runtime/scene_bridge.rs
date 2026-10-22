@@ -15,6 +15,7 @@ impl FlutterRuntime {
         metadata_revision: u64,
         mut windows: Vec<wire::WindowDescription>,
         mut frames: Vec<ExternalTextureFrame>,
+        kept_texture_ids: &[u64],
         restored_window_ids: &BTreeSet<u64>,
     ) -> Result<SyncedWaylandScene, Box<dyn Error>> {
         self.changed_texture_scratch.clear();
@@ -56,6 +57,8 @@ impl FlutterRuntime {
                 desired.insert(client.texture_id as i64);
             }
         }
+        // Frozen windows keep the frame their textures hold.
+        desired.extend(kept_texture_ids.iter().map(|texture_id| *texture_id as i64));
         // Both work collections retain their capacity across client buffer
         // commits; scene synchronization commonly runs at application frame
         // rate even when the window count is unchanged.

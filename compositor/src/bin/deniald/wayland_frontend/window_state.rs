@@ -1608,6 +1608,7 @@ impl WaylandFrontend {
             } else {
                 self.restore_window_workspace(window_id);
             }
+            self.minimized_changed(&surface, minimized);
             self.invalidate_idle_inhibition();
         }
         changed
@@ -1682,6 +1683,7 @@ impl WaylandFrontend {
             self.remove_surface_shm_frame(&object_id);
             self.pending_surface_commits.remove(&object_id);
             self.pending_frame_callback_windows.remove(&object_id);
+            self.forget_minimized_window(&object_id);
             self.pending_layer_frame_callback_roots.remove(&object_id);
             self.pending_input_method_frame_callbacks.remove(&object_id);
             self.pending_cursor_frame_callback_roots.remove(&object_id);

@@ -1396,6 +1396,7 @@ impl CompositorHandler for RuntimeState {
         #[cfg(feature = "flutter")]
         if let Some(kind) = commit_kind {
             frontend.queue_surface_commit(surface, kind);
+            frontend.thaw_on_visual_commit(surface);
         }
         #[cfg(feature = "flutter")]
         let mut published_surface_commits = None;
@@ -1566,7 +1567,7 @@ impl CompositorHandler for RuntimeState {
                     .as_ref()
                     .cloned()
                     .unwrap_or_else(|| frontend.toplevel_candidate_surface(surface));
-                frontend.pending_frame_callback_windows.insert(owner.id());
+                frontend.queue_window_frame_callbacks(owner.id());
             }
         }
         #[cfg(feature = "flutter")]

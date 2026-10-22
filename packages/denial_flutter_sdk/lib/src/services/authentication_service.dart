@@ -20,6 +20,10 @@ abstract interface class AuthenticationService {
     required String response,
   });
   void cancel({required int attemptId});
+
+  /// Arms the fingerprint reader only while [offered]; deniald resets it to
+  /// offered on every new lock.
+  void offerFingerprint(bool offered);
   void dispose();
 }
 
@@ -84,6 +88,10 @@ class NativeAuthenticationService implements AuthenticationService {
   void cancel({required int attemptId}) {
     _send(AuthenticationPacketKind.cancel, attemptId: attemptId);
   }
+
+  @override
+  void offerFingerprint(bool offered) =>
+      _send(AuthenticationPacketKind.fingerprint, argument: offered ? 1 : 0);
 
   void _send(
     AuthenticationPacketKind kind, {

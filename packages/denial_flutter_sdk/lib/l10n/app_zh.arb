@@ -1182,10 +1182,8 @@
   "mobileUnavailable": "移动网络不可用",
   "mobileChangeFailed": "无法更改移动数据",
   "simPinTitle": "解锁 SIM 卡",
-  "simPinLabel": "SIM PIN",
   "simPinUnlock": "解锁 SIM 卡",
   "simPinLater": "稍后",
-  "simPinFailed": "无法解锁 SIM 卡。请检查 PIN 和剩余尝试次数。",
   "simPukRequired": "SIM 卡需要 PUK。请联系运营商。",
   "simLocked": "SIM 卡已锁定",
   "simPinRetries": "剩余 {count} 次尝试",
@@ -1214,16 +1212,10 @@
   "@simPinTitle": {
     "description": "Mobile connectivity and SIM authentication UI."
   },
-  "@simPinLabel": {
-    "description": "Mobile connectivity and SIM authentication UI."
-  },
   "@simPinUnlock": {
     "description": "Mobile connectivity and SIM authentication UI."
   },
   "@simPinLater": {
-    "description": "Mobile connectivity and SIM authentication UI."
-  },
-  "@simPinFailed": {
     "description": "Mobile connectivity and SIM authentication UI."
   },
   "@simPukRequired": {

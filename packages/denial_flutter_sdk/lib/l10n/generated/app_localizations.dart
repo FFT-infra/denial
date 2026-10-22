@@ -7250,12 +7250,6 @@ abstract class AppLocalizations {
   /// Mobile connectivity and SIM authentication UI.
   ///
   /// In en, this message translates to:
-  /// **'SIM PIN'**
-  String get simPinLabel;
-
-  /// Mobile connectivity and SIM authentication UI.
-  ///
-  /// In en, this message translates to:
   /// **'Unlock SIM'**
   String get simPinUnlock;
 
@@ -7264,12 +7258,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Later'**
   String get simPinLater;
-
-  /// Mobile connectivity and SIM authentication UI.
-  ///
-  /// In en, this message translates to:
-  /// **'SIM could not be unlocked. Check your PIN and remaining attempts.'**
-  String get simPinFailed;
 
   /// Mobile connectivity and SIM authentication UI.
   ///

@@ -210,6 +210,10 @@ class AuthenticationController extends Notifier<AuthenticationState>
     _service.cancel(attemptId: state.attemptId);
   }
 
+  /// The lock screen shows its fingerprint face; false while it asks for a
+  /// PIN, password or SIM PIN.
+  void offerFingerprint(bool offered) => _service.offerFingerprint(offered);
+
   void clearResult() {
     state = state.copyWith(clearResultMessage: true);
   }

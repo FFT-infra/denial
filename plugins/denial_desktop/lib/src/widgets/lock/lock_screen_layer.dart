@@ -25,7 +25,12 @@ import 'package:denial_flutter_sdk/platform.dart';
 import 'package:denial_flutter_sdk/settings.dart';
 import 'package:denial_flutter_sdk/state.dart';
 import 'package:denial_flutter_sdk/system_services.dart'
-    show hapticsServiceProvider, mobileNetworkProvider;
+    show
+        HapticsService,
+        MobileNetworkSnapshot,
+        hapticsServiceProvider,
+        mobileNetworkProvider,
+        mobileNetworkServiceProvider;
 import 'package:denial_flutter_sdk/motion.dart';
 import 'package:denial_flutter_sdk/shell_theme.dart';
 import 'package:denial_flutter_sdk/tokens.dart';
@@ -41,6 +46,8 @@ import '../edge_panel_layer.dart';
 import 'package:denial_flutter_sdk/rendering.dart';
 
 import '../shade/status_glyphs.dart';
+
+import 'sim_pin_lock.dart';
 
 part 'lock_authentication_panels.dart';
 part 'lock_pin_stage.dart';

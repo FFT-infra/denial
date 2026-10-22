@@ -28,21 +28,17 @@ class _MobileLockPinStage extends ConsumerStatefulWidget {
 
 class _MobileLockPinStageState extends ConsumerState<_MobileLockPinStage>
     with SingleTickerProviderStateMixin {
-  static const Duration _shakeDuration = Duration(milliseconds: 440);
-
   /// Character codes, scrubbed as soon as they are sent or dropped.
   final List<int> _digits = <int>[];
   final FocusNode _keys = FocusNode(debugLabel: 'lock-pin-keys');
   late final AnimationController _shake = AnimationController(
     vsync: this,
-    duration: _shakeDuration,
+    duration: _pinShakeDuration,
   );
   late final Animation<Offset> _shakeOffset = _shake.drive(
     const _PinShakeOffset(),
   );
-  late final Animation<Offset> _rise = widget.reveal.drive(
-    Tween<Offset>(begin: const Offset(0, 28), end: Offset.zero),
-  );
+  late final Animation<Offset> _rise = widget.reveal.drive(_pinStageRise);
 
   /// Dots shown filled; stays full while deniald checks a submitted PIN.
   int _filled = 0;
@@ -138,38 +134,23 @@ class _MobileLockPinStageState extends ConsumerState<_MobileLockPinStage>
       setState(() => _filled = 0);
       return;
     }
-    final haptics = ref.read(hapticsServiceProvider)..pulse();
-    Future<void>.delayed(const Duration(milliseconds: 110), haptics.pulse);
     setState(() => _wrong = true);
-    void settle() {
-      if (mounted) setState(() => _filled = 0);
-    }
-
-    if (MediaQuery.disableAnimationsOf(context)) {
-      settle();
-    } else {
-      _shake.forward(from: 0).whenCompleteOrCancel(settle);
-    }
+    _rejectPin(
+      context: context,
+      haptics: ref.read(hapticsServiceProvider),
+      shake: _shake,
+      settle: () {
+        if (mounted) setState(() => _filled = 0);
+      },
+    );
   }
 
-  KeyEventResult _handleKey(FocusNode node, KeyEvent event) {
-    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
-      return KeyEventResult.ignored;
-    }
-    final key = event.logicalKey;
-    final digit = _digitKeys.indexOf(key);
-    final numpad = _numpadKeys.indexOf(key);
-    if (digit >= 0 || numpad >= 0) {
-      _press(digit >= 0 ? digit : numpad);
-    } else if (key == LogicalKeyboardKey.backspace) {
-      _delete();
-    } else if (key == LogicalKeyboardKey.escape) {
-      widget.onCancel();
-    } else {
-      return KeyEventResult.ignored;
-    }
-    return KeyEventResult.handled;
-  }
+  KeyEventResult _handleKey(FocusNode node, KeyEvent event) => _handlePinKey(
+    event,
+    onDigit: _press,
+    onDelete: _delete,
+    onCancel: widget.onCancel,
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -183,8 +164,6 @@ class _MobileLockPinStageState extends ConsumerState<_MobileLockPinStage>
       }
     });
     final l10n = context.l10n;
-    final length = authentication.pinLength.clamp(1, 12);
-    final enabled = _acceptsInput(authentication);
     final cooldownSeconds = (authentication.cooldown.inMilliseconds / 1000)
         .ceil()
         .clamp(1, 30);
@@ -202,6 +181,339 @@ class _MobileLockPinStageState extends ConsumerState<_MobileLockPinStage>
           )
         : (null, ShellMediaColors.lightForegroundSecondary);
 
+    return _PinStageFrame(
+      reveal: widget.reveal,
+      rise: _rise,
+      focusNode: _keys,
+      onKeyEvent: _handleKey,
+      icon: Icons.lock_rounded,
+      title: l10n.lockEnterPin,
+      shakeOffset: _shakeOffset,
+      length: authentication.pinLength.clamp(1, 12),
+      filled: _filled,
+      error: _wrong,
+      message: message,
+      messageColor: messageColor,
+      enabled: _acceptsInput(authentication),
+      onDigit: _press,
+      trailing: (keySize) => _filled == 0 || _submitted
+          ? _PinTextKey(
+              size: keySize,
+              label: l10n.commonCancel,
+              onPressed: widget.onCancel,
+            )
+          : _PinIconKey(
+              size: keySize,
+              icon: Icons.backspace_outlined,
+              label: l10n.lockPinDelete,
+              onPressed: _delete,
+              onLongPress: _clear,
+            ),
+      link: _PinLink(
+        label: l10n.lockUsePassword,
+        onPressed: widget.onUsePassword,
+        color: ShellMediaColors.lightForegroundSecondary,
+      ),
+    );
+  }
+}
+
+/// The same keypad for the modem's SIM PIN, which takes 4 to 8 digits, so the
+/// user confirms it instead of the last digit submitting.
+///
+/// The SIM PIN goes to the modem only; it never authenticates the session.
+class _MobileSimPinStage extends ConsumerStatefulWidget {
+  const _MobileSimPinStage({
+    super.key,
+    required this.reveal,
+    required this.onLater,
+  });
+
+  /// 0 hidden, 1 fully shown; already curved.
+  final Animation<double> reveal;
+  final VoidCallback onLater;
+
+  @override
+  ConsumerState<_MobileSimPinStage> createState() => _MobileSimPinStageState();
+}
+
+class _MobileSimPinStageState extends ConsumerState<_MobileSimPinStage>
+    with SingleTickerProviderStateMixin {
+  static const int _minLength = 4;
+  static const int _maxLength = 8;
+
+  /// Character codes, scrubbed as soon as they are sent or dropped.
+  final List<int> _digits = <int>[];
+  final FocusNode _keys = FocusNode(debugLabel: 'sim-pin-keys');
+  late final AnimationController _shake = AnimationController(
+    vsync: this,
+    duration: _pinShakeDuration,
+  );
+  late final Animation<Offset> _shakeOffset = _shake.drive(
+    const _PinShakeOffset(),
+  );
+  late final Animation<Offset> _rise = widget.reveal.drive(_pinStageRise);
+
+  /// Dots shown filled; stays full while the modem checks a submitted PIN.
+  int _filled = 0;
+  bool _busy = false;
+  bool _wrong = false;
+
+  @override
+  void dispose() {
+    _scrub();
+    _keys.dispose();
+    _shake.dispose();
+    super.dispose();
+  }
+
+  void _scrub() {
+    _digits.fillRange(0, _digits.length, 0);
+    _digits.clear();
+  }
+
+  MobileNetworkSnapshot get _sim =>
+      ref.read(mobileNetworkProvider).value ?? const MobileNetworkSnapshot();
+
+  bool _acceptsInput(MobileNetworkSnapshot sim) =>
+      sim.pinRequired && sim.pinRetries != 0 && !_busy && !_shake.isAnimating;
+
+  void _press(int digit) {
+    if (!_acceptsInput(_sim) || _digits.length >= _maxLength) {
+      return;
+    }
+    ref.read(hapticsServiceProvider).pulse();
+    setState(() {
+      _digits.add(0x30 + digit);
+      _filled = _digits.length;
+      _wrong = false;
+    });
+  }
+
+  void _delete() {
+    if (_busy || _digits.isEmpty || _shake.isAnimating) {
+      return;
+    }
+    ref.read(hapticsServiceProvider).pulse();
+    setState(() {
+      _digits.last = 0;
+      _digits.removeLast();
+      _filled = _digits.length;
+    });
+  }
+
+  void _clear() {
+    if (_busy || _digits.isEmpty || _shake.isAnimating) {
+      return;
+    }
+    ref.read(hapticsServiceProvider).pulse();
+    setState(() {
+      _scrub();
+      _filled = 0;
+    });
+  }
+
+  void _later() {
+    if (_busy) {
+      return;
+    }
+    _scrub();
+    widget.onLater();
+  }
+
+  Future<void> _submit() async {
+    final sim = _sim;
+    if (!_acceptsInput(sim) || _digits.length < _minLength) {
+      return;
+    }
+    final pin = String.fromCharCodes(_digits);
+    _scrub();
+    setState(() => _busy = true);
+    try {
+      await ref.read(mobileNetworkServiceProvider).sendPin(sim.simPath!, pin);
+    } on Object {
+      if (mounted) {
+        setState(() => _wrong = true);
+        _rejectPin(
+          context: context,
+          haptics: ref.read(hapticsServiceProvider),
+          shake: _shake,
+          settle: () {
+            if (mounted) setState(() => _filled = 0);
+          },
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  KeyEventResult _handleKey(FocusNode node, KeyEvent event) => _handlePinKey(
+    event,
+    onDigit: _press,
+    onDelete: _delete,
+    onCancel: _later,
+    onSubmit: _submit,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final sim =
+        ref.watch(mobileNetworkProvider).value ?? const MobileNetworkSnapshot();
+    final l10n = context.l10n;
+    final retries = sim.pinRetries;
+    final (message, messageColor) = sim.unlockRequired == 4
+        ? (l10n.simPukRequired, ShellTelemetryColors.danger)
+        : !sim.pinRequired
+        ? (l10n.simLocked, ShellTelemetryColors.danger)
+        : retries != null
+        ? (
+            l10n.simPinRetries(retries),
+            _wrong
+                ? ShellTelemetryColors.danger
+                : ShellMediaColors.lightForegroundSecondary,
+          )
+        : _wrong
+        ? (l10n.lockWrongPin, ShellTelemetryColors.danger)
+        : (null, ShellMediaColors.lightForegroundSecondary);
+
+    return _PinStageFrame(
+      reveal: widget.reveal,
+      rise: _rise,
+      focusNode: _keys,
+      onKeyEvent: _handleKey,
+      icon: Icons.sim_card_rounded,
+      title: l10n.simPinTitle,
+      shakeOffset: _shakeOffset,
+      length: _filled.clamp(_minLength, _maxLength),
+      filled: _filled,
+      error: _wrong,
+      message: message,
+      messageColor: messageColor,
+      enabled: _acceptsInput(sim),
+      onDigit: _press,
+      leading: (keySize) => _filled >= _minLength && !_busy
+          ? _PinIconKey(
+              size: keySize,
+              icon: Icons.check_rounded,
+              label: l10n.simPinUnlock,
+              onPressed: _submit,
+            )
+          : SizedBox.square(dimension: keySize),
+      trailing: (keySize) => _busy
+          ? SizedBox.square(dimension: keySize)
+          : _filled == 0
+          ? _PinTextKey(
+              size: keySize,
+              label: l10n.simPinLater,
+              onPressed: _later,
+            )
+          : _PinIconKey(
+              size: keySize,
+              icon: Icons.backspace_outlined,
+              label: l10n.lockPinDelete,
+              onPressed: _delete,
+              onLongPress: _clear,
+            ),
+    );
+  }
+}
+
+const Duration _pinShakeDuration = Duration(milliseconds: 440);
+
+final Animatable<Offset> _pinStageRise = Tween<Offset>(
+  begin: const Offset(0, 28),
+  end: Offset.zero,
+);
+
+/// A double buzz and the dots' shake, then [settle] empties them.
+void _rejectPin({
+  required BuildContext context,
+  required HapticsService haptics,
+  required AnimationController shake,
+  required VoidCallback settle,
+}) {
+  haptics.pulse();
+  Future<void>.delayed(const Duration(milliseconds: 110), haptics.pulse);
+  if (MediaQuery.disableAnimationsOf(context)) {
+    settle();
+  } else {
+    shake.forward(from: 0).whenCompleteOrCancel(settle);
+  }
+}
+
+KeyEventResult _handlePinKey(
+  KeyEvent event, {
+  required ValueChanged<int> onDigit,
+  required VoidCallback onDelete,
+  required VoidCallback onCancel,
+  VoidCallback? onSubmit,
+}) {
+  if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+    return KeyEventResult.ignored;
+  }
+  final key = event.logicalKey;
+  final digit = _digitKeys.indexOf(key);
+  final numpad = _numpadKeys.indexOf(key);
+  if (digit >= 0 || numpad >= 0) {
+    onDigit(digit >= 0 ? digit : numpad);
+  } else if (key == LogicalKeyboardKey.backspace) {
+    onDelete();
+  } else if (key == LogicalKeyboardKey.escape) {
+    onCancel();
+  } else if (onSubmit != null &&
+      (key == LogicalKeyboardKey.enter ||
+          key == LogicalKeyboardKey.numpadEnter)) {
+    onSubmit();
+  } else {
+    return KeyEventResult.ignored;
+  }
+  return KeyEventResult.handled;
+}
+
+/// The keypad stage's layout, shared by the device PIN and the SIM PIN.
+class _PinStageFrame extends StatelessWidget {
+  const _PinStageFrame({
+    required this.reveal,
+    required this.rise,
+    required this.focusNode,
+    required this.onKeyEvent,
+    required this.icon,
+    required this.title,
+    required this.shakeOffset,
+    required this.length,
+    required this.filled,
+    required this.error,
+    required this.message,
+    required this.messageColor,
+    required this.enabled,
+    required this.onDigit,
+    required this.trailing,
+    this.leading,
+    this.link,
+  });
+
+  final Animation<double> reveal;
+  final Animation<Offset> rise;
+  final FocusNode focusNode;
+  final FocusOnKeyEventCallback onKeyEvent;
+  final IconData icon;
+  final String title;
+  final Animation<Offset> shakeOffset;
+  final int length;
+  final int filled;
+  final bool error;
+  final String? message;
+  final Color messageColor;
+  final bool enabled;
+  final ValueChanged<int> onDigit;
+  final Widget Function(double keySize) trailing;
+  final Widget Function(double keySize)? leading;
+  final Widget? link;
+
+  @override
+  Widget build(BuildContext context) {
+    final message = this.message;
     return Positioned.fill(
       child: Stack(
         fit: StackFit.expand,
@@ -209,20 +521,20 @@ class _MobileLockPinStageState extends ConsumerState<_MobileLockPinStage>
           IgnorePointer(
             child: CustomPaint(
               painter: _PinStageScrimPainter(
-                reveal: widget.reveal,
+                reveal: reveal,
                 color: ShellMediaColors.darkness.withValues(alpha: 0.42),
               ),
             ),
           ),
           FadeSnapshot(
-            opacity: widget.reveal,
+            opacity: reveal,
             child: CompositedTranslation(
-              translation: _rise,
+              translation: rise,
               devicePixelRatio: MediaQuery.devicePixelRatioOf(context),
               child: Focus(
-                focusNode: _keys,
+                focusNode: focusNode,
                 autofocus: true,
-                onKeyEvent: _handleKey,
+                onKeyEvent: onKeyEvent,
                 child: SafeArea(
                   minimum: const EdgeInsets.fromLTRB(24, 16, 24, 20),
                   child: LayoutBuilder(
@@ -235,13 +547,13 @@ class _MobileLockPinStageState extends ConsumerState<_MobileLockPinStage>
                         children: [
                           Spacer(flex: compact ? 1 : 3),
                           Icon(
-                            Icons.lock_rounded,
+                            icon,
                             size: 20,
                             color: ShellMediaColors.lightForegroundSecondary,
                           ),
                           const SizedBox(height: 12),
                           Text(
-                            l10n.lockEnterPin,
+                            title,
                             textAlign: TextAlign.center,
                             style: ShellText.base.copyWith(
                               color: ShellMediaColors.lightForeground,
@@ -253,14 +565,14 @@ class _MobileLockPinStageState extends ConsumerState<_MobileLockPinStage>
                           ),
                           const SizedBox(height: 22),
                           CompositedTranslation(
-                            translation: _shakeOffset,
+                            translation: shakeOffset,
                             devicePixelRatio: MediaQuery.devicePixelRatioOf(
                               context,
                             ),
                             child: _PinDots(
                               length: length,
-                              filled: _filled,
-                              error: _wrong,
+                              filled: filled,
+                              error: error,
                             ),
                           ),
                           const SizedBox(height: 16),
@@ -287,27 +599,14 @@ class _MobileLockPinStageState extends ConsumerState<_MobileLockPinStage>
                           _PinPad(
                             keySize: keySize,
                             enabled: enabled,
-                            onDigit: _press,
-                            trailing: _filled == 0 || _submitted
-                                ? _PinTextKey(
-                                    size: keySize,
-                                    label: l10n.commonCancel,
-                                    onPressed: widget.onCancel,
-                                  )
-                                : _PinIconKey(
-                                    size: keySize,
-                                    icon: Icons.backspace_outlined,
-                                    label: l10n.lockPinDelete,
-                                    onPressed: _delete,
-                                    onLongPress: _clear,
-                                  ),
+                            onDigit: onDigit,
+                            leading:
+                                leading?.call(keySize) ??
+                                SizedBox.square(dimension: keySize),
+                            trailing: trailing(keySize),
                           ),
                           SizedBox(height: compact ? 10 : 22),
-                          _PinLink(
-                            label: l10n.lockUsePassword,
-                            onPressed: widget.onUsePassword,
-                            color: ShellMediaColors.lightForegroundSecondary,
-                          ),
+                          ?link,
                           SizedBox(height: compact ? 4 : 10),
                         ],
                       );
@@ -446,12 +745,14 @@ class _PinPad extends StatelessWidget {
     required this.keySize,
     required this.enabled,
     required this.onDigit,
+    required this.leading,
     required this.trailing,
   });
 
   final double keySize;
   final bool enabled;
   final ValueChanged<int> onDigit;
+  final Widget leading;
   final Widget trailing;
 
   static const List<String> _letters = <String>[
@@ -498,7 +799,7 @@ class _PinPad extends StatelessWidget {
           SizedBox(height: rowGap),
           row([digit(7), digit(8), digit(9)]),
           SizedBox(height: rowGap),
-          row([SizedBox.square(dimension: keySize), digit(0), trailing]),
+          row([leading, digit(0), trailing]),
         ],
       ),
     );

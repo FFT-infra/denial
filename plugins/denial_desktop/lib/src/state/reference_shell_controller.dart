@@ -43,7 +43,9 @@ class ReferenceShellController extends Notifier<ReferenceShellState>
 
   @override
   set state(ReferenceShellState value) {
+    final previousForeground = stateOrNull?.foregroundObjectId;
     super.state = value;
+    _minimizeLeftApp(previousForeground, value);
     // However a transition ends the gesture, an idle phase has no drag. The
     // drag follows the state, as its moving layers expect.
     if (value.gesture == GestureDragPhase.idle) {
@@ -52,6 +54,21 @@ class ReferenceShellController extends Notifier<ReferenceShellState>
     if (!value.quickSettingsDragged) {
       _quickSettingsDrag.value = 0.0;
     }
+  }
+
+  /// On the phone, an app the user left, by going home or for another app,
+  /// is minimized: Denial suspends it, stops its frames and keeps showing its
+  /// last one. Recents alone leaves the app in front, as does the lock
+  /// screen; focusing it again restores it.
+  void _minimizeLeftApp(int? previous, ReferenceShellState next) {
+    if (!_automaticSoftwareKeyboard ||
+        previous == null ||
+        previous == next.foregroundObjectId) {
+      return;
+    }
+    final window = next.openAppWindowsByObjectId[previous];
+    if (window == null || window.minimized) return;
+    _bridge.minimizeWindow(window);
   }
 
   @override
