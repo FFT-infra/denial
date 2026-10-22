@@ -6,10 +6,12 @@ part of 'lock_screen_layer.dart';
 /// as one response; the length comes from deniald, so the last digit submits.
 /// Motion follows the shell rules: the stage fades through a snapshot and
 /// moves its layer, and the shake only moves the dots' layer.
+/// While it leaves, touches go through to the face behind it.
 class _MobileLockPinStage extends ConsumerStatefulWidget {
   const _MobileLockPinStage({
     super.key,
     required this.reveal,
+    required this.interactive,
     required this.onBegin,
     required this.onCancel,
     required this.onUsePassword,
@@ -17,6 +19,9 @@ class _MobileLockPinStage extends ConsumerStatefulWidget {
 
   /// 0 hidden, 1 fully shown; already curved.
   final Animation<double> reveal;
+
+  /// False once the stage is dismissed, while it still fades out.
+  final bool interactive;
   final VoidCallback onBegin;
   final VoidCallback onCancel;
   final VoidCallback onUsePassword;
@@ -183,6 +188,7 @@ class _MobileLockPinStageState extends ConsumerState<_MobileLockPinStage>
 
     return _PinStageFrame(
       reveal: widget.reveal,
+      interactive: widget.interactive,
       rise: _rise,
       focusNode: _keys,
       onKeyEvent: _handleKey,
@@ -226,11 +232,15 @@ class _MobileSimPinStage extends ConsumerStatefulWidget {
   const _MobileSimPinStage({
     super.key,
     required this.reveal,
+    required this.interactive,
     required this.onLater,
   });
 
   /// 0 hidden, 1 fully shown; already curved.
   final Animation<double> reveal;
+
+  /// False once the stage is dismissed, while it still fades out.
+  final bool interactive;
   final VoidCallback onLater;
 
   @override
@@ -379,6 +389,7 @@ class _MobileSimPinStageState extends ConsumerState<_MobileSimPinStage>
 
     return _PinStageFrame(
       reveal: widget.reveal,
+      interactive: widget.interactive,
       rise: _rise,
       focusNode: _keys,
       onKeyEvent: _handleKey,
@@ -475,6 +486,7 @@ KeyEventResult _handlePinKey(
 class _PinStageFrame extends StatelessWidget {
   const _PinStageFrame({
     required this.reveal,
+    required this.interactive,
     required this.rise,
     required this.focusNode,
     required this.onKeyEvent,
@@ -494,6 +506,7 @@ class _PinStageFrame extends StatelessWidget {
   });
 
   final Animation<double> reveal;
+  final bool interactive;
   final Animation<Offset> rise;
   final FocusNode focusNode;
   final FocusOnKeyEventCallback onKeyEvent;
@@ -526,91 +539,97 @@ class _PinStageFrame extends StatelessWidget {
               ),
             ),
           ),
-          FadeSnapshot(
-            opacity: reveal,
-            child: CompositedTranslation(
-              translation: rise,
-              devicePixelRatio: MediaQuery.devicePixelRatioOf(context),
-              child: Focus(
-                focusNode: focusNode,
-                autofocus: true,
-                onKeyEvent: onKeyEvent,
-                child: SafeArea(
-                  minimum: const EdgeInsets.fromLTRB(24, 16, 24, 20),
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
-                      final keySize = (constraints.maxWidth * 0.205)
-                          .clamp(62.0, 80.0)
-                          .toDouble();
-                      final compact = constraints.maxHeight < 600;
-                      return Column(
-                        children: [
-                          Spacer(flex: compact ? 1 : 3),
-                          Icon(
-                            icon,
-                            size: 20,
-                            color: ShellMediaColors.lightForegroundSecondary,
-                          ),
-                          const SizedBox(height: 12),
-                          Text(
-                            title,
-                            textAlign: TextAlign.center,
-                            style: ShellText.base.copyWith(
-                              color: ShellMediaColors.lightForeground,
-                              fontSize: 21,
-                              height: 1.15,
-                              fontWeight: FontWeight.w500,
-                              letterSpacing: -0.2,
+          // The rise moves the layer outside the snapshot: a translation
+          // inside it would be frozen at its start for the whole fade, and
+          // the stage would jump into place when it ends.
+          CompositedTranslation(
+            translation: rise,
+            devicePixelRatio: MediaQuery.devicePixelRatioOf(context),
+            child: FadeSnapshot(
+              opacity: reveal,
+              child: IgnorePointer(
+                ignoring: !interactive,
+                child: Focus(
+                  focusNode: focusNode,
+                  autofocus: true,
+                  onKeyEvent: onKeyEvent,
+                  child: SafeArea(
+                    minimum: const EdgeInsets.fromLTRB(24, 16, 24, 20),
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final keySize = (constraints.maxWidth * 0.205)
+                            .clamp(62.0, 80.0)
+                            .toDouble();
+                        final compact = constraints.maxHeight < 600;
+                        return Column(
+                          children: [
+                            Spacer(flex: compact ? 1 : 3),
+                            Icon(
+                              icon,
+                              size: 20,
+                              color: ShellMediaColors.lightForegroundSecondary,
                             ),
-                          ),
-                          const SizedBox(height: 22),
-                          CompositedTranslation(
-                            translation: shakeOffset,
-                            devicePixelRatio: MediaQuery.devicePixelRatioOf(
-                              context,
+                            const SizedBox(height: 12),
+                            Text(
+                              title,
+                              textAlign: TextAlign.center,
+                              style: ShellText.base.copyWith(
+                                color: ShellMediaColors.lightForeground,
+                                fontSize: 21,
+                                height: 1.15,
+                                fontWeight: FontWeight.w500,
+                                letterSpacing: -0.2,
+                              ),
                             ),
-                            child: _PinDots(
-                              length: length,
-                              filled: filled,
-                              error: error,
+                            const SizedBox(height: 22),
+                            CompositedTranslation(
+                              translation: shakeOffset,
+                              devicePixelRatio: MediaQuery.devicePixelRatioOf(
+                                context,
+                              ),
+                              child: _PinDots(
+                                length: length,
+                                filled: filled,
+                                error: error,
+                              ),
                             ),
-                          ),
-                          const SizedBox(height: 16),
-                          SizedBox(
-                            height: 18,
-                            child: message == null
-                                ? null
-                                : Semantics(
-                                    liveRegion: true,
-                                    child: Text(
-                                      message,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      textAlign: TextAlign.center,
-                                      style: ShellText.base.copyWith(
-                                        color: messageColor,
-                                        fontSize: 13.5,
-                                        fontWeight: FontWeight.w600,
+                            const SizedBox(height: 16),
+                            SizedBox(
+                              height: 18,
+                              child: message == null
+                                  ? null
+                                  : Semantics(
+                                      liveRegion: true,
+                                      child: Text(
+                                        message,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        textAlign: TextAlign.center,
+                                        style: ShellText.base.copyWith(
+                                          color: messageColor,
+                                          fontSize: 13.5,
+                                          fontWeight: FontWeight.w600,
+                                        ),
                                       ),
                                     ),
-                                  ),
-                          ),
-                          Spacer(flex: compact ? 1 : 2),
-                          _PinPad(
-                            keySize: keySize,
-                            enabled: enabled,
-                            onDigit: onDigit,
-                            leading:
-                                leading?.call(keySize) ??
-                                SizedBox.square(dimension: keySize),
-                            trailing: trailing(keySize),
-                          ),
-                          SizedBox(height: compact ? 10 : 22),
-                          ?link,
-                          SizedBox(height: compact ? 4 : 10),
-                        ],
-                      );
-                    },
+                            ),
+                            Spacer(flex: compact ? 1 : 2),
+                            _PinPad(
+                              keySize: keySize,
+                              enabled: enabled,
+                              onDigit: onDigit,
+                              leading:
+                                  leading?.call(keySize) ??
+                                  SizedBox.square(dimension: keySize),
+                              trailing: trailing(keySize),
+                            ),
+                            SizedBox(height: compact ? 10 : 22),
+                            ?link,
+                            SizedBox(height: compact ? 4 : 10),
+                          ],
+                        );
+                      },
+                    ),
                   ),
                 ),
               ),
@@ -683,7 +702,10 @@ class _PinStageScrimPainter extends CustomPainter {
       oldDelegate.reveal != reveal || oldDelegate.color != color;
 }
 
-class _PinDots extends StatelessWidget {
+/// One dot per digit. A new digit pops its dot full with a ripple; a deleted
+/// digit drains its dot with a small bump, the last first when several go at
+/// once. Each dot repaints only its own layer.
+class _PinDots extends StatefulWidget {
   const _PinDots({
     required this.length,
     required this.filled,
@@ -695,49 +717,202 @@ class _PinDots extends StatelessWidget {
   final bool error;
 
   @override
+  State<_PinDots> createState() => _PinDotsState();
+}
+
+class _PinDotsState extends State<_PinDots> {
+  /// Dots drained by the last change wait this long per dot after them.
+  static const Duration _stagger = Duration(milliseconds: 45);
+
+  late int _previous = widget.filled;
+
+  @override
+  void didUpdateWidget(covariant _PinDots oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _previous = oldWidget.filled;
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final ink = error
+    final still = MediaQuery.disableAnimationsOf(context);
+    final ink = widget.error
         ? ShellTelemetryColors.danger
         : ShellMediaColors.lightForeground;
-    final duration = MediaQuery.disableAnimationsOf(context)
-        ? Duration.zero
-        : const Duration(milliseconds: 150);
     return Semantics(
-      label: context.l10n.lockPinProgress(filled, length),
+      label: context.l10n.lockPinProgress(widget.filled, widget.length),
       child: ExcludeSemantics(
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (var index = 0; index < length; index++)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 9),
-                child: AnimatedScale(
-                  scale: index < filled ? 1.0 : 0.84,
-                  duration: duration,
-                  curve: Curves.easeOutBack,
-                  child: AnimatedContainer(
-                    duration: duration,
-                    curve: Curves.easeOut,
-                    width: 13,
-                    height: 13,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: index < filled ? ink : ink.withValues(alpha: 0),
-                      border: Border.all(
-                        color: index < filled
-                            ? ink
-                            : ink.withValues(alpha: 0.55),
-                        width: 1.4,
-                      ),
-                    ),
+        child: TweenAnimationBuilder<Color?>(
+          tween: ColorTween(end: ink),
+          duration: still ? Duration.zero : const Duration(milliseconds: 150),
+          builder: (context, ink, _) => Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (var index = 0; index < widget.length; index++)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 9),
+                  child: _PinDot(
+                    filled: index < widget.filled,
+                    ink: ink!,
+                    still: still,
+                    drainDelay: index < _previous
+                        ? _stagger * (_previous - 1 - index)
+                        : Duration.zero,
                   ),
                 ),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     );
   }
+}
+
+class _PinDot extends StatefulWidget {
+  const _PinDot({
+    required this.filled,
+    required this.ink,
+    required this.still,
+    required this.drainDelay,
+  });
+
+  final bool filled;
+  final Color ink;
+  final bool still;
+  final Duration drainDelay;
+
+  @override
+  State<_PinDot> createState() => _PinDotState();
+}
+
+class _PinDotState extends State<_PinDot> with TickerProviderStateMixin {
+  late final AnimationController _fill = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 320),
+    reverseDuration: const Duration(milliseconds: 220),
+    value: widget.filled ? 1.0 : 0.0,
+  );
+  late final AnimationController _ripple = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 480),
+  );
+  late final Animation<double> _disc = CurvedAnimation(
+    parent: _fill,
+    curve: Curves.easeOutBack,
+    reverseCurve: Curves.easeInCubic,
+  );
+  Timer? _drain;
+
+  @override
+  void didUpdateWidget(covariant _PinDot oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.filled == widget.filled) {
+      return;
+    }
+    _drain?.cancel();
+    _drain = null;
+    if (widget.still) {
+      _fill.value = widget.filled ? 1.0 : 0.0;
+    } else if (widget.filled) {
+      _fill.forward();
+      _ripple.forward(from: 0.0);
+    } else if (widget.drainDelay == Duration.zero) {
+      _fill.reverse();
+    } else {
+      _drain = Timer(widget.drainDelay, () {
+        if (mounted && !widget.filled) _fill.reverse();
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _drain?.cancel();
+    _fill.dispose();
+    _ripple.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return RepaintBoundary(
+      child: CustomPaint(
+        size: const Size.square(13),
+        painter: _PinDotPainter(
+          fill: _fill,
+          disc: _disc,
+          ripple: _ripple,
+          ink: widget.ink,
+        ),
+      ),
+    );
+  }
+}
+
+class _PinDotPainter extends CustomPainter {
+  _PinDotPainter({
+    required this.fill,
+    required this.disc,
+    required this.ripple,
+    required this.ink,
+  }) : super(repaint: Listenable.merge([fill, ripple]));
+
+  final AnimationController fill;
+  final Animation<double> disc;
+  final Animation<double> ripple;
+  final Color ink;
+
+  static const double _stroke = 1.4;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = size.center(Offset.zero);
+    final radius = size.shortestSide / 2;
+    final level = fill.value;
+    // Draining, the outline bumps out once as the ink leaves it.
+    final bump = fill.status == AnimationStatus.reverse
+        ? math.sin(math.pi * level) * 0.18
+        : 0.0;
+    final outline = radius * (0.84 + 0.16 * level + bump) - _stroke / 2;
+    canvas.drawCircle(
+      center,
+      outline,
+      Paint()
+        ..isAntiAlias = true
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = _stroke
+        ..color = ink.withValues(alpha: ink.a * (0.55 + 0.45 * level)),
+    );
+    final discRadius = radius * disc.value;
+    if (discRadius > 0.0) {
+      canvas.drawCircle(
+        center,
+        discRadius,
+        Paint()
+          ..isAntiAlias = true
+          ..color = ink.withValues(alpha: ink.a * level.clamp(0.0, 1.0)),
+      );
+    }
+    final wave = ripple.value;
+    if (wave > 0.0 && wave < 1.0) {
+      final fade = (1.0 - wave) * (1.0 - wave);
+      canvas.drawCircle(
+        center,
+        radius * (1.0 + 1.2 * Curves.easeOutCubic.transform(wave)),
+        Paint()
+          ..isAntiAlias = true
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = _stroke
+          ..color = ink.withValues(alpha: ink.a * 0.5 * fade),
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _PinDotPainter oldDelegate) =>
+      oldDelegate.fill != fill ||
+      oldDelegate.disc != disc ||
+      oldDelegate.ripple != ripple ||
+      oldDelegate.ink != ink;
 }
 
 class _PinPad extends StatelessWidget {

@@ -86,7 +86,7 @@ void main() {
     expect(container.read(authenticationProvider).pinConfigured, isFalse);
   });
 
-  test('credential packets report an armed reader and its sensor', () {
+  test('credential packets report the reader and its sensor', () {
     final service = _FakeAuthenticationService();
     addTearDown(service.dispose);
     final container = ProviderContainer.test(
@@ -112,8 +112,20 @@ void main() {
 
     service.emit(_credential(pinLength: 4, payload: '{"fingerprint":{}}'));
     state = container.read(authenticationProvider);
+    expect(state.fingerprintReader, isTrue);
     expect(state.fingerprintAvailable, isTrue);
     expect(state.fingerprintSensor, isNull);
+
+    // Between scans the sensor stays marked while the reader re-arms.
+    service.emit(
+      _credential(
+        pinLength: 4,
+        payload: '{"fingerprint":{"sensor":{},"ready":false}}',
+      ),
+    );
+    state = container.read(authenticationProvider);
+    expect(state.fingerprintReader, isTrue);
+    expect(state.fingerprintAvailable, isFalse);
 
     service.emit(
       _credential(
@@ -125,6 +137,7 @@ void main() {
 
     service.emit(_credential(pinLength: 4));
     state = container.read(authenticationProvider);
+    expect(state.fingerprintReader, isFalse);
     expect(state.fingerprintAvailable, isFalse);
     expect(state.fingerprintSensor, isNull);
   });
@@ -362,6 +375,9 @@ class _FakeAuthenticationService implements AuthenticationService {
 
   @override
   void synchronize() => synchronizeCount += 1;
+
+  @override
+  void offerFingerprint(bool offered) {}
 
   @override
   void dispose() {

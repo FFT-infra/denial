@@ -1,6 +1,7 @@
 import 'package:denial_desktop/src/state/reference_shell_metrics.dart';
 import 'package:denial_desktop/src/state/reference_shell_profile.dart';
 
+import 'dart:async' show Timer;
 import 'dart:convert' show jsonDecode;
 import 'dart:io' show File;
 import 'dart:math' as math;

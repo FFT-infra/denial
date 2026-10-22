@@ -842,6 +842,9 @@ struct AuthenticationState {
     pin_length: u32,
     /// A fingerprint reader with enrolled prints is armed for unlock.
     fingerprint_ready: bool,
+    /// The reader has armed since deniald started, so the lock screen keeps
+    /// marking the sensor while it re-arms between scans.
+    fingerprint_known: bool,
     /// The lock screen shows its fingerprint face rather than a typed
     /// credential; the reader is armed only then.
     fingerprint_offered: bool,
@@ -960,6 +963,7 @@ impl AuthenticationController {
                 response: None,
                 pin_length: 0,
                 fingerprint_ready: false,
+                fingerprint_known: false,
                 fingerprint_offered: true,
                 fingerprint_enabled: true,
                 fingerprint_sensor: None,
@@ -1475,14 +1479,17 @@ fn credential_event(
     shared: &SharedAuthentication,
     state: &AuthenticationState,
 ) -> AuthenticationEvent {
-    let message = if state.fingerprint_ready && state.fingerprint_enabled {
+    let message = if state.fingerprint_known && state.fingerprint_enabled {
         let sensor = state.fingerprint_sensor.map_or_else(
             || serde_json::json!({}),
             |[x, y, width, height]| {
                 serde_json::json!({"x": x, "y": y, "width": width, "height": height})
             },
         );
-        serde_json::json!({"fingerprint": {"sensor": sensor}}).to_string()
+        serde_json::json!({
+            "fingerprint": {"sensor": sensor, "ready": state.fingerprint_ready}
+        })
+        .to_string()
     } else {
         String::new()
     };

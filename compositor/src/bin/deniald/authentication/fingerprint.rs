@@ -6,6 +6,7 @@
 //! claim if a daemon disappears or a method times out during cleanup.
 
 use super::*;
+use std::cell::Cell;
 use futures_lite::{StreamExt, future};
 use tracing::debug;
 use zbus::blocking::{Connection, Proxy, connection::Builder};
@@ -18,6 +19,8 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(3);
 const CANCEL_INTERVAL: Duration = Duration::from_millis(100);
 const MAX_UNAVAILABLE_RETRY: Duration = Duration::from_secs(30);
 const WAKE_SETTLE_DELAY: Duration = Duration::from_millis(150);
+/// A reader that listened this long before failing worked; it was the scan.
+const HEALTHY_ARMED: Duration = Duration::from_millis(500);
 
 #[derive(Clone, Copy)]
 pub(super) enum PendingUnlock {
@@ -197,7 +200,6 @@ pub(super) fn run_worker(
     backend: &mut impl FingerprintBackend,
 ) {
     let mut previous_epoch = None;
-    let mut failures = 0u32;
     let mut unavailable_attempts = 0u32;
     lock_unpoisoned(&shared.state).fingerprint_sensor = sensor_rect();
     loop {
@@ -220,16 +222,20 @@ pub(super) fn run_worker(
             state.lock_epoch
         };
         if previous_epoch != Some(epoch) {
-            failures = 0;
             unavailable_attempts = 0;
             previous_epoch = Some(epoch);
         }
-        let result = backend.verify(&|| publish_readiness(shared, true), &|| {
-            cancelled(shared, epoch)
-        });
-        if result == Verification::Unavailable {
-            publish_readiness(shared, false);
-        }
+        let armed_at = Cell::new(None);
+        let result = backend.verify(
+            &|| {
+                armed_at.set(Some(Instant::now()));
+                publish_readiness(shared, true);
+            },
+            &|| cancelled(shared, epoch),
+        );
+        // Between scans the reader is not listening; the lock screen shows
+        // that until the next attempt arms it.
+        publish_readiness(shared, false);
         if result == Verification::Match && complete_match(shared, epoch) {
             info!("Denial fingerprint validated; waiting for display readiness");
             continue;
@@ -237,16 +243,28 @@ pub(super) fn run_worker(
         if cancelled(shared, epoch) {
             continue;
         }
-        let delay = if result == Verification::NoMatch {
-            unavailable_attempts = 0;
-            publish_no_match(shared, epoch);
-            failures = failures.saturating_add(1);
-            fingerprint_retry(failures)
-        } else {
-            unavailable_attempts = unavailable_attempts.saturating_add(1);
-            unavailable_retry(unavailable_attempts)
+        // A rejected scan, or a reader that listened before it failed (a
+        // finger lifted too early), arms again at once: the user retries
+        // without a cooldown. Only a reader that fails before listening backs
+        // off, so a host without a usable one is not polled continuously.
+        let delay = match result {
+            Verification::NoMatch => {
+                publish_no_match(shared, epoch);
+                unavailable_attempts = 0;
+                continue;
+            }
+            _ if armed_at
+                .get()
+                .is_some_and(|armed| armed.elapsed() >= HEALTHY_ARMED) =>
+            {
+                unavailable_attempts = 0;
+                continue;
+            }
+            _ => {
+                unavailable_attempts = unavailable_attempts.saturating_add(1);
+                unavailable_retry(unavailable_attempts)
+            }
         };
-        // Password actions do not reset fingerprint backoff; a new lock does.
         let state = lock_unpoisoned(&shared.state);
         let _ = shared
             .condition
@@ -259,13 +277,13 @@ pub(super) fn run_worker(
     }
 }
 
-/// The lock screen marks the sensor while a reader with enrolled prints is
-/// armed. Readiness survives rejected scans and only an unusable reader
-/// clears it, so the mark does not flicker between attempts.
+/// The lock screen marks the sensor once a reader with enrolled prints has
+/// armed, and shows whether it is listening right now.
 fn publish_readiness(shared: &SharedAuthentication, ready: bool) {
     let mut state = lock_unpoisoned(&shared.state);
-    if state.fingerprint_ready != ready {
+    if state.fingerprint_ready != ready || (ready && !state.fingerprint_known) {
         state.fingerprint_ready = ready;
+        state.fingerprint_known |= ready;
         shared.push_event(credential_event(shared, &state));
     }
 }
@@ -308,20 +326,14 @@ fn sensor_rect() -> Option<[f64; 4]> {
     })
 }
 
-/// A rejected scan retries at once a few times, then once a second.
-fn fingerprint_retry(failures: u32) -> Duration {
-    if failures <= 4 {
-        Duration::from_millis(150)
-    } else {
-        Duration::from_secs(1)
-    }
-}
-
 fn unavailable_retry(attempts: u32) -> Duration {
     // The first attempt can precede logind/PolicyKit session activation.
     // Recover promptly from startup races without continuously polling hosts
-    // that have no usable reader. This is independent of rejected-scan backoff.
-    Duration::from_secs(1u64 << attempts.saturating_sub(1).min(5)).min(MAX_UNAVAILABLE_RETRY)
+    // that have no usable reader.
+    if attempts <= 1 {
+        return Duration::ZERO;
+    }
+    Duration::from_secs(1u64 << attempts.saturating_sub(2).min(5)).min(MAX_UNAVAILABLE_RETRY)
 }
 
 fn publish_no_match(shared: &SharedAuthentication, epoch: u64) {
@@ -642,6 +654,9 @@ mod tests {
         // The real worker must finish the rejected scan before retrying.
         starts.recv_timeout(Duration::from_secs(2)).unwrap();
         assert!(controller.locked());
+        // An unusable reader is tried again once at once, then backs off.
+        results.send(Verification::Unavailable).unwrap();
+        starts.recv_timeout(Duration::from_secs(2)).unwrap();
         results.send(Verification::Unavailable).unwrap();
         assert!(starts.recv_timeout(Duration::from_millis(100)).is_err());
         assert!(controller.locked());
@@ -684,8 +699,10 @@ mod tests {
     }
 
     #[test]
-    fn armed_reader_is_announced_once_and_cleared_by_an_unusable_reader() {
+    fn armed_reader_is_announced_once_and_stays_marked_between_scans() {
         let controller = controller(true);
+        publish_readiness(&controller.shared, false);
+        assert!(controller.try_event().is_none());
         publish_readiness(&controller.shared, true);
         publish_readiness(&controller.shared, true);
         let event = controller.try_event().expect("readiness event");
@@ -694,9 +711,11 @@ mod tests {
             AuthenticationEventKind::Credential { pin_length: 0 }
         ));
         assert!(event.message.starts_with(r#"{"fingerprint":"#));
+        assert!(event.message.contains(r#""ready":true"#));
         assert!(controller.try_event().is_none());
         publish_readiness(&controller.shared, false);
-        assert_eq!(controller.try_event().expect("cleared").message, "");
+        let event = controller.try_event().expect("re-arming");
+        assert!(event.message.contains(r#""ready":false"#));
     }
 
     #[test]
@@ -726,16 +745,12 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_backoff_is_bounded_and_independent_of_rejected_scans() {
-        assert_eq!(unavailable_retry(1), Duration::from_secs(1));
-        assert_eq!(unavailable_retry(2), Duration::from_secs(2));
-        assert_eq!(unavailable_retry(3), Duration::from_secs(4));
-        assert_eq!(unavailable_retry(6), MAX_UNAVAILABLE_RETRY);
+    fn unavailable_backoff_is_bounded() {
+        assert_eq!(unavailable_retry(1), Duration::ZERO);
+        assert_eq!(unavailable_retry(2), Duration::from_secs(1));
+        assert_eq!(unavailable_retry(3), Duration::from_secs(2));
+        assert_eq!(unavailable_retry(7), MAX_UNAVAILABLE_RETRY);
         assert_eq!(unavailable_retry(u32::MAX), MAX_UNAVAILABLE_RETRY);
-        assert_eq!(fingerprint_retry(1), Duration::from_millis(150));
-        assert_eq!(fingerprint_retry(4), Duration::from_millis(150));
-        assert_eq!(fingerprint_retry(5), Duration::from_secs(1));
-        assert_eq!(fingerprint_retry(u32::MAX), Duration::from_secs(1));
         assert_eq!(cooldown_for(1), Duration::from_millis(750));
         assert_eq!(cooldown_for(u32::MAX), Duration::from_secs(30));
     }

@@ -249,8 +249,6 @@ class _LockClockBlock extends StatelessWidget {
     required this.desktop,
     required this.scale,
     required this.showSystemStatus,
-    required this.opacity,
-    required this.lift,
     this.parts = const {
       HomeClockPart.time,
       HomeClockPart.date,
@@ -267,11 +265,6 @@ class _LockClockBlock extends StatelessWidget {
   /// battery row over it, as two blocks with the same layout.
   final Set<HomeClockPart> parts;
 
-  /// The mobile PIN stage fades and lifts the clock away; both stay at rest
-  /// otherwise, so the clock paints live.
-  final Animation<double> opacity;
-  final ValueListenable<Offset> lift;
-
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
@@ -284,39 +277,32 @@ class _LockClockBlock extends StatelessWidget {
         : math.min(250.0, size.height * 0.34);
 
     // Mobile stretches the time upward with the date on top, painted above
-    // the block; the fade snapshot has to cover them.
+    // the block, which reserves room for them.
     final reserve = desktop ? 0.0 : height;
     return Positioned(
       left: horizontalInset,
       right: desktop ? size.width * 0.48 : 0,
       top: top - reserve,
       height: height + reserve,
-      child: FadeSnapshot(
-        opacity: opacity,
-        child: CompositedTranslation(
-          translation: lift,
-          devicePixelRatio: MediaQuery.devicePixelRatioOf(context),
+      child: Padding(
+        padding: EdgeInsets.only(top: reserve),
+        child: Transform.scale(
+          alignment: Alignment.center,
+          scale: scale,
           child: Padding(
-            padding: EdgeInsets.only(top: reserve),
-            child: Transform.scale(
-              alignment: Alignment.center,
-              scale: scale,
-              child: Padding(
-                padding: desktop
-                    ? EdgeInsets.zero
-                    : const EdgeInsets.symmetric(horizontal: 24),
-                child: RepaintBoundary(
-                  child: HomeClockWidget(
-                    clock: clock,
-                    showStatus: showSystemStatus,
-                    timeStretch: desktop ? 1.0 : 2.0,
-                    detailsAbove: !desktop,
-                    dateColor: desktop
-                        ? ShellMediaColors.lightForegroundSecondary
-                        : ShellMediaColors.lightForeground,
-                    parts: parts,
-                  ),
-                ),
+            padding: desktop
+                ? EdgeInsets.zero
+                : const EdgeInsets.symmetric(horizontal: 24),
+            child: RepaintBoundary(
+              child: HomeClockWidget(
+                clock: clock,
+                showStatus: showSystemStatus,
+                timeStretch: desktop ? 1.0 : 2.0,
+                detailsAbove: !desktop,
+                dateColor: desktop
+                    ? ShellMediaColors.lightForegroundSecondary
+                    : ShellMediaColors.lightForeground,
+                parts: parts,
               ),
             ),
           ),
@@ -326,12 +312,9 @@ class _LockClockBlock extends StatelessWidget {
   }
 }
 
-/// The lock glyph centred near the top of the mobile face. It fades with the
-/// clock when a credential prompt comes up.
+/// The lock glyph centred near the top of the mobile face.
 class _LockGlyph extends StatelessWidget {
-  const _LockGlyph({required this.opacity});
-
-  final Animation<double> opacity;
+  const _LockGlyph();
 
   static const double _size = 26.0;
 
@@ -341,14 +324,11 @@ class _LockGlyph extends StatelessWidget {
       left: 0,
       right: 0,
       top: MediaQuery.sizeOf(context).height / 16 - _size / 2,
-      child: Center(
-        child: FadeSnapshot(
-          opacity: opacity,
-          child: const Icon(
-            Icons.lock_rounded,
-            size: _size,
-            color: ShellMediaColors.lightForeground,
-          ),
+      child: const Center(
+        child: Icon(
+          Icons.lock_rounded,
+          size: _size,
+          color: ShellMediaColors.lightForeground,
         ),
       ),
     );
@@ -356,12 +336,13 @@ class _LockGlyph extends StatelessWidget {
 }
 
 /// The swipe-up pill of the mobile face: wider than the navigation pill and
-/// centred where it sits. It fades with the clock when a credential prompt
-/// comes up.
+/// centred where it sits. Like the fingerprint ring it stays put and fades
+/// out as the face is swiped away.
 class _LockSwipePill extends StatelessWidget {
-  const _LockSwipePill({required this.opacity});
+  const _LockSwipePill({required this.face, required this.fadeDistance});
 
-  final Animation<double> opacity;
+  final ValueListenable<Offset> face;
+  final double fadeDistance;
 
   @override
   Widget build(BuildContext context) {
@@ -375,14 +356,15 @@ class _LockSwipePill extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.only(top: 20),
         child: Center(
-          child: FadeSnapshot(
-            opacity: opacity,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
+          child: IgnorePointer(
+            child: CustomPaint(
+              size: const Size(180, 5),
+              painter: _LockSwipePillPainter(
+                face: face,
+                fadeDistance: fadeDistance,
                 color: context.shellColors.gesturePill,
-                borderRadius: context.shellTheme.borderRadius(3),
+                radius: context.shellTheme.borderRadius(3),
               ),
-              child: const SizedBox(width: 180, height: 5),
             ),
           ),
         ),
@@ -391,52 +373,118 @@ class _LockSwipePill extends StatelessWidget {
   }
 }
 
-/// Marks an armed fingerprint reader: on an under-display sensor the ring sits
-/// on the sensor, otherwise near the bottom edge. It fades with the clock when
-/// a credential prompt comes up, and when the reader stops listening.
+class _LockSwipePillPainter extends CustomPainter {
+  _LockSwipePillPainter({
+    required this.face,
+    required this.fadeDistance,
+    required this.color,
+    required this.radius,
+  }) : super(repaint: face);
+
+  final ValueListenable<Offset> face;
+  final double fadeDistance;
+  final Color color;
+  final BorderRadius radius;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final alpha = 1.0 - _swiped(face, fadeDistance);
+    if (alpha <= 0.0) {
+      return;
+    }
+    canvas.drawRRect(
+      radius.toRRect(Offset.zero & size),
+      Paint()
+        ..isAntiAlias = true
+        ..color = color.withValues(alpha: color.a * alpha),
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _LockSwipePillPainter oldDelegate) =>
+      oldDelegate.face != face ||
+      oldDelegate.fadeDistance != fadeDistance ||
+      oldDelegate.color != color ||
+      oldDelegate.radius != radius;
+}
+
+/// How far the face has been swiped toward gone for marks that stay put:
+/// 0 at rest, 1 once it has moved [fadeDistance] up.
+double _swiped(ValueListenable<Offset> face, double fadeDistance) =>
+    fadeDistance > 0.0 ? (-face.value.dy / fadeDistance).clamp(0.0, 1.0) : 0.0;
+
+/// Marks the fingerprint sensor: on an under-display sensor the ring sits on
+/// the sensor, otherwise near the bottom edge. It stays on the sensor and
+/// fades out as the face is swiped away. Red while the reader is not
+/// listening, after a rejected scan or while it re-arms, so the user waits
+/// for white.
 class _LockFingerprintRing extends StatefulWidget {
   const _LockFingerprintRing({
-    required this.available,
+    required this.present,
+    required this.ready,
     required this.sensor,
-    required this.opacity,
+    required this.face,
+    required this.fadeDistance,
   });
 
-  final bool available;
+  final bool present;
+  final bool ready;
 
   /// Panel fractions in the panel's native orientation.
   final Rect? sensor;
-  final Animation<double> opacity;
+
+  /// The face's offset; the ring is gone once it has moved [fadeDistance] up.
+  final ValueListenable<Offset> face;
+  final double fadeDistance;
 
   @override
   State<_LockFingerprintRing> createState() => _LockFingerprintRingState();
 }
 
 class _LockFingerprintRingState extends State<_LockFingerprintRing>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _available = AnimationController(
+    with TickerProviderStateMixin {
+  late final AnimationController _present = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 180),
-    value: widget.available ? 1.0 : 0.0,
+    value: widget.present ? 1.0 : 0.0,
+  );
+
+  /// 1 white, 0 red: it turns red at once and back to white gently.
+  late final AnimationController _ready = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 260),
+    reverseDuration: const Duration(milliseconds: 90),
+    value: widget.ready ? 1.0 : 0.0,
   );
 
   @override
   void didUpdateWidget(covariant _LockFingerprintRing oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.available == widget.available) {
-      return;
+    final still = MediaQuery.disableAnimationsOf(context);
+    if (oldWidget.present != widget.present) {
+      if (still) {
+        _present.value = widget.present ? 1.0 : 0.0;
+      } else if (widget.present) {
+        _present.forward();
+      } else {
+        _present.reverse();
+      }
     }
-    if (MediaQuery.disableAnimationsOf(context)) {
-      _available.value = widget.available ? 1.0 : 0.0;
-    } else if (widget.available) {
-      _available.forward();
-    } else {
-      _available.reverse();
+    if (oldWidget.ready != widget.ready) {
+      if (still) {
+        _ready.value = widget.ready ? 1.0 : 0.0;
+      } else if (widget.ready) {
+        _ready.forward();
+      } else {
+        _ready.reverse();
+      }
     }
   }
 
   @override
   void dispose() {
-    _available.dispose();
+    _present.dispose();
+    _ready.dispose();
     super.dispose();
   }
 
@@ -445,8 +493,10 @@ class _LockFingerprintRingState extends State<_LockFingerprintRing>
     return IgnorePointer(
       child: CustomPaint(
         painter: _LockFingerprintRingPainter(
-          available: _available,
-          opacity: widget.opacity,
+          present: _present,
+          ready: _ready,
+          face: widget.face,
+          fadeDistance: widget.fadeDistance,
           sensor: widget.sensor,
         ),
       ),
@@ -456,13 +506,17 @@ class _LockFingerprintRingState extends State<_LockFingerprintRing>
 
 class _LockFingerprintRingPainter extends CustomPainter {
   _LockFingerprintRingPainter({
-    required this.available,
-    required this.opacity,
+    required this.present,
+    required this.ready,
+    required this.face,
+    required this.fadeDistance,
     required this.sensor,
-  }) : super(repaint: Listenable.merge([available, opacity]));
+  }) : super(repaint: Listenable.merge([present, ready, face]));
 
-  final Animation<double> available;
-  final Animation<double> opacity;
+  final Animation<double> present;
+  final Animation<double> ready;
+  final ValueListenable<Offset> face;
+  final double fadeDistance;
   final Rect? sensor;
 
   static const double _radius = 13.0;
@@ -470,7 +524,7 @@ class _LockFingerprintRingPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final alpha = available.value * opacity.value;
+    final alpha = present.value * (1.0 - _swiped(face, fadeDistance));
     if (alpha <= 0.0) {
       return;
     }
@@ -480,22 +534,27 @@ class _LockFingerprintRingPainter extends CustomPainter {
     final center = sensor != null && size.height >= size.width
         ? Offset(sensor.center.dx * size.width, sensor.center.dy * size.height)
         : Offset(size.width / 2, size.height * 0.88);
+    final ink = Color.lerp(
+      ShellTelemetryColors.danger,
+      ShellMediaColors.lightForeground,
+      ready.value,
+    )!;
     canvas.drawCircle(
       center,
       _radius,
       Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = _stroke
-        ..color = ShellMediaColors.lightForeground.withValues(
-          alpha: 0.92 * alpha,
-        ),
+        ..color = ink.withValues(alpha: 0.92 * alpha),
     );
   }
 
   @override
   bool shouldRepaint(covariant _LockFingerprintRingPainter oldDelegate) =>
-      oldDelegate.available != available ||
-      oldDelegate.opacity != opacity ||
+      oldDelegate.present != present ||
+      oldDelegate.ready != ready ||
+      oldDelegate.face != face ||
+      oldDelegate.fadeDistance != fadeDistance ||
       oldDelegate.sensor != sensor;
 }
 
@@ -669,14 +728,13 @@ class _LockDepthForegroundState extends ConsumerState<_LockDepthForeground> {
 }
 
 /// The phone's notifications under the clock, as many as fit, newest first,
-/// unless the lock screen settings hide them. They fade and lift with the
-/// clock when a credential comes up, and let touches through to the swipe.
+/// unless the lock screen settings hide them. They slide with the face and
+/// let touches through to the swipe.
 class _LockNotifications extends ConsumerWidget {
-  const _LockNotifications({required this.scale, required this.opacity});
+  const _LockNotifications({required this.scale});
 
   /// The clock's scale, which moves its lower edge.
   final double scale;
-  final Animation<double> opacity;
 
   static const int _shown = 3;
 
@@ -705,44 +763,39 @@ class _LockNotifications extends ConsumerWidget {
       top: clockBottom + metrics.visual(24),
       // The fingerprint ring and the swipe pill keep the lower part.
       bottom: size.height * 0.3,
-      child: FadeTransition(
-        opacity: opacity,
-        child: ClipRect(
-          child: SingleChildScrollView(
-            physics: const NeverScrollableScrollPhysics(),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                for (final record in records)
-                  Padding(
+      child: ClipRect(
+        child: SingleChildScrollView(
+          physics: const NeverScrollableScrollPhysics(),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (final record in records)
+                Padding(
+                  key: ValueKey(record.notification.id),
+                  padding: EdgeInsets.fromLTRB(
+                    metrics.visual(MobileNotificationCard.horizontalMargin),
+                    0,
+                    metrics.visual(MobileNotificationCard.horizontalMargin),
+                    metrics.visual(MobileNotificationMetrics.rowSpacing),
+                  ),
+                  // Swiped aside, it leaves the history; a swipe up
+                  // still opens the phone.
+                  child: Dismissible(
                     key: ValueKey(record.notification.id),
-                    padding: EdgeInsets.fromLTRB(
-                      metrics.visual(MobileNotificationCard.horizontalMargin),
-                      0,
-                      metrics.visual(MobileNotificationCard.horizontalMargin),
-                      metrics.visual(MobileNotificationMetrics.rowSpacing),
-                    ),
-                    // Swiped aside, it leaves the history; a swipe up
-                    // still opens the phone.
-                    child: Dismissible(
-                      key: ValueKey(record.notification.id),
-                      confirmDismiss: (_) async {
-                        // The controller drops the row when it can.
-                        notifications.dismissFromHistory(
-                          record.notification.id,
-                        );
-                        return false;
-                      },
-                      child: MobileNotificationCard(
-                        notification: record.notification,
-                        interactive: false,
-                        previewMode: state.lockPreview,
-                      ),
+                    confirmDismiss: (_) async {
+                      // The controller drops the row when it can.
+                      notifications.dismissFromHistory(record.notification.id);
+                      return false;
+                    },
+                    child: MobileNotificationCard(
+                      notification: record.notification,
+                      interactive: false,
+                      previewMode: state.lockPreview,
                     ),
                   ),
-              ],
-            ),
+                ),
+            ],
           ),
         ),
       ),
