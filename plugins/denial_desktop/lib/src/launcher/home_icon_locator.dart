@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -19,8 +20,10 @@ class HomeIconTarget {
 /// Lets window transitions find an application's icon on home, and hide it
 /// while they draw it themselves.
 class HomeIconLocator {
-  /// The home item a transition currently draws in home's place.
-  final hidden = ValueNotifier<String?>(null);
+  /// The home items transitions currently draw in home's place.
+  ValueListenable<Set<String>> get hidden => _hidden;
+  final _hidden = ValueNotifier<Set<String>>(const {});
+  final _holds = <String, int>{};
 
   HomeIconTarget? Function(DenialWindow window)? _find;
 
@@ -36,15 +39,30 @@ class HomeIconLocator {
   /// or in the open folder. Null when home does not show it.
   HomeIconTarget? iconFor(DenialWindow window) => _find?.call(window);
 
-  void hide(String itemId) => hidden.value = itemId;
-
-  /// Shows [itemId] again, unless another transition has hidden an icon
-  /// since.
-  void reveal(String itemId) {
-    if (hidden.value == itemId) hidden.value = null;
+  /// Hides [itemId] until each transition that hid it has revealed it.
+  void hide(String itemId) {
+    _holds[itemId] = (_holds[itemId] ?? 0) + 1;
+    _publish();
   }
 
-  void dispose() => hidden.dispose();
+  void reveal(String itemId) {
+    final holds = _holds[itemId];
+    if (holds == null) return;
+    if (holds > 1) {
+      _holds[itemId] = holds - 1;
+    } else {
+      _holds.remove(itemId);
+    }
+    _publish();
+  }
+
+  void _publish() {
+    if (!setEquals(_hidden.value, _holds.keys.toSet())) {
+      _hidden.value = Set.unmodifiable(_holds.keys);
+    }
+  }
+
+  void dispose() => _hidden.dispose();
 }
 
 final homeIconLocatorProvider = Provider<HomeIconLocator>((ref) {

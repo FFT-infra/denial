@@ -39,6 +39,7 @@ class MobileLauncherLayer extends ConsumerWidget {
       }),
     );
     final shade = ref.watch(shadeProgressProvider);
+    final showsHome = ref.read(referenceShellProvider.notifier).deck.showsHome;
     final opacity = _HomeContentOpacity(
       first: contentOpacity,
       // The frost fades the home content itself and then hides it; fading
@@ -55,12 +56,17 @@ class MobileLauncherLayer extends ConsumerWidget {
       // Home takes touches as soon as nothing above it holds them: while an
       // app flies back into its icon or recents slides away, so a quick
       // close and reopen never waits for an animation to end.
-      builder: (context, overviewActive, _) => TickerMode(
-        enabled: !overviewActive || flags.interactive,
-        child: HomeSurface(
-          active: flags.active,
-          interactive: flags.interactive,
-          contentOpacity: opacity,
+      builder: (context, overviewActive, _) => ValueListenableBuilder<bool>(
+        // An app sliding in over home is in front already; home stays
+        // until it is covered.
+        valueListenable: showsHome,
+        builder: (context, showsHome, _) => TickerMode(
+          enabled: !overviewActive || flags.interactive,
+          child: HomeSurface(
+            active: flags.active || showsHome,
+            interactive: flags.interactive,
+            contentOpacity: opacity,
+          ),
         ),
       ),
     );

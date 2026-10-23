@@ -8,6 +8,7 @@ export 'src/widgets/desktop_window_snapshot.dart'
 export 'src/widgets/mobile_text_input_policy.dart' show MobileTextInputPolicy;
 export 'src/widgets/output_relative_translation.dart'
     show OutputRelativeTranslation, RenderOutputRelativeTranslation;
+export 'src/widgets/posed_window.dart' show PosedWindow, WindowPose;
 export 'src/widgets/retained_scale.dart' show RetainedScale;
 export 'src/widgets/fade_snapshot.dart' show FadeSnapshot;
 export 'src/widgets/retained_translation.dart'

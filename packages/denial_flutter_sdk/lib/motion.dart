@@ -7,3 +7,4 @@ export 'src/theme/motion.dart'
         springTo,
         unit;
 export 'src/theme/selected_listenable.dart' show SelectedListenable;
+export 'src/theme/springs.dart' show RectCenterSizeConverter, ShellSprings;

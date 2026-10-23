@@ -205,7 +205,7 @@ class _HomeSurfaceState extends ConsumerState<HomeSurface>
   // HomeInteractions ---------------------------------------------------------
 
   @override
-  ValueListenable<String?> get hiddenItem => _locator.hidden;
+  ValueListenable<Set<String>> get hiddenItems => _locator.hidden;
 
   @override
   void launch(HomeGridItem app, Rect iconRect) {

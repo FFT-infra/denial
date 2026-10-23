@@ -25,6 +25,7 @@ class ReferenceInputLayoutCoordinator {
     required Size viewSize,
     required ShellInteractionSnapshot interactions,
     double topInset = 0.0,
+    bool appsMoving = false,
   }) {
     if (viewSize.width <= 0 || viewSize.height <= 0) {
       return;
@@ -117,6 +118,9 @@ class ReferenceInputLayoutCoordinator {
     final shellOwnsCanvas =
         inputWindow == null ||
         state.overviewVisible ||
+        // While the apps move no app takes a touch, as in Launcher3's
+        // recents animation: the shell holds them until they rest.
+        appsMoving ||
         state.launchTransitionActive ||
         quickSettingsActive ||
         interactions.capturesFullScene;

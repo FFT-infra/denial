@@ -132,7 +132,7 @@ class _HomeSlidingTileState extends State<HomeSlidingTile>
     _look?.removeListener(_previewChanged);
     _look?.dispose();
     _look = SelectedListenable<_TileLook>(
-      Listenable.merge([interactions.drag.drag, interactions.hiddenItem]),
+      Listenable.merge([interactions.drag.drag, interactions.hiddenItems]),
       _lookNow,
     )..addListener(_previewChanged);
     _previewChanged();
@@ -144,7 +144,7 @@ class _HomeSlidingTileState extends State<HomeSlidingTile>
     final id = widget.item.id;
     return (
       hidden: drag?.item.id == id,
-      iconHidden: interactions.hiddenItem.value == id,
+      iconHidden: interactions.hiddenItems.value.contains(id),
       merging:
           !widget.inFolder &&
           drag != null &&

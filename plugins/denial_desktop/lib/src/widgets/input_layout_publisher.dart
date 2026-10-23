@@ -1,6 +1,7 @@
 import 'package:denial_desktop/src/state/reference_shell_controller.dart';
 import 'package:denial_desktop/src/state/reference_shell_presentation.dart';
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -19,6 +20,27 @@ class InputLayoutPublisher extends ConsumerStatefulWidget {
 class _InputLayoutPublisherState extends ConsumerState<InputLayoutPublisher> {
   bool _scheduled = false;
   bool _forcePublish = true;
+  Size _viewSize = Size.zero;
+  late final ValueListenable<bool> _appsMoving = ref
+      .read(referenceShellProvider.notifier)
+      .deck
+      .presenting;
+
+  @override
+  void initState() {
+    super.initState();
+    _appsMoving.addListener(_appsMovingChanged);
+  }
+
+  @override
+  void dispose() {
+    _appsMoving.removeListener(_appsMovingChanged);
+    super.dispose();
+  }
+
+  void _appsMovingChanged() {
+    if (mounted && !_viewSize.isEmpty) _schedulePublish(_viewSize);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -41,7 +63,8 @@ class _InputLayoutPublisherState extends ConsumerState<InputLayoutPublisher> {
     );
     ref.watch(shellInteractionRegistryProvider);
     ref.watch(mobilePresentationTopInsetProvider);
-    _schedulePublish(MediaQuery.sizeOf(context));
+    _viewSize = MediaQuery.sizeOf(context);
+    _schedulePublish(_viewSize);
     return widget.child;
   }
 

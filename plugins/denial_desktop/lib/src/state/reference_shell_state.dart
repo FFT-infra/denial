@@ -242,20 +242,17 @@ class ReferenceShellState {
 
   int get openAppWindowCount => openAppWindows.length;
 
-  DenialWindow? get appSwitchTargetWindow {
+  /// A sideways swipe of the bottom gesture has an app to bring in.
+  bool get canSwitchApps {
+    // An opening app's flight holds the gesture.
     if (lockLayerVisible ||
+        launchTransitionActive ||
         overviewVisible ||
         quickSettingsEngaged ||
         edgePanelDragProgress > 0.0) {
-      return null;
+      return false;
     }
-
-    return switch (gesture) {
-      // Dragging right brings in the previous app, left the next.
-      GestureDragPhase.right => adjacentOpenAppWindow(-1),
-      GestureDragPhase.left => adjacentOpenAppWindow(1),
-      _ => null,
-    };
+    return openAppWindowCount > (foregroundWindow == null ? 0 : 1);
   }
 
   DenialWindow? adjacentOpenAppWindow(int direction) {

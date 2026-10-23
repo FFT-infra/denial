@@ -17,6 +17,7 @@ import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../widgets/app_flight_layer.dart';
 import '../../widgets/back_gesture_layer.dart';
 import '../../widgets/bottom_gesture_handle.dart';
 import '../../widgets/edge_panel_layer.dart';
@@ -127,17 +128,17 @@ class _MobileApplicationSceneState
                   overviewPresentationActive: _overviewPresentationActive,
                 ),
               ),
-              MobilePrimaryWindowLayer(
-                overviewPresentationActive: _overviewPresentationActive,
-              ),
-              const MobileLaunchLayer(),
-              MobileOverviewLayer(
+              const MobilePrimaryWindowLayer(),
+              MobileAppDeckLayer(
                 backdrop: _wallpaperGlass,
                 onPresentationChanged: (active) =>
                     _overviewPresentationActive.value = active,
                 onProgressChanged: (progress) =>
                     _overviewProgress.value = progress,
               ),
+              // Above recents: a card leaving recents for home keeps
+              // flying over the cards that settle away.
+              const AppFlightLayer(),
             ],
           ),
         ),
@@ -188,7 +189,6 @@ class _MobileSceneWallpaperState extends ConsumerState<_MobileSceneWallpaper> {
         return window != null &&
             window.isOpaque &&
             state.launchRequest == null &&
-            state.appSwitchTargetWindow == null &&
             state.gesture == GestureDragPhase.idle &&
             !state.overviewVisible &&
             !state.homeTransitionActive;

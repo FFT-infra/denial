@@ -13,8 +13,8 @@ abstract interface class HomeInteractions {
   HomeResizeController get resize;
   HomeFolderController get folders;
 
-  /// The item a window transition draws in home's place.
-  ValueListenable<String?> get hiddenItem;
+  /// The items window transitions draw in home's place.
+  ValueListenable<Set<String>> get hiddenItems;
 
   /// Opens [app] from its icon at [iconRect], in global coordinates.
   void launch(HomeGridItem app, Rect iconRect);
