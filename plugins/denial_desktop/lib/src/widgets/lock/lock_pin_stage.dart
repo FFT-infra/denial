@@ -527,109 +527,120 @@ class _PinStageFrame extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final message = this.message;
+    final scrim = ShellMediaColors.darkness.withValues(alpha: 0.42);
     return Positioned.fill(
       child: Stack(
         fit: StackFit.expand,
         children: [
           IgnorePointer(
             child: CustomPaint(
-              painter: _PinStageScrimPainter(
-                reveal: reveal,
-                color: ShellMediaColors.darkness.withValues(alpha: 0.42),
-              ),
+              painter: _PinStageScrimPainter(reveal: reveal, color: scrim),
             ),
           ),
-          // The rise moves the layer outside the snapshot: a translation
-          // inside it would be frozen at its start for the whole fade, and
+          // The rise moves the layer outside the snapshots: a translation
+          // inside one would be frozen at its start for the whole fade, and
           // the stage would jump into place when it ends.
           CompositedTranslation(
             translation: rise,
             devicePixelRatio: MediaQuery.devicePixelRatioOf(context),
-            child: FadeSnapshot(
-              opacity: reveal,
-              child: IgnorePointer(
-                ignoring: !interactive,
-                child: Focus(
-                  focusNode: focusNode,
-                  autofocus: true,
-                  onKeyEvent: onKeyEvent,
-                  child: SafeArea(
-                    minimum: const EdgeInsets.fromLTRB(24, 16, 24, 20),
-                    child: LayoutBuilder(
-                      builder: (context, constraints) {
-                        final keySize = (constraints.maxWidth * 0.205)
-                            .clamp(62.0, 80.0)
-                            .toDouble();
-                        final compact = constraints.maxHeight < 600;
-                        return Column(
-                          children: [
-                            Spacer(flex: compact ? 1 : 3),
-                            Icon(
-                              icon,
-                              size: 20,
-                              color: ShellMediaColors.lightForegroundSecondary,
-                            ),
-                            const SizedBox(height: 12),
-                            Text(
-                              title,
-                              textAlign: TextAlign.center,
-                              style: ShellText.base.copyWith(
-                                color: ShellMediaColors.lightForeground,
-                                fontSize: 21,
-                                height: 1.15,
-                                fontWeight: FontWeight.w500,
-                                letterSpacing: -0.2,
-                              ),
-                            ),
-                            const SizedBox(height: 22),
-                            CompositedTranslation(
-                              translation: shakeOffset,
-                              devicePixelRatio: MediaQuery.devicePixelRatioOf(
-                                context,
-                              ),
-                              child: _PinDots(
-                                length: length,
-                                filled: filled,
-                                error: error,
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            SizedBox(
-                              height: 18,
-                              child: message == null
-                                  ? null
-                                  : Semantics(
-                                      liveRegion: true,
-                                      child: Text(
-                                        message,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        textAlign: TextAlign.center,
-                                        style: ShellText.base.copyWith(
-                                          color: messageColor,
-                                          fontSize: 13.5,
-                                          fontWeight: FontWeight.w600,
+            child: IgnorePointer(
+              ignoring: !interactive,
+              child: Focus(
+                focusNode: focusNode,
+                autofocus: true,
+                onKeyEvent: onKeyEvent,
+                child: SafeArea(
+                  minimum: const EdgeInsets.fromLTRB(24, 16, 24, 20),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final keySize = math
+                          .min(
+                            constraints.maxWidth * 0.25,
+                            constraints.maxHeight * 0.11,
+                          )
+                          .clamp(64.0, 92.0)
+                          .toDouble();
+                      final compact = constraints.maxHeight < 600;
+                      return Column(
+                        children: [
+                          Spacer(flex: compact ? 1 : 3),
+                          FadeSnapshot(
+                            opacity: reveal,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  icon,
+                                  size: 20,
+                                  color:
+                                      ShellMediaColors.lightForegroundSecondary,
+                                ),
+                                const SizedBox(height: 12),
+                                Text(
+                                  title,
+                                  textAlign: TextAlign.center,
+                                  style: ShellText.base.copyWith(
+                                    color: ShellMediaColors.lightForeground,
+                                    fontSize: 21,
+                                    height: 1.15,
+                                    fontWeight: FontWeight.w500,
+                                    letterSpacing: -0.2,
+                                  ),
+                                ),
+                                const SizedBox(height: 22),
+                                CompositedTranslation(
+                                  translation: shakeOffset,
+                                  devicePixelRatio:
+                                      MediaQuery.devicePixelRatioOf(context),
+                                  child: _PinDots(
+                                    length: length,
+                                    filled: filled,
+                                    error: error,
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+                                SizedBox(
+                                  height: 18,
+                                  child: message == null
+                                      ? null
+                                      : Semantics(
+                                          liveRegion: true,
+                                          child: Text(
+                                            message,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            textAlign: TextAlign.center,
+                                            style: ShellText.base.copyWith(
+                                              color: messageColor,
+                                              fontSize: 13.5,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
                                         ),
-                                      ),
-                                    ),
+                                ),
+                              ],
                             ),
-                            Spacer(flex: compact ? 1 : 2),
-                            _PinPad(
-                              keySize: keySize,
-                              enabled: enabled,
-                              onDigit: onDigit,
-                              leading:
-                                  leading?.call(keySize) ??
-                                  SizedBox.square(dimension: keySize),
-                              trailing: trailing(keySize),
-                            ),
-                            SizedBox(height: compact ? 10 : 22),
-                            ?link,
-                            SizedBox(height: compact ? 4 : 10),
-                          ],
-                        );
-                      },
-                    ),
+                          ),
+                          Spacer(flex: compact ? 1 : 2),
+                          _PinPad(
+                            keySize: keySize,
+                            reveal: reveal,
+                            rise: rise,
+                            scrim: scrim,
+                            enabled: enabled,
+                            onDigit: onDigit,
+                            leading:
+                                leading?.call(keySize) ??
+                                SizedBox.square(dimension: keySize),
+                            trailing: trailing(keySize),
+                          ),
+                          SizedBox(height: compact ? 10 : 22),
+                          if (link case final link?)
+                            FadeSnapshot(opacity: reveal, child: link),
+                          SizedBox(height: compact ? 4 : 10),
+                        ],
+                      );
+                    },
                   ),
                 ),
               ),
@@ -915,9 +926,15 @@ class _PinDotPainter extends CustomPainter {
       oldDelegate.ink != ink;
 }
 
+/// The keys' glass is drawn from the lock backdrop's cached frost, beneath
+/// a snapshot of their labels. A live glass filter shows nothing inside the
+/// fading snapshot, and would appear only once the stage stopped fading.
 class _PinPad extends StatelessWidget {
   const _PinPad({
     required this.keySize,
+    required this.reveal,
+    required this.rise,
+    required this.scrim,
     required this.enabled,
     required this.onDigit,
     required this.leading,
@@ -925,6 +942,11 @@ class _PinPad extends StatelessWidget {
   });
 
   final double keySize;
+  final Animation<double> reveal;
+  final Animation<Offset> rise;
+
+  /// The stage's scrim beneath the keys, at full reveal.
+  final Color scrim;
   final bool enabled;
   final ValueChanged<int> onDigit;
   final Widget leading;
@@ -943,40 +965,100 @@ class _PinPad extends StatelessWidget {
     'WXYZ',
   ];
 
-  @override
-  Widget build(BuildContext context) {
-    final columnGap = keySize * 0.36;
-    final rowGap = keySize * 0.2;
-    Widget digit(int value) => _PinDigitKey(
-      size: keySize,
-      digit: value,
-      letters: _letters[value],
-      enabled: enabled,
-      onPressed: () => onDigit(value),
-    );
-    Widget row(List<Widget> keys) => Row(
+  /// Digits by slot, row by row; the empty slots hold [leading] and
+  /// [trailing].
+  /// The keys' glass depth, of their diameter: a rim around a flat face.
+  static const double _glassDepth = 0.14;
+
+  static const _slots = <int?>[1, 2, 3, 4, 5, 6, 7, 8, 9, null, 0, null];
+
+  Widget _grid(Widget Function(int slot) key) {
+    final columnGap = keySize * 0.3;
+    final rowGap = keySize * 0.18;
+    Widget row(int first) => Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        keys[0],
+        key(first),
         SizedBox(width: columnGap),
-        keys[1],
+        key(first + 1),
         SizedBox(width: columnGap),
-        keys[2],
+        key(first + 2),
       ],
     );
-    return RepaintBoundary(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          row([digit(1), digit(2), digit(3)]),
-          SizedBox(height: rowGap),
-          row([digit(4), digit(5), digit(6)]),
-          SizedBox(height: rowGap),
-          row([digit(7), digit(8), digit(9)]),
-          SizedBox(height: rowGap),
-          row([leading, digit(0), trailing]),
-        ],
-      ),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        row(0),
+        SizedBox(height: rowGap),
+        row(3),
+        SizedBox(height: rowGap),
+        row(6),
+        SizedBox(height: rowGap),
+        row(9),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = ShellTheme.of(context);
+    final glass =
+        theme.effectivePanelOpacity < 1.0 &&
+        WindowBackdropCache.maybeOf(context) != null;
+    final keys = _grid((slot) {
+      final digit = _slots[slot];
+      if (digit == null) return slot == 9 ? leading : trailing;
+      return _PinDigitKey(
+        size: keySize,
+        digit: digit,
+        letters: _letters[digit],
+        enabled: enabled,
+        glass: glass,
+        onPressed: () => onDigit(digit),
+      );
+    });
+    if (!glass) {
+      return FadeSnapshot(opacity: reveal, child: keys);
+    }
+    final radius = BorderRadius.circular(keySize / 2);
+    final shading = theme.windowGlassShading;
+    final keyGlass = shading?.withThickness(
+      math.min(shading.thickness, keySize * _glassDepth),
+    );
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        WindowBackdropMotion(
+          motion: rise,
+          child: Builder(
+            builder: (context) {
+              final moving = WindowBackdropCache.maybeOf(context)!;
+              // The keys sit over the stage's scrim, which fades in with them.
+              final cache = WindowBackdropCache(
+                backdrop: moving.backdrop,
+                motion: moving.motion,
+                overlayColor: scrim,
+                overlayOpacity: reveal,
+                child: const SizedBox.shrink(),
+              );
+              return _grid(
+                (slot) => SizedBox.square(
+                  dimension: keySize,
+                  child: _slots[slot] == null
+                      ? null
+                      : WindowBackdropSlice(
+                          cache: cache,
+                          borderRadius: radius,
+                          glass: keyGlass,
+                          opacity: reveal,
+                        ),
+                ),
+              );
+            },
+          ),
+        ),
+        FadeSnapshot(opacity: reveal, child: keys),
+      ],
     );
   }
 }
@@ -1063,6 +1145,7 @@ class _PinDigitKey extends StatelessWidget {
     required this.digit,
     required this.letters,
     required this.enabled,
+    required this.glass,
     required this.onPressed,
   });
 
@@ -1070,6 +1153,9 @@ class _PinDigitKey extends StatelessWidget {
   final int digit;
   final String letters;
   final bool enabled;
+
+  /// The pad draws this key's glass beneath it; the key adds only the press.
+  final bool glass;
   final VoidCallback onPressed;
 
   @override
@@ -1086,9 +1172,11 @@ class _PinDigitKey extends StatelessWidget {
         painter: _PinKeyFillPainter(
           press: press,
           rest: ShellMediaColors.lightForeground.withValues(
-            alpha: enabled ? 0.11 : 0.06,
+            alpha: glass ? 0 : (enabled ? 0.11 : 0.06),
           ),
-          pressed: ShellMediaColors.lightForeground.withValues(alpha: 0.32),
+          pressed: ShellMediaColors.lightForeground.withValues(
+            alpha: glass ? 0.24 : 0.32,
+          ),
         ),
         child: Center(
           child: Column(

@@ -10,6 +10,7 @@ import 'dart:ui' show ImageFilter, TileMode;
 
 import 'package:flutter/material.dart' show Icons;
 import 'package:flutter/foundation.dart' show ValueListenable;
+import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
@@ -78,6 +79,12 @@ class _LockScreenLayerState extends ConsumerState<LockScreenLayer>
     with SingleTickerProviderStateMixin {
   late final AnimationController _entrance;
 
+  /// The lock backdrop frosted once: the PIN keys draw their glass from it,
+  /// so the glass fades in with the keys instead of appearing at the end.
+  final _glass = FrostedBackdropCapture(
+    frame: GlobalKey(debugLabel: 'lock scene'),
+  );
+
   @override
   void initState() {
     super.initState();
@@ -102,8 +109,18 @@ class _LockScreenLayerState extends ConsumerState<LockScreenLayer>
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _glass.configure(
+      theme: context.shellTheme,
+      pixelRatio: math.min(MediaQuery.devicePixelRatioOf(context), 1),
+    );
+  }
+
+  @override
   void dispose() {
     _entrance.dispose();
+    _glass.dispose();
     super.dispose();
   }
 
@@ -139,16 +156,25 @@ class _LockScreenLayerState extends ConsumerState<LockScreenLayer>
               outputs.length > 1;
           late final Widget scene;
           if (outputs.length <= 1) {
-            scene = Stack(
-              fit: StackFit.expand,
-              children: [
-                const _LockBackdrop(),
-                _LockScreenPane(
-                  unlockProgress: widget.unlockProgress,
-                  authenticationEnabled: true,
-                  desktop: desktop,
-                ),
-              ],
+            scene = ValueListenableBuilder<FrostedBackdrop?>(
+              valueListenable: _glass,
+              builder: (context, backdrop, scene) => WindowBackdropCache(
+                backdrop: backdrop,
+                motion: const AlwaysStoppedAnimation<double>(0),
+                child: scene!,
+              ),
+              child: Stack(
+                key: _glass.frame,
+                fit: StackFit.expand,
+                children: [
+                  _LockBackdrop(onPainted: desktop ? null : _glass.painted),
+                  _LockScreenPane(
+                    unlockProgress: widget.unlockProgress,
+                    authenticationEnabled: true,
+                    desktop: desktop,
+                  ),
+                ],
+              ),
             );
           } else {
             final authenticationMonitorId = layout?.mainOutput?.monitorId;

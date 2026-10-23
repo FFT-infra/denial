@@ -272,7 +272,8 @@ class _LockScreenPaneState extends ConsumerState<_LockScreenPane>
       builder: (context, constraints) {
         final size = constraints.biggest;
         _height = size.height;
-        // Mobile opens only by swiping up; a stray touch leaves the clock.
+        // Mobile opens only by swiping up; a stray touch leaves the clock,
+        // and a double tap turns the screen off, as on home.
         // The face can be caught again while it is still sliding home.
         final allowsSwipe =
             widget.authenticationEnabled && !widget.desktop && !credentialShown;
@@ -286,6 +287,7 @@ class _LockScreenPaneState extends ConsumerState<_LockScreenPane>
           onTap: widget.authenticationEnabled && widget.desktop
               ? _showAuthentication
               : null,
+          onDoubleTap: allowsSwipe ? _blankDisplays : null,
           onPanStart: allowsSwipe ? (_) => _beginGesture() : null,
           onPanUpdate: allowsSwipe
               ? (details) => _updateGesture(details.delta, size.height)
@@ -450,6 +452,8 @@ class _LockScreenPaneState extends ConsumerState<_LockScreenPane>
   double _dragDistance(double height) {
     return math.max(240.0, math.min(380.0, height * 0.34));
   }
+
+  void _blankDisplays() => ref.read(denialBridgeProvider).requestDpmsOff();
 
   void _beginGesture() {
     if (widget.unlockProgress.value > 0.0) {

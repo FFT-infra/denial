@@ -803,6 +803,27 @@ class WindowGlassShading {
   final double rimFalloff;
   final double oppositeLightStrength;
 
+  /// The same material at another depth, for a control much smaller than a
+  /// window: at a window's depth its bevel would span the whole control and
+  /// refract the backdrop from well beyond it.
+  WindowGlassShading withThickness(double thickness) => WindowGlassShading(
+    thickness: thickness,
+    refraction: refraction,
+    dispersion: dispersion,
+    saturation: saturation,
+    tint: tint,
+    tintStrength: tintStrength,
+    brightness: brightness,
+    lightAngle: lightAngle,
+    lightIntensity: lightIntensity,
+    edgeStrength: edgeStrength,
+    bevelWidthScale: bevelWidthScale,
+    refractionDepthScale: refractionDepthScale,
+    rimWidth: rimWidth,
+    rimFalloff: rimFalloff,
+    oppositeLightStrength: oppositeLightStrength,
+  );
+
   @override
   bool operator ==(Object other) =>
       other is WindowGlassShading &&

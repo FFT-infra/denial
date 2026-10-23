@@ -1,17 +1,38 @@
 part of 'lock_screen_layer.dart';
 
-class _LockBackdrop extends ConsumerWidget {
-  const _LockBackdrop({this.output});
+class _LockBackdrop extends ConsumerStatefulWidget {
+  const _LockBackdrop({this.output, this.onPainted});
 
   final DisplayOutput? output;
 
+  /// Reports the whole backdrop, blur and dim included, after it or the
+  /// wallpaper inside it repaints.
+  final ValueChanged<RenderRepaintBoundary>? onPainted;
+
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_LockBackdrop> createState() => _LockBackdropState();
+}
+
+class _LockBackdropState extends ConsumerState<_LockBackdrop> {
+  final _boundary = GlobalKey();
+
+  /// The wallpaper repaints within its own boundary, which leaves this one's
+  /// paint untouched.
+  void _wallpaperPainted(RenderRepaintBoundary _) {
+    final boundary = _boundary.currentContext?.findRenderObject();
+    if (boundary is RenderRepaintBoundary) widget.onPainted?.call(boundary);
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final settings = ref.watch(
       shellSettingsProvider.select((value) => value.lockScreen),
     );
-    final output = this.output;
-    return RepaintBoundary(
+    final output = widget.output;
+    final onPainted = widget.onPainted;
+    return _PaintedBoundary(
+      key: _boundary,
+      onPainted: onPainted,
       child: Stack(
         fit: StackFit.expand,
         children: [
@@ -35,7 +56,9 @@ class _LockBackdrop extends ConsumerWidget {
                   tileMode: TileMode.clamp,
                 ),
                 child: output == null
-                    ? const ShellWallpaper()
+                    ? ShellWallpaper(
+                        onPainted: onPainted == null ? null : _wallpaperPainted,
+                      )
                     : ShellOutputWallpaper(output: output),
               ),
             ),
@@ -49,6 +72,31 @@ class _LockBackdrop extends ConsumerWidget {
         ],
       ),
     );
+  }
+}
+
+class _PaintedBoundary extends SingleChildRenderObjectWidget {
+  const _PaintedBoundary({super.key, this.onPainted, super.child});
+
+  final ValueChanged<RenderRepaintBoundary>? onPainted;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) =>
+      _RenderPaintedBoundary()..onPainted = onPainted;
+
+  @override
+  void updateRenderObject(BuildContext context, RenderObject renderObject) {
+    (renderObject as _RenderPaintedBoundary).onPainted = onPainted;
+  }
+}
+
+class _RenderPaintedBoundary extends RenderRepaintBoundary {
+  ValueChanged<RenderRepaintBoundary>? onPainted;
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    super.paint(context, offset);
+    onPainted?.call(this);
   }
 }
 
