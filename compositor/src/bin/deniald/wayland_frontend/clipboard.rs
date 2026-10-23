@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
 
-use smithay::backend::input::{ButtonState, KeyState};
+use smithay::backend::input::{ButtonState, InputTime, KeyState};
 use smithay::input::dnd::{DnDGrab, DndAction, Source, SourceMetadata};
 use smithay::input::keyboard::{FilterResult, Keycode};
 use smithay::input::pointer::{ButtonEvent, Focus, GrabStartData};
@@ -529,7 +529,7 @@ fn paste_into_focused_client(state: &mut RuntimeState) {
         let frontend = state.wayland.as_ref().expect("missing Wayland frontend");
         (
             frontend.seat.get_keyboard().expect("seat has no keyboard"),
-            frontend.start_time.elapsed().as_millis() as u32,
+            InputTime::now(),
         )
     };
     if keyboard.current_focus().is_none() {

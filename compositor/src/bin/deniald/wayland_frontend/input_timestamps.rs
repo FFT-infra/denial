@@ -1,11 +1,13 @@
 //! `zwp_input_timestamps_manager_v1`: input event times in nanoseconds.
 //!
 //! `wl_keyboard`, `wl_pointer` and `wl_touch` carry 32-bit milliseconds.
-//! libinput gives Denial microseconds on `CLOCK_MONOTONIC`; a subscribed
-//! client receives that time in a `timestamp` event right before the input
-//! event it belongs to. Smithay writes the input events itself, so the seat
-//! focus targets in `focus.rs` send the timestamp just before forwarding.
+//! Smithay's events keep libinput's microseconds on `CLOCK_MONOTONIC`; a
+//! subscribed client receives that time in a `timestamp` event right before
+//! the input event it belongs to. Smithay writes the input events itself, so
+//! the seat focus targets in `focus.rs` send the timestamp just before
+//! forwarding.
 
+use smithay::backend::input::InputTime;
 use smithay::input::Seat;
 use smithay::reexports::wayland_protocols::wp::input_timestamps::zv1::server::{
     zwp_input_timestamps_manager_v1::{self, ZwpInputTimestampsManagerV1},
@@ -23,8 +25,6 @@ use super::super::RuntimeState;
 pub(super) struct InputTimestamps {
     _global: GlobalId,
     subscriptions: Vec<Subscription>,
-    /// libinput time of the event being dispatched, in microseconds.
-    event_usec: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -47,13 +47,7 @@ impl InputTimestamps {
         Self {
             _global: display.create_global::<RuntimeState, ZwpInputTimestampsManagerV1, _>(1, ()),
             subscriptions: Vec::new(),
-            event_usec: None,
         }
-    }
-
-    /// Mark the libinput event whose time the next input events carry.
-    pub(super) fn begin_event(&mut self, usec: Option<u64>) {
-        self.event_usec = usec;
     }
 
     fn subscribe(&mut self, resource: ZwpInputTimestampsV1, device: ObjectId) {
@@ -67,16 +61,10 @@ impl InputTimestamps {
             .retain(|subscription| subscription.resource.id() != *resource);
     }
 
-    /// Send the time of the event stamped `millis` to every subscription on
-    /// `devices`, the device objects Smithay is about to write it to.
-    fn send(&self, devices: impl Iterator<Item = ObjectId>, millis: u32) {
-        if self.subscriptions.is_empty() {
-            return;
-        }
-        let Some(usec) = full_time(self.event_usec, millis) else {
-            return;
-        };
-        let (seconds_hi, seconds_lo, nanos) = split(usec);
+    /// Send `time` to every subscription on `devices`, the device objects
+    /// Smithay is about to write the event to.
+    fn send(&self, devices: impl Iterator<Item = ObjectId>, time: InputTime) {
+        let (seconds_hi, seconds_lo, nanos) = split(time.micros());
         for device in devices {
             for subscription in &self.subscriptions {
                 if subscription.device == device {
@@ -87,15 +75,6 @@ impl InputTimestamps {
             }
         }
     }
-}
-
-/// The full time of an input event stamped `millis`, when it is the libinput
-/// event being dispatched (`event_usec`). A compositor-made event (a reset, a
-/// replayed gesture) keeps its millisecond time alone.
-fn full_time(event_usec: Option<u64>, millis: u32) -> Option<u64> {
-    // Smithay's millisecond time is the libinput time truncated to u32.
-    #[allow(clippy::cast_possible_truncation)]
-    event_usec.filter(|usec| (usec / 1_000) as u32 == millis)
 }
 
 /// The protocol's `tv_sec_hi`, `tv_sec_lo` and `tv_nsec` for `usec`.
@@ -109,20 +88,21 @@ fn split(usec: u64) -> (u32, u32, u32) {
     )
 }
 
-/// Send the full time of the event stamped `millis` that Smithay is about to
-/// write to `surface`'s client through `device`.
+/// Send the time of the event Smithay is about to write to `surface`'s client
+/// through `device`.
 pub(super) fn send(
     state: &RuntimeState,
     seat: &Seat<RuntimeState>,
     device: InputDevice,
     surface: &WlSurface,
-    millis: u32,
+    time: InputTime,
 ) {
     let Some(frontend) = state.wayland.as_ref() else {
         return;
     };
     let timestamps = &frontend.input_timestamps;
-    if timestamps.subscriptions.is_empty() {
+    // Denial's own synthetic events carry no input time.
+    if timestamps.subscriptions.is_empty() || time.micros() == 0 {
         return;
     }
     let Some(client) = surface.client() else {
@@ -131,17 +111,17 @@ pub(super) fn send(
     match device {
         InputDevice::Keyboard => {
             if let Some(keyboard) = seat.get_keyboard() {
-                timestamps.send(keyboard.client_keyboards(&client).map(|k| k.id()), millis);
+                timestamps.send(keyboard.client_keyboards(&client).map(|k| k.id()), time);
             }
         }
         InputDevice::Pointer => {
             if let Some(pointer) = seat.get_pointer() {
-                timestamps.send(pointer.client_pointers(&client).map(|p| p.id()), millis);
+                timestamps.send(pointer.client_pointers(&client).map(|p| p.id()), time);
             }
         }
         InputDevice::Touch => {
             if let Some(touch) = seat.get_touch() {
-                timestamps.send(touch.client_touch(&client).map(|t| t.id()), millis);
+                timestamps.send(touch.client_touch(&client).map(|t| t.id()), time);
             }
         }
     }
@@ -225,18 +205,5 @@ mod tests {
             split(((1_u64 << 32) + 7) * 1_000_000 + 999_999),
             (1, 7, 999_999_000)
         );
-    }
-
-    #[test]
-    fn only_the_dispatched_libinput_event_has_a_full_time() {
-        assert_eq!(full_time(None, 35_473_078), None);
-        assert_eq!(
-            full_time(Some(35_473_078_386), 35_473_078),
-            Some(35_473_078_386)
-        );
-        assert_eq!(full_time(Some(35_473_078_386), 35_473_079), None);
-        // Millisecond times wrap after 49.7 days; the low 32 bits still match.
-        let late = ((1_u64 << 32) + 5) * 1_000 + 250;
-        assert_eq!(full_time(Some(late), 5), Some(late));
     }
 }

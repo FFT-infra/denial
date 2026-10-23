@@ -897,6 +897,7 @@ impl WaylandFrontend {
                     .and_then(|buffer| get_dmabuf(buffer).ok())
                     .cloned();
                 let buffer_guard = dmabuf.as_ref().and_then(|_| renderer_buffer.cloned());
+                let release = crate::client_release::current(states);
                 let (texture_id, width, height) = if let (Some(dmabuf), Some(buffer_guard)) =
                     (dmabuf, buffer_guard)
                 {
@@ -914,6 +915,7 @@ impl WaylandFrontend {
                         texture_id,
                         dmabuf,
                         buffer_guard,
+                        release,
                         revision,
                         expects_sample,
                     ));
@@ -1024,6 +1026,7 @@ impl WaylandFrontend {
             let buffer_guard = dmabuf.as_ref().and_then(|_| renderer_buffer.cloned());
             (renderable, dmabuf.zip(buffer_guard))
         })?;
+        let release = with_states(surface, crate::client_release::current);
         if !renderable {
             return None;
         }
@@ -1039,6 +1042,7 @@ impl WaylandFrontend {
                     texture_id,
                     dmabuf,
                     buffer_guard,
+                    release,
                     revision,
                     expects_sample,
                 )

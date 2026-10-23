@@ -1,12 +1,12 @@
 //! Cancellation-safe touch ownership for the pinned Smithay touch implementation.
 //!
-//! Smithay 812bd33 ties cancellation to an unflushed frame, and skips slots
+//! Smithay (through 24647fc) ties cancellation to an unflushed frame, and skips slots
 //! unchanged since that frame. Keep the cancellation recipient independently
 //! of frame bookkeeping (and of the lifetime of its first surface).
 
 use std::collections::HashSet;
 
-use smithay::backend::input::TouchSlot;
+use smithay::backend::input::{InputTime, TouchSlot};
 use smithay::input::SeatHandler;
 use smithay::input::touch::{
     DownEvent, GrabStartData, MotionEvent, OrientationEvent, ShapeEvent, TouchGrab,
@@ -156,7 +156,7 @@ impl<D: TouchCancellation + 'static> TouchGrab<D> for TouchSessionGrab<D> {
                     slot: *slot,
                     location: self.start.location,
                     serial: 0.into(),
-                    time: 0,
+                    time: InputTime::from_micros(0),
                 },
             );
         }
@@ -259,6 +259,7 @@ mod tests {
             &mut self.seats
         }
     }
+    impl smithay::wayland::pointer_constraints::PointerConstraintsHandler for TestState {}
     impl CompositorHandler for TestState {
         fn compositor_state(&mut self) -> &mut CompositorState {
             unreachable!()
@@ -304,7 +305,7 @@ mod tests {
                 slot: Some(slot as u32).into(),
                 location: (10.0, 10.0).into(),
                 serial: 1.into(),
-                time: 1,
+                time: InputTime::from_millis(1),
             },
         );
     }
@@ -314,7 +315,7 @@ mod tests {
             &UpEvent {
                 slot: Some(slot as u32).into(),
                 serial: 2.into(),
-                time: 2,
+                time: InputTime::from_millis(2),
             },
         );
     }

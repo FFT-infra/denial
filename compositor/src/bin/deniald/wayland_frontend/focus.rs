@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use smithay::backend::input::KeyState;
+use smithay::backend::input::{InputTime, KeyState};
 use smithay::desktop::PopupKind;
 use smithay::input::dnd::{DndFocus, Source};
 use smithay::input::keyboard::{KeyboardHandle, KeyboardTarget, KeysymHandle, ModifiersState};
@@ -157,7 +157,7 @@ impl KeyboardTarget<RuntimeState> for KeyboardFocusTarget {
         key: KeysymHandle<'_>,
         state: KeyState,
         serial: Serial,
-        time: u32,
+        time: InputTime,
     ) {
         match self {
             Self::Wayland(surface) => {
@@ -346,7 +346,13 @@ impl PointerTarget<RuntimeState> for ClientSurface {
         PointerTarget::gesture_hold_end(&self.0, seat, data, event);
     }
 
-    fn leave(&self, seat: &Seat<RuntimeState>, data: &mut RuntimeState, serial: Serial, time: u32) {
+    fn leave(
+        &self,
+        seat: &Seat<RuntimeState>,
+        data: &mut RuntimeState,
+        serial: Serial,
+        time: InputTime,
+    ) {
         PointerTarget::leave(&self.0, seat, data, serial, time);
     }
 }
@@ -418,7 +424,7 @@ impl DndFocus<RuntimeState> for ClientSurface {
         offer: Option<&mut Self::OfferData<S>>,
         seat: &Seat<RuntimeState>,
         location: Point<f64, Logical>,
-        time: u32,
+        time: InputTime,
     ) {
         DndFocus::motion(&self.0, data, offer, seat, location, time);
     }

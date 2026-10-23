@@ -137,11 +137,11 @@ pub(super) fn process_flutter_input_event(
                 let relative = RelativeMotionEvent {
                     delta,
                     delta_unaccel: Point::from((delta_unaccel.x / scale, delta_unaccel.y / scale)),
-                    utime: motion.time_usec(),
+                    time: motion.time(),
                 };
                 (position, target, relative)
             };
-            route_pointer_motion(state, position, target, motion.time_msec(), Some(relative))
+            route_pointer_motion(state, position, target, motion.time(), Some(relative))
         }
         InputEvent::PointerMotionAbsolute { event: motion, .. } => {
             let flutter_captured = state.flutter_input.pointer_captured();
@@ -160,14 +160,11 @@ pub(super) fn process_flutter_input_event(
                     };
                 (position, target)
             };
-            route_pointer_motion(state, position, target, motion.time_msec(), None)
+            route_pointer_motion(state, position, target, motion.time(), None)
         }
-        InputEvent::PointerButton { event: button, .. } => route_pointer_button(
-            state,
-            button.button_code(),
-            button.state(),
-            button.time_msec(),
-        ),
+        InputEvent::PointerButton { event: button, .. } => {
+            route_pointer_button(state, button.button_code(), button.state(), button.time())
+        }
         InputEvent::PointerAxis { event: axis, .. } => {
             state
                 .wayland
@@ -344,7 +341,7 @@ pub(super) fn process_flutter_input_event(
                             slot: touch_event.slot(),
                             location,
                             serial,
-                            time: touch_event.time_msec(),
+                            time: touch_event.time(),
                         },
                     );
                     let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
@@ -355,7 +352,7 @@ pub(super) fn process_flutter_input_event(
                             &layout.edge_swipe_regions,
                             scene_position,
                             position,
-                            touch_event.time(),
+                            touch_event.time().micros(),
                         )
                     });
                     if let Some(candidate) = candidate {
@@ -385,7 +382,7 @@ pub(super) fn process_flutter_input_event(
                 let update = state.input_deck.screen_gestures.motion(
                     slot,
                     (position.x, position.y),
-                    touch_event.time(),
+                    touch_event.time().micros(),
                 );
                 let consume = update.consume;
                 let changed = super::super::input_deck::apply_screen_gesture_update(state, update);
@@ -401,7 +398,7 @@ pub(super) fn process_flutter_input_event(
                     .as_mut()
                     .expect("missing Wayland frontend")
                     .touch_gestures
-                    .motion_at(slot, position, touch_event.time())
+                    .motion_at(slot, position, touch_event.time().micros())
             };
             let gesture_consumed = gesture.consume;
             let flush_clients = apply_touch_gesture_update(state, gesture);
@@ -427,7 +424,7 @@ pub(super) fn process_flutter_input_event(
                 );
                 return false;
             }
-            if claim_edge_swipe(state, slot, position, touch_event.time()) {
+            if claim_edge_swipe(state, slot, position, touch_event.time().micros()) {
                 return true;
             }
             let focus = {
@@ -451,7 +448,7 @@ pub(super) fn process_flutter_input_event(
                     &TouchMotionEvent {
                         slot: touch_event.slot(),
                         location,
-                        time: touch_event.time_msec(),
+                        time: touch_event.time(),
                     },
                 );
                 state
@@ -476,10 +473,11 @@ pub(super) fn process_flutter_input_event(
                 .remove(&slot);
             let deck_contact = state.input_deck.screen_gestures.contains(slot);
             if deck_contact {
-                let update = state
-                    .input_deck
-                    .screen_gestures
-                    .up(slot, false, touch_event.time());
+                let update =
+                    state
+                        .input_deck
+                        .screen_gestures
+                        .up(slot, false, touch_event.time().micros());
                 let consume = update.consume;
                 let changed = super::super::input_deck::apply_screen_gesture_update(state, update);
                 if consume {
@@ -494,7 +492,7 @@ pub(super) fn process_flutter_input_event(
                     .as_mut()
                     .expect("missing Wayland frontend")
                     .touch_gestures
-                    .up_at(slot, touch_event.time())
+                    .up_at(slot, touch_event.time().micros())
             };
             let gesture_consumed = gesture.consume;
             let flush_clients = apply_touch_gesture_update(state, gesture);
@@ -531,7 +529,7 @@ pub(super) fn process_flutter_input_event(
                     &UpEvent {
                         slot: touch_event.slot(),
                         serial: SERIAL_COUNTER.next_serial(),
-                        time: touch_event.time_msec(),
+                        time: touch_event.time(),
                     },
                 );
                 state
@@ -574,10 +572,11 @@ pub(super) fn process_flutter_input_event(
                 .remove(&slot);
             let deck_contact = state.input_deck.screen_gestures.contains(slot);
             if deck_contact {
-                let update = state
-                    .input_deck
-                    .screen_gestures
-                    .up(slot, true, touch_event.time());
+                let update =
+                    state
+                        .input_deck
+                        .screen_gestures
+                        .up(slot, true, touch_event.time().micros());
                 let consume = update.consume;
                 let changed = super::super::input_deck::apply_screen_gesture_update(state, update);
                 if consume {
@@ -592,7 +591,7 @@ pub(super) fn process_flutter_input_event(
                     .as_mut()
                     .expect("missing Wayland frontend")
                     .touch_gestures
-                    .cancel_at(slot, touch_event.time())
+                    .cancel_at(slot, touch_event.time().micros())
             };
             let gesture_consumed = gesture.consume;
             let flush_clients = apply_touch_gesture_update(state, gesture);
@@ -664,7 +663,7 @@ pub(in super::super) fn route_pointer_motion(
     state: &mut RuntimeState,
     position: Point<f64, Logical>,
     target: PointerMotionTarget,
-    time: u32,
+    time: InputTime,
     relative: Option<RelativeMotionEvent>,
 ) -> bool {
     let PointerMotionTarget {
@@ -790,7 +789,7 @@ pub(crate) fn reconcile_flutter_pointer_route(state: &mut RuntimeState) {
             position,
             target,
             frontend.routed_pointer_target,
-            frontend.start_time.elapsed().as_millis() as u32,
+            InputTime::now(),
         )
     };
     if flutter_pointer_endpoint_is_synchronized(
@@ -943,7 +942,7 @@ pub(super) fn route_pointer_axis<E: PointerAxisEvent<LibinputInputBackend>>(
     );
     let vertical =
         logical_axis_scroll_delta(source, vertical_amount, vertical_v120, scroll_speed_factor);
-    let mut frame = AxisFrame::new(event.time_msec()).source(source);
+    let mut frame = AxisFrame::new(event.time()).source(source);
     if horizontal != 0.0 {
         frame = frame.value(Axis::Horizontal, horizontal);
         if let Some(v120) = horizontal_v120 {
@@ -986,7 +985,7 @@ fn dismiss_foreign_popup_grab(
     pointer: &PointerHandle<RuntimeState>,
     surface: &WlSurface,
     serial: Serial,
-    time: u32,
+    time: InputTime,
 ) -> bool {
     let Some(mut grab) = state
         .wayland
@@ -1380,7 +1379,7 @@ pub(super) fn process_wayland_keyboard_transition(
     state: &mut RuntimeState,
     keycode: Keycode,
     key_state: KeyState,
-    time: u32,
+    time: InputTime,
 ) {
     #[cfg(not(feature = "flutter"))]
     focus_exclusive_layer_for_keyboard_event(state);
@@ -1424,7 +1423,7 @@ pub(in super::super) fn route_pointer_button(
     state: &mut RuntimeState,
     button_code: u32,
     button_state: ButtonState,
-    time: u32,
+    time: InputTime,
 ) -> bool {
     let secure_locked = state.secure_session_locked();
     let serial = SERIAL_COUNTER.next_serial();

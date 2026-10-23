@@ -236,7 +236,7 @@ impl InputQueue {
             SmithayInputEvent::TouchDown { event, .. } => {
                 let position = event.position_transformed(self.size);
                 let device = touch_device(event.slot());
-                let sampled_at = Some(event.time());
+                let sampled_at = Some(event.time().micros());
                 self.touch_positions
                     .insert(device, (position.x, position.y));
                 self.push_touch(
@@ -267,12 +267,12 @@ impl InputQueue {
                     position.y,
                     device,
                     true,
-                    Some(event.time()),
+                    Some(event.time().micros()),
                 );
             }
             SmithayInputEvent::TouchUp { event, .. } => {
                 let device = touch_device(event.slot());
-                let sampled_at = Some(event.time());
+                let sampled_at = Some(event.time().micros());
                 let (x, y) = self.touch_positions.remove(&device).unwrap_or((0.0, 0.0));
                 self.push_touch(
                     sys::FlutterPointerPhase_kUp,
@@ -293,7 +293,7 @@ impl InputQueue {
             }
             SmithayInputEvent::TouchCancel { event, .. } => {
                 let device = touch_device(event.slot());
-                let sampled_at = Some(event.time());
+                let sampled_at = Some(event.time().micros());
                 let (x, y) = self.touch_positions.remove(&device).unwrap_or((0.0, 0.0));
                 self.push_touch(
                     sys::FlutterPointerPhase_kCancel,
@@ -356,7 +356,7 @@ impl InputQueue {
         match event {
             SmithayInputEvent::TouchDown { event, .. } => {
                 let device = touch_device(event.slot());
-                let sampled_at = Some(event.time());
+                let sampled_at = Some(event.time().micros());
                 self.touch_positions.insert(device, (x, y));
                 self.push_touch(
                     sys::FlutterPointerPhase_kAdd,
@@ -384,7 +384,7 @@ impl InputQueue {
                     y,
                     device,
                     true,
-                    Some(event.time()),
+                    Some(event.time().micros()),
                 );
             }
             _ => debug_assert!(false, "touch position supplied for a non-positional event"),

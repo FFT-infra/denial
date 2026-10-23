@@ -1313,7 +1313,11 @@ impl CompositorHandler for RuntimeState {
                 frontend.pending_shm_snapshots.remove(&surface.id());
             }
         }
+        let attached_release = crate::client_release::take_attached(surface);
         on_commit_buffer_handler::<Self>(surface);
+        if buffer_attached || buffer_removed {
+            crate::client_release::replace(surface, attached_release);
+        }
         signal_unclaimed_release_point(surface);
         #[cfg(feature = "flutter")]
         if matches!(
@@ -1850,6 +1854,8 @@ impl SeatHandler for RuntimeState {
 // Keep tablet-tool cursor requests on the same software-cursor path used by
 // client pointer cursors so Flutter can publish them with the scene.
 impl TabletSeatHandler for RuntimeState {
+    type ToolFocus = WlSurface;
+
     fn tablet_tool_image(
         &mut self,
         _tool: &smithay::backend::input::TabletToolDescriptor,
@@ -1893,16 +1899,6 @@ impl PointerConstraintsHandler for RuntimeState {
                 },
             );
         }
-    }
-
-    fn remove_constraint(&mut self, _surface: &WlSurface, _pointer: &PointerHandle<Self>) {}
-
-    fn cursor_position_hint(
-        &mut self,
-        _surface: &WlSurface,
-        _pointer: &PointerHandle<Self>,
-        _location: Point<f64, Logical>,
-    ) {
     }
 }
 

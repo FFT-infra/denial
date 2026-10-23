@@ -9,11 +9,11 @@ use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use smithay::backend::input::{KeyState, Keycode};
+use smithay::backend::input::{InputTime, KeyState, Keycode};
 use smithay::input::Seat;
 use smithay::input::keyboard::{
-    FilterResult, KeyboardHandle, KeyboardTarget, KeymapFile, KeysymHandle, ModifiersState,
-    SerializedMods, xkb,
+    FilterResult, KeyboardHandle, KeyboardSource, KeyboardTarget, KeymapFile, KeysymHandle,
+    ModifiersState, SerializedMods, xkb,
 };
 use smithay::reexports::wayland_protocols::wp::text_input::zv3::server::zwp_text_input_v3::{
     ChangeCause, ContentHint, ContentPurpose,
@@ -238,7 +238,7 @@ impl InputMethodKeyboardRoute {
         state: KeyState,
         modifiers: Option<ModifiersState>,
         serial: Serial,
-        time: u32,
+        time: InputTime,
     ) -> bool {
         let raw = keycode.raw().saturating_sub(XKB_KEYCODE_OFFSET);
         let mut inner = self
@@ -258,7 +258,7 @@ impl InputMethodKeyboardRoute {
             return false;
         }
         if let Some(resource) = resource {
-            resource.key(serial.into(), time, raw, state.into());
+            resource.key(serial.into(), time.millis(), raw, state.into());
             if let Some(modifiers) = modifiers {
                 let serialized = modifiers.serialized;
                 resource.modifiers(
@@ -282,12 +282,17 @@ pub(super) fn input_key<F>(
     keycode: Keycode,
     key_state: KeyState,
     serial: Serial,
-    time: u32,
+    time: InputTime,
     filter: F,
 ) where
     F: FnOnce(&mut RuntimeState, &ModifiersState, KeysymHandle<'_>) -> FilterResult<()>,
 {
-    let (filter_result, mods_changed) = keyboard.input_intercept(state, keycode, key_state, filter);
+    // None: another source already holds or released this key.
+    let Some((filter_result, mods_changed)) =
+        keyboard.input_intercept(KeyboardSource::MAIN, state, keycode, key_state, filter)
+    else {
+        return;
+    };
     if matches!(filter_result, FilterResult::Intercept(())) {
         return;
     }
@@ -310,7 +315,7 @@ pub(super) fn forward_key(
     keycode: Keycode,
     key_state: KeyState,
     serial: Serial,
-    time: u32,
+    time: InputTime,
     mods_changed: bool,
 ) {
     let modifiers = mods_changed.then(|| keyboard.modifier_state());
@@ -330,7 +335,7 @@ fn forward_virtual_key(
     state: &mut RuntimeState,
     keycode: u32,
     key_state: KeyState,
-    time: u32,
+    time: InputTime,
 ) {
     // The physical event has already updated the seat's XKB state before the
     // input method received it. Forwarding here deliberately bypasses both
@@ -986,7 +991,13 @@ impl Dispatch<ZwpVirtualKeyboardV1, VirtualKeyboardUserData> for RuntimeState {
                 }) else {
                     return;
                 };
-                forward_virtual_key(&keyboard, state, key, key_state, time);
+                forward_virtual_key(
+                    &keyboard,
+                    state,
+                    key,
+                    key_state,
+                    InputTime::from_millis(time),
+                );
             }
             zwp_virtual_keyboard_v1::Request::Modifiers {
                 mods_depressed,

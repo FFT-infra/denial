@@ -5,7 +5,7 @@ use std::ffi::OsStr;
 use denial_core::topology::OutputTransform;
 use smithay::backend::input::{
     AbsolutePositionEvent, Axis, AxisSource, ButtonState, Device, DeviceCapability, Event,
-    GestureBeginEvent, GestureEndEvent, GestureSwipeUpdateEvent, InputEvent, KeyState,
+    GestureBeginEvent, GestureEndEvent, GestureSwipeUpdateEvent, InputEvent, InputTime, KeyState,
     KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent, TouchEvent,
 };
 #[cfg(feature = "flutter")]
@@ -27,7 +27,6 @@ use smithay::input::touch::{DownEvent, MotionEvent as TouchMotionEvent, UpEvent}
 use smithay::reexports::calloop::EventLoop;
 #[cfg(feature = "flutter")]
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
-use smithay::reexports::input::event::pointer::PointerEventTrait;
 use smithay::reexports::input::{Device as LibinputDevice, Libinput, TapButtonMap};
 #[cfg(feature = "flutter")]
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
@@ -348,7 +347,7 @@ fn inject_shell_key_stroke(
     keyboard: &KeyboardHandle<RuntimeState>,
     stroke: ShellKeyStroke,
     ctrl: bool,
-    time: u32,
+    time: InputTime,
 ) -> bool {
     const XKB_KEYCODE_OFFSET: u32 = 8;
     const LEFT_CTRL: u32 = 29;
@@ -396,7 +395,7 @@ pub(super) fn inject_shell_key_transition(
     keyboard: &KeyboardHandle<RuntimeState>,
     stroke: ShellKeyStroke,
     key_state: KeyState,
-    time: u32,
+    time: InputTime,
 ) -> bool {
     const XKB_KEYCODE_OFFSET: u32 = 8;
 
@@ -447,11 +446,7 @@ pub(super) fn navigate_back(state: &mut RuntimeState, window: &smithay::desktop:
                     .map(|client| client.id())
                     == client
             });
-        (
-            keyboard,
-            frontend.start_time.elapsed().as_millis() as u32,
-            focused,
-        )
+        (keyboard, InputTime::now(), focused)
     };
     if !focused
         && !super::window_management::activate_window(state, window, SERIAL_COUNTER.next_serial())
@@ -485,7 +480,7 @@ pub(crate) fn dispatch_shell_keyboard(
         let frontend = state.wayland.as_ref().expect("missing Wayland frontend");
         (
             frontend.seat.get_keyboard().expect("seat has no keyboard"),
-            frontend.start_time.elapsed().as_millis() as u32,
+            InputTime::now(),
         )
     };
     // Do not gate the shared router on a focused Wayland surface. Flutter is a
@@ -1194,14 +1189,7 @@ pub(in super::super) fn init_libinput(
         .insert_source(backend, |event, batch, state| {
             match event {
                 InputBatchEvent::Input(event) => {
-                    let usec = event_time_usec(&event);
-                    if let Some(frontend) = state.wayland.as_mut() {
-                        frontend.input_timestamps.begin_event(usec);
-                    }
                     batch.flush_clients |= process_input_event(state, event);
-                    if let Some(frontend) = state.wayland.as_mut() {
-                        frontend.input_timestamps.begin_event(None);
-                    }
                 }
                 // libinput is independent from the Wayland client socket
                 // source. Flush after Smithay has drained the complete batch:
@@ -1238,7 +1226,7 @@ fn process_keyboard_transition(
     state: &mut RuntimeState,
     keycode: Keycode,
     key_state: KeyState,
-    time: u32,
+    time: InputTime,
 ) -> bool {
     state.note_user_activity();
     if intercept_native_escape(state, keycode.raw(), key_state) {
@@ -1441,14 +1429,16 @@ fn process_touchpad_gesture_event(
                 device.sysname(),
                 event.delta_x(),
                 event.delta_y(),
-                event.time(),
+                event.time().micros(),
             )
         }
         InputEvent::GestureSwipeEnd { event } => {
             let device = event.device();
-            state
-                .touchpad_gestures
-                .end_swipe(device.sysname(), event.cancelled(), event.time())
+            state.touchpad_gestures.end_swipe(
+                device.sysname(),
+                event.cancelled(),
+                event.time().micros(),
+            )
         }
         _ => return None,
     };
@@ -1634,22 +1624,6 @@ fn finish_horizontal_layout_scroll(
     changed
 }
 
-/// The libinput time of an event in microseconds, for `zwp_input_timestamps_v1`.
-fn event_time_usec(event: &InputEvent<LibinputInputBackend>) -> Option<u64> {
-    use smithay::backend::input::Event;
-    Some(match event {
-        InputEvent::Keyboard { event } => Event::time(event),
-        InputEvent::PointerMotion { event } => Event::time(event),
-        InputEvent::PointerMotionAbsolute { event } => Event::time(event),
-        InputEvent::PointerButton { event } => Event::time(event),
-        InputEvent::PointerAxis { event } => Event::time(event),
-        InputEvent::TouchDown { event } => Event::time(event),
-        InputEvent::TouchMotion { event } => Event::time(event),
-        InputEvent::TouchUp { event } => Event::time(event),
-        _ => return None,
-    })
-}
-
 fn process_input_event(
     state: &mut RuntimeState,
     mut event: InputEvent<LibinputInputBackend>,
@@ -1775,7 +1749,7 @@ fn process_input_event(
             state,
             key_event.key_code(),
             key_event.state(),
-            key_event.time_msec(),
+            key_event.time(),
         );
     }
 
@@ -1995,7 +1969,7 @@ fn reset_input_devices(state: &mut RuntimeState, reset: InputDeviceReset) {
     let Some(frontend) = state.wayland.as_mut() else {
         return;
     };
-    let time = frontend.start_time.elapsed().as_millis() as u32;
+    let time = InputTime::now();
     let pointer = reset
         .pointer
         .then(|| frontend.seat.get_pointer().expect("seat has no pointer"));
@@ -2309,11 +2283,7 @@ fn dispatch_flutter_repeat(state: &mut RuntimeState, keycode: u32) -> bool {
     if !owned {
         return false;
     }
-    let time = state
-        .wayland
-        .as_ref()
-        .map(|frontend| frontend.start_time.elapsed().as_millis() as u32)
-        .unwrap_or_default();
+    let time = InputTime::now();
     super::input_method::forward_key(
         state,
         &keyboard,
@@ -2883,10 +2853,7 @@ fn release_pointer_to_shell(state: &mut RuntimeState) {
             .retired_pointer_buttons
             .extend(pressed_buttons.iter().copied());
         frontend.update_cursor_image(CursorImageStatus::default_named());
-        (
-            pressed_buttons,
-            frontend.start_time.elapsed().as_millis() as u32,
-        )
+        (pressed_buttons, InputTime::now())
     };
 
     let had_grab = pointer.is_grabbed();
@@ -3005,7 +2972,7 @@ fn process_flutter_keyboard_transition(
     state: &mut RuntimeState,
     keycode: Keycode,
     key_state: KeyState,
-    time: u32,
+    time: InputTime,
 ) -> bool {
     let secure_locked = state.secure_session_locked();
     let keyboard = state

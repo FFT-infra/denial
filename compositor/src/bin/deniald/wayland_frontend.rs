@@ -12,6 +12,8 @@ use super::output_topology::ScrollingLayoutAxis;
 use smithay::backend::allocator::Buffer as AllocatorBuffer;
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::drm::{DrmDeviceFd, DrmNode};
+#[cfg(feature = "flutter")]
+use smithay::backend::input::InputTime;
 use smithay::backend::egl::EGLDevice;
 use smithay::backend::renderer::Bind;
 use smithay::backend::renderer::damage::OutputDamageTracker;
@@ -104,7 +106,8 @@ use smithay::wayland::shell::wlr_layer::{
 };
 use smithay::wayland::shm::{ShmHandler, ShmState};
 use smithay::wayland::socket::ListeningSocketSource;
-use smithay::wayland::tablet_manager::{TabletManagerState, TabletSeatHandler};
+use smithay::input::tablet::TabletSeatHandler;
+use smithay::wayland::tablet_manager::TabletManagerState;
 use smithay::wayland::viewporter::ViewporterState;
 use smithay::wayland::alpha_modifier::{AlphaModifierState, AlphaModifierSurfaceCachedState};
 use smithay::wayland::xdg_activation::XdgActivationState;
@@ -675,7 +678,7 @@ pub(super) struct WaylandFrontend {
 struct FlutterPointerPress {
     button: u32,
     serial: Serial,
-    time: u32,
+    time: InputTime,
     location: Point<f64, Logical>,
 }
 
