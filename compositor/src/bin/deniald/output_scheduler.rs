@@ -1560,9 +1560,9 @@ impl OutputScheduler {
             }
 
             let blanking = events
-                .presentation_blanking_limits
+                .presentation_timings
                 .get(&scanouts[pipeline.scanout_index].output.crtc)
-                .copied()
+                .map(|timing| timing.blanking_limit)
                 .unwrap_or_default();
             let submit_lead = kms_submit_lead(blanking, frame.request.tick.nominal_interval);
             let queued_at = frame.delivery.is_some().then(Instant::now);
@@ -1695,9 +1695,9 @@ impl OutputScheduler {
             // gets no new frame at all, and motion stalls for three refresh
             // intervals instead of one.  Then present the successor late.
             pipeline.blanking = events
-                .presentation_blanking_limits
+                .presentation_timings
                 .get(&completion.crtc)
-                .copied()
+                .map(|timing| timing.blanking_limit)
                 .unwrap_or_default();
             let submit_lead = kms_submit_lead(
                 pipeline.blanking,
@@ -1759,6 +1759,7 @@ impl OutputScheduler {
                 logical_sequence: presented.request.tick.sequence,
                 observed_at: completion.observed_at,
                 presented_at: completion.presented_at,
+                edge: completion.edge,
                 sequence: completion.sequence,
                 timeline_target: presented.request.tick.presentation_target,
             };

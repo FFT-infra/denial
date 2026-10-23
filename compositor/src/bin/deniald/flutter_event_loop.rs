@@ -566,13 +566,13 @@ fn create_frame_schedulers(
     )?;
     // Refresh this CRTC timing policy at every initial/modeset/recovery
     // scheduler boundary. Unknown CRTCs continue to reject future metadata.
-    events.presentation_blanking_limits = scanouts
+    events.presentation_timings = scanouts
         .iter()
         .filter(|s| s.powered)
         .map(|s| {
             (
                 s.output.crtc,
-                presentation_clock::mode_blanking_limit(&s.output.mode),
+                presentation_clock::mode_timing(&s.output.mode),
             )
         })
         .collect();

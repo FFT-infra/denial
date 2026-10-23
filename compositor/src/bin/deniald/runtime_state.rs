@@ -11,7 +11,7 @@ pub(super) struct RuntimeState {
     pub(super) screen_off_touch: screen_off_touch::Filter,
     pub(super) pending: HashSet<crtc::Handle>,
     pub(super) completed_page_flips: VecDeque<PageFlipCompletion>,
-    pub(super) presentation_blanking_limits: HashMap<crtc::Handle, Duration>,
+    pub(super) presentation_timings: HashMap<crtc::Handle, presentation_clock::ModeTiming>,
     pub(super) scanout_rebased: bool,
     pub(super) error: Option<String>,
     pub(super) lifecycle: LifecycleState,

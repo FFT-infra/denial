@@ -293,7 +293,7 @@ impl WaylandFrontend {
             if self.presentation.presented_sampled(
                 &entry.output,
                 sampled,
-                presented.presented_at,
+                presented.edge,
                 Instant::now().saturating_duration_since(presented.observed_at),
                 presented.sequence,
             ) {

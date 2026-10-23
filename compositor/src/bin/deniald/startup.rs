@@ -219,13 +219,13 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
                     let raw_sequence = metadata.as_ref().map(|metadata| metadata.sequence);
                     let now = monotonic_now();
                     let (clock, last_report, warned) = presentation_clocks.entry(crtc).or_default();
-                    let blanking_limit = state.presentation_blanking_limits
+                    let timing = state.presentation_timings
                         .get(&crtc).copied().unwrap_or_default();
-                    let feedback = clock.observe(now, raw_timestamp, raw_sequence, blanking_limit);
+                    let feedback = clock.observe(now, raw_timestamp, raw_sequence, timing);
                     if raw_timestamp.is_some() && feedback.timestamp.is_none() && !*warned {
                         warn!(?crtc, ?raw_timestamp, ?raw_sequence,
                             reason = feedback.timestamp_status,
-                            "invalid DRM presentation timestamp; using completion delivery without physical clock feedback");
+                            "invalid DRM presentation timestamp; clients get the refresh edge after the last physical one, the output clock gets no feedback");
                         *warned = true;
                     }
                     #[cfg(feature = "flutter")]
@@ -237,7 +237,7 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
                             ?raw_sequence, timestamp_status = feedback.timestamp_status,
                             physical_timestamp = feedback.timestamp.is_some(),
                             valid_sequence = feedback.sequence.is_some(),
-                            blanking_limit_us = blanking_limit.as_micros(),
+                            blanking_limit_us = timing.blanking_limit.as_micros(),
                             "DRM completion metadata audit");
                         *last_report = Some(delivered_at);
                     }
@@ -252,6 +252,7 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
                         crtc,
                         observed_at,
                         presented_at,
+                        edge: feedback.edge,
                         sequence,
                     });
                 }
