@@ -26,6 +26,8 @@ use super::window_layout::LayoutResizeEdges;
 #[cfg(feature = "flutter")]
 use super::wire::{WindowGeometry, WindowPlacementChange, WindowPlacementPhase};
 
+type PointerFocus = <RuntimeState as smithay::input::SeatHandler>::PointerFocus;
+
 const MAX_WINDOW_DIMENSION: i32 = 16_384;
 
 /// Applies the client-provided XDG size hints without ever constructing the
@@ -96,7 +98,7 @@ macro_rules! forward_pointer_events {
             &mut self,
             data: &mut RuntimeState,
             handle: &mut PointerInnerHandle<'_, RuntimeState>,
-            focus: Option<(WlSurface, Point<f64, Logical>)>,
+            focus: Option<(PointerFocus, Point<f64, Logical>)>,
             event: &RelativeMotionEvent,
         ) {
             handle.relative_motion(data, focus, event);
@@ -299,7 +301,7 @@ impl PointerGrab<RuntimeState> for MoveSurfaceGrab {
         &mut self,
         data: &mut RuntimeState,
         handle: &mut PointerInnerHandle<'_, RuntimeState>,
-        _focus: Option<(WlSurface, Point<f64, Logical>)>,
+        _focus: Option<(PointerFocus, Point<f64, Logical>)>,
         event: &MotionEvent,
     ) {
         handle.motion(data, None, event);
@@ -420,7 +422,7 @@ impl PointerGrab<RuntimeState> for PetMoveGrab {
         &mut self,
         data: &mut RuntimeState,
         handle: &mut PointerInnerHandle<'_, RuntimeState>,
-        _focus: Option<(WlSurface, Point<f64, Logical>)>,
+        _focus: Option<(PointerFocus, Point<f64, Logical>)>,
         event: &MotionEvent,
     ) {
         handle.motion(data, None, event);
@@ -702,7 +704,7 @@ impl PointerGrab<RuntimeState> for TileMoveGrab {
         &mut self,
         data: &mut RuntimeState,
         handle: &mut PointerInnerHandle<'_, RuntimeState>,
-        _focus: Option<(WlSurface, Point<f64, Logical>)>,
+        _focus: Option<(PointerFocus, Point<f64, Logical>)>,
         event: &MotionEvent,
     ) {
         handle.motion(data, None, event);
@@ -773,7 +775,7 @@ impl PointerGrab<RuntimeState> for TileResizeGrab {
         &mut self,
         data: &mut RuntimeState,
         handle: &mut PointerInnerHandle<'_, RuntimeState>,
-        _focus: Option<(WlSurface, Point<f64, Logical>)>,
+        _focus: Option<(PointerFocus, Point<f64, Logical>)>,
         event: &MotionEvent,
     ) {
         handle.motion(data, None, event);
@@ -1023,7 +1025,7 @@ impl PointerGrab<RuntimeState> for LocalFlutterWindowGrab {
         &mut self,
         data: &mut RuntimeState,
         handle: &mut PointerInnerHandle<'_, RuntimeState>,
-        _focus: Option<(WlSurface, Point<f64, Logical>)>,
+        _focus: Option<(PointerFocus, Point<f64, Logical>)>,
         event: &MotionEvent,
     ) {
         handle.motion(data, None, event);
@@ -1181,7 +1183,7 @@ impl PointerGrab<RuntimeState> for ResizeSurfaceGrab {
         &mut self,
         data: &mut RuntimeState,
         handle: &mut PointerInnerHandle<'_, RuntimeState>,
-        _focus: Option<(WlSurface, Point<f64, Logical>)>,
+        _focus: Option<(PointerFocus, Point<f64, Logical>)>,
         event: &MotionEvent,
     ) {
         handle.motion(data, None, event);

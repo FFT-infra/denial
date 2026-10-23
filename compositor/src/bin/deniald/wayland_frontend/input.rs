@@ -61,6 +61,7 @@ use super::super::wire::{
     InputLayoutSnapshot, InputWindowRegion, WindowPlacementChange, WindowPlacementPhase,
 };
 use super::super::{RuntimeState, logical_axis_scroll_delta};
+use super::ClientSurface;
 #[cfg(feature = "flutter")]
 use super::FlutterPointerPress;
 use super::WaylandFrontend;
@@ -115,7 +116,7 @@ pub(super) fn cancel_touch_for_surface(state: &mut RuntimeState, surface: &WlSur
         .with_grab(|_, grab| {
             grab.downcast_ref::<denial_core::touch_grab::TouchSessionGrab<RuntimeState>>()
                 .and_then(|grab| grab.focus())
-                .is_some_and(belongs_to_surface)
+                .is_some_and(|focus| belongs_to_surface(focus))
         })
         .unwrap_or(false);
     #[cfg(feature = "flutter")]
@@ -556,7 +557,7 @@ pub(super) struct ClientInputRoute {
 pub(super) struct ClientPointerPress {
     serial: Serial,
     button: u32,
-    focus: (WlSurface, Point<f64, Logical>),
+    focus: (ClientSurface, Point<f64, Logical>),
     location: Point<f64, Logical>,
 }
 
@@ -613,25 +614,31 @@ impl ClientInputRoute {
     fn focus_at_if_hit(
         &self,
         position: Point<f64, Logical>,
-    ) -> Option<(WlSurface, Point<f64, Logical>)> {
+    ) -> Option<(ClientSurface, Point<f64, Logical>)> {
         let local_point = self.mapped_position(position);
         let (surface, local_origin) =
             under_from_surface_tree(&self.surface, local_point, (0, 0), WindowSurfaceType::ALL)?;
-        Some((surface, position - local_point + local_origin.to_f64()))
+        Some((
+            surface.into(),
+            position - local_point + local_origin.to_f64(),
+        ))
     }
 
-    fn focus_at(&self, position: Point<f64, Logical>) -> (WlSurface, Point<f64, Logical>) {
+    fn focus_at(&self, position: Point<f64, Logical>) -> (ClientSurface, Point<f64, Logical>) {
         let local_point = self.mapped_position(position);
         let (surface, local_origin) =
             under_from_surface_tree(&self.surface, local_point, (0, 0), WindowSurfaceType::ALL)
                 .unwrap_or_else(|| (self.surface.clone(), (0, 0).into()));
-        (surface, position - local_point + local_origin.to_f64())
+        (
+            surface.into(),
+            position - local_point + local_origin.to_f64(),
+        )
     }
 
     fn touch_at(
         &self,
         position: Point<f64, Logical>,
-    ) -> ((WlSurface, Point<f64, Logical>), Point<f64, Logical>) {
+    ) -> ((ClientSurface, Point<f64, Logical>), Point<f64, Logical>) {
         let (location, origin) = projected_touch_point(
             self.region.rect,
             self.region.source_rect,
@@ -645,7 +652,7 @@ impl ClientInputRoute {
         // Smithay retains the down event's origin for the whole contact. Feed
         // it source-space motion around a fixed origin, so scaling/cropping
         // the texture does not scale input deltas or add the mobile strip.
-        ((surface, origin + local_origin.to_f64()), location)
+        ((surface.into(), origin + local_origin.to_f64()), location)
     }
 }
 
@@ -839,7 +846,7 @@ pub(super) enum RoutedPointerTarget {
 #[cfg(feature = "flutter")]
 pub(super) struct PointerMotionTarget {
     routed: RoutedPointerTarget,
-    focus: Option<(WlSurface, Point<f64, Logical>)>,
+    focus: Option<(ClientSurface, Point<f64, Logical>)>,
 }
 
 #[cfg(feature = "flutter")]
@@ -1187,7 +1194,14 @@ pub(in super::super) fn init_libinput(
         .insert_source(backend, |event, batch, state| {
             match event {
                 InputBatchEvent::Input(event) => {
+                    let usec = event_time_usec(&event);
+                    if let Some(frontend) = state.wayland.as_mut() {
+                        frontend.input_timestamps.begin_event(usec);
+                    }
                     batch.flush_clients |= process_input_event(state, event);
+                    if let Some(frontend) = state.wayland.as_mut() {
+                        frontend.input_timestamps.begin_event(None);
+                    }
                 }
                 // libinput is independent from the Wayland client socket
                 // source. Flush after Smithay has drained the complete batch:
@@ -1618,6 +1632,22 @@ fn finish_horizontal_layout_scroll(
         state.scene_sync.mark_dirty();
     }
     changed
+}
+
+/// The libinput time of an event in microseconds, for `zwp_input_timestamps_v1`.
+fn event_time_usec(event: &InputEvent<LibinputInputBackend>) -> Option<u64> {
+    use smithay::backend::input::Event;
+    Some(match event {
+        InputEvent::Keyboard { event } => Event::time(event),
+        InputEvent::PointerMotion { event } => Event::time(event),
+        InputEvent::PointerMotionAbsolute { event } => Event::time(event),
+        InputEvent::PointerButton { event } => Event::time(event),
+        InputEvent::PointerAxis { event } => Event::time(event),
+        InputEvent::TouchDown { event } => Event::time(event),
+        InputEvent::TouchMotion { event } => Event::time(event),
+        InputEvent::TouchUp { event } => Event::time(event),
+        _ => return None,
+    })
 }
 
 fn process_input_event(

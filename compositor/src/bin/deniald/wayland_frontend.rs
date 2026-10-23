@@ -163,6 +163,8 @@ mod input;
 #[cfg(feature = "flutter")]
 #[path = "wayland_frontend/input_deck.rs"]
 mod input_deck;
+#[path = "wayland_frontend/input_timestamps.rs"]
+mod input_timestamps;
 #[cfg(feature = "flutter")]
 pub(super) use input_deck::{snapshot as input_deck_snapshot, synchronize_input_deck};
 #[path = "wayland_frontend/input_method.rs"]
@@ -241,7 +243,7 @@ mod xwayland;
 pub(super) use clipboard_io::DeferredClipboardCapture;
 #[cfg(feature = "flutter")]
 pub(super) use clipboard_io::{apply_clipboard_actions, cancel_clipboard_captures};
-use focus::KeyboardFocusTarget;
+use focus::{ClientSurface, KeyboardFocusTarget};
 use handlers::{MAX_WAYLAND_CLIENTS, WaylandClientBudget};
 #[cfg(feature = "flutter")]
 use idle_inhibit::IdleInhibitors;
@@ -641,6 +643,7 @@ pub(super) struct WaylandFrontend {
     #[cfg(feature = "flutter")]
     idle_notifier: smithay::wayland::idle_notify::IdleNotifierState<RuntimeState>,
     output_power: OutputPowerManager,
+    input_timestamps: input_timestamps::InputTimestamps,
     gamma_control: gamma_control::GammaControlManager,
     screencopy: screencopy::ScreencopyManager,
     text_input: TextInputManager,

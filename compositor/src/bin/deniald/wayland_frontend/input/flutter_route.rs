@@ -673,7 +673,7 @@ pub(in super::super) fn route_pointer_motion(
     } = target;
     super::super::clipboard_io::release_deferred_clipboard_capture(
         state,
-        under.as_ref().map(|(surface, _)| surface),
+        under.as_ref().map(|(surface, _)| &surface.0),
     );
     let pointer = state
         .wayland
@@ -806,7 +806,7 @@ pub(crate) fn reconcile_flutter_pointer_route(state: &mut RuntimeState) {
 
 pub(super) fn pointer_constraint_blocks_motion(
     pointer: &PointerHandle<RuntimeState>,
-    proposed_focus: &Option<(WlSurface, Point<f64, Logical>)>,
+    proposed_focus: &Option<(ClientSurface, Point<f64, Logical>)>,
     proposed_location: Point<f64, Logical>,
     reactivation_suppressed: bool,
 ) -> bool {

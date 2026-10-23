@@ -1744,7 +1744,7 @@ impl smithay::wayland::fractional_scale::FractionalScaleHandler for RuntimeState
 impl denial_core::touch_grab::TouchCancellation for RuntimeState {
     type Recipient = Client;
 
-    fn touch_recipient(&self, focus: &WlSurface) -> Option<Client> {
+    fn touch_recipient(&self, focus: &Self::TouchFocus) -> Option<Client> {
         focus.client()
     }
 
@@ -1765,8 +1765,8 @@ impl denial_core::touch_grab::TouchCancellation for RuntimeState {
 
 impl SeatHandler for RuntimeState {
     type KeyboardFocus = KeyboardFocusTarget;
-    type PointerFocus = WlSurface;
-    type TouchFocus = WlSurface;
+    type PointerFocus = super::focus::ClientSurface;
+    type TouchFocus = super::focus::ClientSurface;
 
     fn seat_state(&mut self) -> &mut SeatState<Self> {
         &mut self
@@ -1879,7 +1879,10 @@ impl PointerConstraintsHandler for RuntimeState {
         {
             return;
         }
-        if pointer.current_focus().as_ref() == Some(surface) {
+        if pointer
+            .current_focus()
+            .is_some_and(|focus| focus.0 == *surface)
+        {
             smithay::wayland::pointer_constraints::with_pointer_constraint(
                 surface,
                 pointer,

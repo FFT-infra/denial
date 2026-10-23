@@ -46,7 +46,7 @@ impl WaylandFrontend {
         &self,
         position: Point<f64, Logical>,
         kinds: &[WlrLayer],
-    ) -> Option<(WlSurface, Point<f64, Logical>)> {
+    ) -> Option<(ClientSurface, Point<f64, Logical>)> {
         let sample =
             Point::<i32, Logical>::from((position.x.floor() as i32, position.y.floor() as i32));
         let output = self
@@ -69,7 +69,7 @@ impl WaylandFrontend {
                 };
                 let global_origin =
                     saturating_point_add(saturating_point_add(output_origin, geometry.loc), offset);
-                return Some((surface, global_origin.to_f64()));
+                return Some((surface.into(), global_origin.to_f64()));
             }
         }
         None
@@ -126,7 +126,7 @@ impl WaylandFrontend {
     pub(super) fn surface_under(
         &self,
         position: Point<f64, Logical>,
-    ) -> Option<(WlSurface, Point<f64, Logical>)> {
+    ) -> Option<(ClientSurface, Point<f64, Logical>)> {
         self.layer_surface_under(position, &[WlrLayer::Overlay, WlrLayer::Top])
             .or_else(|| {
                 self.space
@@ -135,7 +135,10 @@ impl WaylandFrontend {
                         window
                             .surface_under(position - location.to_f64(), WindowSurfaceType::ALL)
                             .map(|(surface, offset)| {
-                                (surface, saturating_point_add(offset, location).to_f64())
+                                (
+                                    surface.into(),
+                                    saturating_point_add(offset, location).to_f64(),
+                                )
                             })
                     })
             })

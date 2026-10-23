@@ -153,14 +153,18 @@ fn tablet_focus(
             .expect("missing Wayland frontend")
             .input_route(position)
             .cloned();
-        let focus = route.as_ref().map(|route| route.focus_at(position));
+        let focus = route
+            .as_ref()
+            .map(|route| route.focus_at(position))
+            .map(|(surface, location)| (surface.0, location));
         return (focus, route);
     }
     let focus = state
         .wayland
         .as_ref()
         .expect("missing Wayland frontend")
-        .surface_under(position);
+        .surface_under(position)
+        .map(|(surface, location)| (surface.0, location));
     (focus, None)
 }
 
@@ -173,7 +177,8 @@ fn tablet_focus(
         .wayland
         .as_ref()
         .expect("missing Wayland frontend")
-        .surface_under(position);
+        .surface_under(position)
+        .map(|(surface, location)| (surface.0, location));
     (focus, None)
 }
 
