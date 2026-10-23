@@ -325,6 +325,7 @@ impl FlutterRuntime {
             pending_screenshot_frame: None,
             scene_texture_id_scratch: Vec::new(),
             window_close_texture_leases: WindowCloseTextureLeases::default(),
+            retiring_native_textures: HashMap::new(),
             pending_frame_texture_ids: Vec::new(),
             pointer_event_scratch: Vec::with_capacity(64),
             key_event_scratch: Vec::with_capacity(160),
@@ -556,6 +557,9 @@ impl FlutterRuntime {
         self.run_due_tasks()?;
         if !self.window_close_texture_leases.is_empty() {
             self.expire_window_close_texture_leases()?;
+        }
+        if !self.retiring_native_textures.is_empty() {
+            self.expire_retiring_native_textures(Instant::now())?;
         }
         if self.authentication.has_pending_events() {
             self.publish_authentication_events()?;

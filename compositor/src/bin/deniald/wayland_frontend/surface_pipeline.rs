@@ -283,7 +283,7 @@ mod popup_visible_geometry_tests {
 
 /// Maps a rectangle in a [`cropped_buffer_canvas`] back to buffer pixels.
 #[cfg(feature = "flutter")]
-pub(super) fn canvas_rect_to_buffer(
+pub(crate) fn canvas_rect_to_buffer(
     canvas: Option<&denial_flutter_engine::ExternalTexturePresentation>,
     rect: [f64; 4],
 ) -> [f64; 4] {

@@ -1,6 +1,7 @@
 //! Cached native client images on Flutter's existing raster GL context.
 use super::super::super::native_window::{
     ClientRect, NativeWindowPlan, NativeWindowRegistry, VersionedWindowPlan,
+    reproduces_presentation,
 };
 use super::super::super::native_window_gl::{NativeWindowGl, NativeWindowInput};
 use super::super::native_window_pool::{NativeWindowPool, NativeWindowStorage};
@@ -31,17 +32,33 @@ impl PixelIdentity {
 struct ClientImage {
     plan_revision: u64,
     inputs: Vec<PixelIdentity>,
+    presentations: Vec<Option<denial_flutter_engine::ExternalTexturePresentation>>,
     binding: Arc<CachedTextureBinding>,
     storage: Arc<NativeWindowStorage>,
     width: usize,
     height: usize,
 }
 impl ClientImage {
-    fn matches(&self, plan_revision: u64, inputs: &[PixelIdentity]) -> bool {
+    fn matches(
+        &self,
+        plan_revision: u64,
+        inputs: &[PixelIdentity],
+        presentations: &[Option<denial_flutter_engine::ExternalTexturePresentation>],
+    ) -> bool {
         self.plan_revision == plan_revision
             && self.inputs.len() == inputs.len()
             && self.inputs.iter().zip(inputs).all(|(a, b)| a.same(b))
+            && self.presentations == presentations
     }
+}
+/// The latest plan with the buffers its layers currently show.
+struct NativeSnapshot {
+    plan: Arc<VersionedWindowPlan>,
+    /// Current buffers in layer order, for the layers that have one.
+    inputs: Vec<(i64, ExternalTextureSource)>,
+    /// Per plan layer: the presentation that advanced with its buffer, or
+    /// `None` while the layer has no current buffer.
+    presentations: Vec<Option<denial_flutter_engine::ExternalTexturePresentation>>,
 }
 #[derive(Default)]
 pub(super) struct NativeClientState {
@@ -178,6 +195,7 @@ impl FlutterGlHandler {
     pub(in crate::flutter_runtime) fn update_native_window_plans(
         &self,
         windows: &mut [wire::WindowDescription],
+        frames: &[ExternalTextureFrame],
         changed: &mut Vec<i64>,
     ) {
         let mut state = lock(&self.native_clients);
@@ -206,6 +224,16 @@ impl FlutterGlHandler {
                 continue;
             };
             if state.disabled.contains(&plan.texture_id) {
+                continue;
+            }
+            // The pass maps crops only; other canvases need the engine.
+            if plan.layers.iter().any(|layer| {
+                frames
+                    .iter()
+                    .find(|frame| frame.texture_id == layer.texture_id)
+                    .and_then(|frame| frame.presentation.as_ref())
+                    .is_some_and(|presentation| !reproduces_presentation(presentation))
+            }) {
                 continue;
             }
             let previous = state.registry.get(plan.texture_id).map(|p| p.revision);
@@ -244,30 +272,34 @@ impl FlutterGlHandler {
                 .registry
                 .handles_texture(texture_id)
     }
-    fn native_snapshot(
-        &self,
-        texture_id: i64,
-    ) -> Option<(Arc<VersionedWindowPlan>, Vec<ExternalTextureSource>)> {
+    /// Plans follow each scene commit at once, while a newly mapped
+    /// subsurface's first buffer becomes current only at the next frame
+    /// tick. Until then that layer is not drawn, as in the surface tree.
+    fn native_snapshot(&self, texture_id: i64) -> Option<NativeSnapshot> {
         let plan = lock(&self.native_clients).registry.get(texture_id)?;
         let sources = lock(&self.external_texture_sources);
-        let inputs = plan
-            .plan
-            .layers
-            .iter()
-            .map(|layer| sources.get(&layer.texture_id)?.current.clone())
-            .collect::<Option<Vec<_>>>()?;
-        Some((plan, inputs))
+        let mut inputs = Vec::with_capacity(plan.plan.layers.len());
+        let mut presentations = Vec::with_capacity(plan.plan.layers.len());
+        for layer in &plan.plan.layers {
+            let slot = sources
+                .get(&layer.texture_id)
+                .filter(|slot| slot.current.is_some());
+            presentations.push(slot.map(|slot| slot.presentation));
+            if let Some(source) = slot.and_then(|slot| slot.current.clone()) {
+                inputs.push((layer.texture_id, source));
+            }
+        }
+        Some(NativeSnapshot {
+            plan,
+            inputs,
+            presentations,
+        })
     }
-    fn native_samples(
-        plan: &VersionedWindowPlan,
-        inputs: &[ExternalTextureSource],
-    ) -> Vec<NativeInputSample> {
-        plan.plan
-            .layers
+    fn native_samples(inputs: &[(i64, ExternalTextureSource)]) -> Vec<NativeInputSample> {
+        inputs
             .iter()
-            .zip(inputs)
-            .map(|(layer, source)| NativeInputSample {
-                texture_id: layer.texture_id,
+            .map(|(texture_id, source)| NativeInputSample {
+                texture_id: *texture_id,
                 generation: source.generation(),
                 feedback: source.feedback(),
             })
@@ -277,11 +309,15 @@ impl FlutterGlHandler {
         &self,
         texture_id: i64,
     ) -> Option<PreparedExternalTexture> {
-        let (plan, inputs) = self.native_snapshot(texture_id)?;
-        let keys = inputs.iter().map(PixelIdentity::new).collect::<Vec<_>>();
+        let snapshot = self.native_snapshot(texture_id)?;
+        let keys = snapshot
+            .inputs
+            .iter()
+            .map(|(_, source)| PixelIdentity::new(source))
+            .collect::<Vec<_>>();
         let mut state = lock(&self.native_clients);
         let image = state.images.get(&texture_id)?;
-        if !image.matches(plan.revision, &keys) {
+        if !image.matches(snapshot.plan.revision, &keys, &snapshot.presentations) {
             return None;
         }
         let permit = self.external_texture_resource_budget.try_acquire()?;
@@ -301,7 +337,7 @@ impl FlutterGlHandler {
                 _resource_permit: permit,
             },
             sampled_buffer: Some(buffer),
-            native_samples: Self::native_samples(&plan, &inputs),
+            native_samples: Self::native_samples(&snapshot.inputs),
         };
         state.hits = state.hits.saturating_add(1);
         if state.hits == 1 {
@@ -319,10 +355,17 @@ impl FlutterGlHandler {
         if let Some(prepared) = self.prepare_native_without_gl(texture_id) {
             return Some(prepared);
         }
+        // The window left native composition after this frame was scheduled.
+        let NativeSnapshot {
+            plan,
+            inputs,
+            presentations,
+        } = self.native_snapshot(texture_id)?;
         let result = (|| -> Result<PreparedExternalTexture, String> {
-            let (plan, inputs) = self
-                .native_snapshot(texture_id)
-                .ok_or("native client inputs not ready")?;
+            let presented = plan
+                .plan
+                .presented(&presentations)
+                .ok_or("native client input presentation is not a crop")?;
             let (pool, disabled) = {
                 let state = lock(&self.native_clients);
                 (
@@ -351,15 +394,18 @@ impl FlutterGlHandler {
             let mut output = self
                 .prepare_source_with_gl(texture_id, source)
                 .ok_or("native output EGL import failed")?;
-            let keys = inputs.iter().map(PixelIdentity::new).collect::<Vec<_>>();
+            let keys = inputs
+                .iter()
+                .map(|(_, source)| PixelIdentity::new(source))
+                .collect::<Vec<_>>();
             let mut prepared_inputs = Vec::with_capacity(inputs.len());
             let mut draw_inputs = Vec::with_capacity(inputs.len());
-            for (layer, source) in plan.plan.layers.iter().zip(inputs) {
+            for (input_texture_id, source) in inputs {
                 let input = self
-                    .prepare_source_with_gl(layer.texture_id, source)
+                    .prepare_source_with_gl(input_texture_id, source)
                     .ok_or("native client input import failed")?;
                 draw_inputs.push(NativeWindowInput {
-                    texture_id: layer.texture_id,
+                    texture_id: input_texture_id,
                     name: input.name,
                     size: [input.width as u32, input.height as u32],
                 });
@@ -382,7 +428,7 @@ impl FlutterGlHandler {
                     .pass
                     .as_mut()
                     .ok_or("native GLES pass unavailable")?
-                    .render(&plan.plan, &draw_inputs, output.name)?
+                    .render(&presented, &draw_inputs, output.name)?
             };
             let binding = output.resource.binding();
             output.native_samples = prepared_inputs
@@ -400,6 +446,7 @@ impl FlutterGlHandler {
                 ClientImage {
                     plan_revision: plan.revision,
                     inputs: keys,
+                    presentations,
                     binding,
                     storage,
                     width: output.width,

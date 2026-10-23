@@ -156,6 +156,12 @@ const MAX_PENDING_BRIGHTNESS_REQUESTS: usize = 128;
 const MAX_PENDING_SOFTWARE_DIMMING_REQUESTS: usize = 128;
 const MAX_PENDING_UI_DEVELOPMENT_COMMANDS: usize = 64;
 const WINDOW_CLOSE_LEASE_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long a merged native window image stays registered after its window
+/// stops publishing it. Flutter's previous scene names it until Dart has
+/// built a frame from the new window list, and every raster of that scene
+/// before then would draw the window without content. Chromium does this
+/// whenever a tooltip subsurface unmaps.
+const NATIVE_TEXTURE_RETIREMENT_GRACE: Duration = Duration::from_millis(500);
 const RENDER_AUDIT_INTERVAL: Duration = Duration::from_secs(1);
 const FLUTTER_RESOURCE_CACHE_MAX_BYTES_THRESHOLD: usize = 256 * 1024 * 1024;
 const OUTPUT_ROTATION_ANIMATION_DURATION: Duration = Duration::from_millis(300);
@@ -558,6 +564,9 @@ pub struct FlutterRuntime {
     pending_screenshot_frame: Option<(OutputId, u64)>,
     scene_texture_id_scratch: Vec<i64>,
     window_close_texture_leases: WindowCloseTextureLeases,
+    /// Merged native window images no longer published, by unregistration
+    /// deadline. See `NATIVE_TEXTURE_RETIREMENT_GRACE`.
+    retiring_native_textures: HashMap<i64, Instant>,
     pending_frame_texture_ids: Vec<i64>,
     pointer_event_scratch: Vec<sys::FlutterPointerEvent>,
     key_event_scratch: Vec<u8>,

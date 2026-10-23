@@ -208,6 +208,8 @@ pub(crate) use screencopy::{
     OutputCompositeSource, compose_output_targets_to_atlas, copy_atlas_region_to_memory,
 };
 #[cfg(feature = "flutter")]
+pub(crate) use surface_pipeline::canvas_rect_to_buffer;
+#[cfg(feature = "flutter")]
 #[path = "wayland_frontend/surface_snapshot.rs"]
 mod surface_snapshot;
 #[path = "wayland_frontend/text_input.rs"]
