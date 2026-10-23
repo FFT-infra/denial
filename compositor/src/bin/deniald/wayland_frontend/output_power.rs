@@ -130,7 +130,7 @@ impl WaylandFrontend {
         entry.powered = powered;
         #[cfg(feature = "flutter")]
         if changed {
-            self.invalidate_frame_timeline();
+            self.invalidate_output_frame_timeline(output);
         }
         if !powered {
             self.fail_screencopies_for_output(output);
