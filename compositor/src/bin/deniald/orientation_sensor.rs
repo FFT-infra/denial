@@ -8,6 +8,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use denial_core::topology::OutputTransform;
+use futures_lite::{StreamExt, future};
 use smithay::reexports::calloop::channel::{Channel, Sender, channel};
 use tracing::{debug, info, warn};
 use zbus::blocking::{Connection, Proxy};
@@ -95,13 +96,13 @@ impl OrientationSensor {
 fn monitor(events: Sender<Orientation>) {
     let mut published = None;
     loop {
-        match monitor_connection(&events, &mut published) {
+        match monitor_bus(&events, &mut published) {
             MonitorResult::Closed => return,
             MonitorResult::Disconnected(error) => {
                 if publish(&events, &mut published, Orientation::Undefined).is_err() {
                     return;
                 }
-                debug!(%error, "orientation sensor service is unavailable");
+                debug!(%error, "system bus is unavailable to the orientation sensor");
                 thread::sleep(RECONNECT_DELAY);
             }
         }
@@ -113,10 +114,21 @@ enum MonitorResult {
     Disconnected(String),
 }
 
-fn monitor_connection(
-    events: &Sender<Orientation>,
-    published: &mut Option<Orientation>,
-) -> MonitorResult {
+enum SensorResult {
+    Closed,
+    Failed(String),
+    OwnerChanged { present: bool },
+}
+
+enum Wake<C, O> {
+    Change(Option<C>),
+    Owner(Option<O>),
+}
+
+/// Follows the sensor for as long as one system bus connection lives. A
+/// missing or failed sensor service is never polled: the worker sleeps until
+/// iio-sensor-proxy gains a new owner, which also covers a later udev start.
+fn monitor_bus(events: &Sender<Orientation>, published: &mut Option<Orientation>) -> MonitorResult {
     let connection = match Connection::system() {
         Ok(connection) => connection,
         Err(error) => return MonitorResult::Disconnected(error.to_string()),
@@ -125,9 +137,53 @@ fn monitor_connection(
         Ok(proxy) => proxy,
         Err(error) => return MonitorResult::Disconnected(error.to_string()),
     };
-    let mut changes = proxy.receive_property_changed::<String>("AccelerometerOrientation");
+    // Subscribe before the first claim, so an owner which appears while a
+    // claim fails still wakes the worker.
+    let mut owners = match future::block_on(proxy.inner().receive_owner_changed()) {
+        Ok(owners) => owners,
+        Err(error) => return MonitorResult::Disconnected(error.to_string()),
+    };
+    loop {
+        let present = match follow_sensor(&proxy, &mut owners, events, published) {
+            SensorResult::Closed => return MonitorResult::Closed,
+            SensorResult::Failed(error) => {
+                debug!(%error, "orientation sensor service is unavailable");
+                false
+            }
+            SensorResult::OwnerChanged { present } => present,
+        };
+        if publish(events, published, Orientation::Undefined).is_err() {
+            return MonitorResult::Closed;
+        }
+        if present {
+            continue;
+        }
+        loop {
+            match future::block_on(owners.next()) {
+                None => return MonitorResult::Disconnected("system bus closed".to_owned()),
+                Some(Some(_)) => break,
+                Some(None) => {}
+            }
+        }
+    }
+}
+
+fn follow_sensor<O>(
+    proxy: &Proxy<'_>,
+    owners: &mut O,
+    events: &Sender<Orientation>,
+    published: &mut Option<Orientation>,
+) -> SensorResult
+where
+    O: futures_lite::Stream<Item = Option<zbus::names::UniqueName<'static>>> + Unpin,
+{
+    let mut changes = future::block_on(
+        proxy
+            .inner()
+            .receive_property_changed::<String>("AccelerometerOrientation"),
+    );
     if let Err(error) = proxy.call::<_, _, ()>("ClaimAccelerometer", &()) {
-        return MonitorResult::Disconnected(error.to_string());
+        return SensorResult::Failed(error.to_string());
     }
 
     let has_accelerometer = proxy
@@ -144,30 +200,45 @@ fn monitor_connection(
     if publish(events, published, initial).is_err() {
         drop(changes);
         let _ = proxy.call::<_, _, ()>("ReleaseAccelerometer", &());
-        return MonitorResult::Closed;
+        return SensorResult::Closed;
     }
     if initial != Orientation::Undefined {
         info!(orientation = ?initial, "claimed the system orientation sensor");
     }
 
-    for change in &mut changes {
-        let orientation = match change.get() {
+    let result = loop {
+        let wake = future::block_on(future::race(
+            async { Wake::Change(changes.next().await) },
+            async { Wake::Owner(owners.next().await) },
+        ));
+        let change = match wake {
+            Wake::Change(Some(change)) => change,
+            Wake::Change(None) => {
+                break SensorResult::Failed("orientation sensor signal stream ended".to_owned());
+            }
+            // A new owner has no claim to release; the bus closing is seen
+            // again by the caller's owner stream.
+            Wake::Owner(Some(owner)) => {
+                return SensorResult::OwnerChanged {
+                    present: owner.is_some(),
+                };
+            }
+            Wake::Owner(None) => return SensorResult::Failed("system bus closed".to_owned()),
+        };
+        let orientation = match future::block_on(change.get()) {
             Ok(value) => Orientation::parse(&value),
             Err(error) => {
                 warn!(%error, "could not read orientation sensor update");
-                break;
+                break SensorResult::Failed(error.to_string());
             }
         };
         if publish(events, published, orientation).is_err() {
-            drop(changes);
-            let _ = proxy.call::<_, _, ()>("ReleaseAccelerometer", &());
-            return MonitorResult::Closed;
+            break SensorResult::Closed;
         }
-    }
-
+    };
     drop(changes);
     let _ = proxy.call::<_, _, ()>("ReleaseAccelerometer", &());
-    MonitorResult::Disconnected("orientation sensor signal stream ended".to_owned())
+    result
 }
 
 fn publish(

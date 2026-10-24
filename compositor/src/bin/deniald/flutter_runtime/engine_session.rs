@@ -299,7 +299,7 @@ impl FlutterRuntime {
             input_deck_commands: VecDeque::new(),
             input_deck_snapshot: None,
             pending_idle_policy: None,
-            pending_dpms_off: false,
+            pending_display_power: None,
             pending_vm_service_uri: None,
             generation,
             scheduled_tasks: BinaryHeap::with_capacity(INITIAL_PLATFORM_TASK_BATCH_CAPACITY),
@@ -325,6 +325,7 @@ impl FlutterRuntime {
             pending_screenshot_frame: None,
             scene_texture_id_scratch: Vec::new(),
             window_close_texture_leases: WindowCloseTextureLeases::default(),
+            retiring_native_textures: HashMap::new(),
             pending_frame_texture_ids: Vec::new(),
             pointer_event_scratch: Vec::with_capacity(64),
             key_event_scratch: Vec::with_capacity(160),
@@ -338,6 +339,7 @@ impl FlutterRuntime {
             frame_ready_observed: false,
             first_frame_received: false,
             last_pointer_timestamp_micros: 0,
+            touch_timing: input::TouchTimingAudit::default(),
         })
     }
 
@@ -351,7 +353,6 @@ impl FlutterRuntime {
         }
         let engine_now = usize::try_from(self.host().engine().current_time_nanos() / 1_000)
             .unwrap_or(usize::MAX);
-        let mut timestamp = engine_now.max(self.last_pointer_timestamp_micros.saturating_add(1));
         // The engine consumes this slice synchronously. Reuse its backing
         // allocation because libinput commonly wakes us once per pointer
         // sample, which otherwise causes one allocator round-trip per event.
@@ -370,6 +371,20 @@ impl FlutterRuntime {
             };
             match event {
                 InputRecord::Pointer(event) => {
+                    // Prefer the device's sample time, which Flutter's touch
+                    // resampling and velocity tracking interpolate against.
+                    // Never stamp the future, and keep the stamps strictly
+                    // increasing across devices as before.
+                    let sampled_at = event
+                        .sampled_at_micros
+                        .and_then(|micros| usize::try_from(micros).ok());
+                    let timestamp = sampled_at
+                        .map_or(engine_now, |micros| micros.min(engine_now))
+                        .max(self.last_pointer_timestamp_micros.saturating_add(1));
+                    if let Some(sampled_at) = sampled_at {
+                        self.touch_timing
+                            .record(event.device, event.phase, sampled_at, engine_now);
+                    }
                     pointer_events.push(sys::FlutterPointerEvent {
                         struct_size: mem::size_of::<sys::FlutterPointerEvent>(),
                         phase: event.phase,
@@ -396,7 +411,6 @@ impl FlutterRuntime {
                         ..sys::FlutterPointerEvent::default()
                     });
                     self.last_pointer_timestamp_micros = timestamp;
-                    timestamp = timestamp.saturating_add(1);
                 }
                 InputRecord::Keyboard(event) => {
                     self.flush_pointer_events(&mut pointer_events)?;
@@ -543,6 +557,9 @@ impl FlutterRuntime {
         self.run_due_tasks()?;
         if !self.window_close_texture_leases.is_empty() {
             self.expire_window_close_texture_leases()?;
+        }
+        if !self.retiring_native_textures.is_empty() {
+            self.expire_retiring_native_textures(Instant::now())?;
         }
         if self.authentication.has_pending_events() {
             self.publish_authentication_events()?;

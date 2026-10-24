@@ -3,7 +3,7 @@
 use super::*;
 use futures_lite::{StreamExt, future};
 use serde_json::{Value, json};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufReader, Write};
 use std::sync::mpsc;
 use zbus::blocking::{Proxy, connection::Builder};
 use zbus::zvariant::OwnedObjectPath;
@@ -28,34 +28,6 @@ fn emit(value: Value) -> io::Result<()> {
     serde_json::to_writer(&mut output, &value)?;
     writeln!(output)?;
     output.flush()
-}
-
-fn read_bounded_line(input: &mut impl BufRead) -> io::Result<Option<Vec<u8>>> {
-    let mut line = Vec::new();
-    loop {
-        let available = input.fill_buf()?;
-        if available.is_empty() {
-            return if line.is_empty() {
-                Ok(None)
-            } else {
-                Err(io::ErrorKind::UnexpectedEof.into())
-            };
-        }
-        let count = available
-            .iter()
-            .position(|byte| *byte == b'\n')
-            .map_or(available.len(), |index| index + 1);
-        if line.len() + count > 4096 {
-            erase_bytes(&mut line);
-            return Err(io::ErrorKind::InvalidData.into());
-        }
-        line.extend_from_slice(&available[..count]);
-        input.consume(count);
-        if line.last() == Some(&b'\n') {
-            line.pop();
-            return Ok(Some(line));
-        }
-    }
 }
 
 pub(crate) fn run() -> Result<(), Box<dyn Error>> {
@@ -156,31 +128,6 @@ pub(crate) fn run() -> Result<(), Box<dyn Error>> {
     }
     emit(json!({"event":"expired"}))?;
     Ok(())
-}
-
-fn authenticate_password(
-    backend: &mut dyn AuthenticationBackend,
-    username: &str,
-    password: &SecureString,
-) -> BackendResult {
-    let mut prompted = false;
-    let result = backend.authenticate(
-        username,
-        &mut |style, _| match style {
-            PromptStyle::EchoOff => {
-                prompted = true;
-                Some(SecureString::new(password.as_bytes()))
-            }
-            PromptStyle::Info => Some(SecureString::new(&[])),
-            _ => None,
-        },
-        &|| false,
-    );
-    if prompted && !password.as_bytes().is_empty() {
-        result
-    } else {
-        BackendResult::Failure
-    }
 }
 
 fn list_fingers(device: &Proxy<'_>, username: &str) -> zbus::Result<Vec<String>> {
@@ -284,6 +231,9 @@ mod tests {
         }
         fn unavailable_reason(&self) -> String {
             String::new()
+        }
+        fn validate_account(&self) -> Result<(), String> {
+            Ok(())
         }
         fn authenticate(
             &mut self,

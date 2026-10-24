@@ -1163,6 +1163,13 @@ fn handle_connection(
     let response = match request.method.as_str() {
         "outputs.get" => success_response(request.id, publisher.snapshot()),
         "wallpaper.status" => success_response(request.id, publisher.wallpaper_status()),
+        "denial.version" => success_response(
+            request.id,
+            json!({
+                "version": denial_core::version(),
+                "build": denial_core::BUILD_IDENTITY,
+            }),
+        ),
         "outputs.apply" => {
             let configuration =
                 match serde_json::from_value::<ApplyOutputConfiguration>(request.params) {

@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -15,9 +16,13 @@ import '../wallpaper/wallpaper.dart';
 import '../wallpaper/widgets/wallpaper_image.dart';
 
 class ShellWallpaper extends ConsumerWidget {
-  const ShellWallpaper({super.key});
+  const ShellWallpaper({super.key, this.onPainted});
 
   static const String assetPath = defaultShellWallpaperAsset;
+
+  /// Called from paint whenever the wallpaper repaints, with the boundary
+  /// that holds it, for a consumer that captures the wallpaper.
+  final ValueChanged<RenderRepaintBoundary>? onPainted;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -57,7 +62,8 @@ class ShellWallpaper extends ConsumerWidget {
           });
         }
 
-        return RepaintBoundary(
+        return _WallpaperBoundary(
+          onPainted: onPainted,
           child: ColoredBox(
             color: context.shellColors.launchSurface,
             child: Stack(
@@ -144,6 +150,31 @@ class ShellWallpaper extends ConsumerWidget {
     ref
         .read(wallpaperControllerProvider.notifier)
         .completeTransition(transitionId);
+  }
+}
+
+class _WallpaperBoundary extends SingleChildRenderObjectWidget {
+  const _WallpaperBoundary({required this.onPainted, super.child});
+
+  final ValueChanged<RenderRepaintBoundary>? onPainted;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) =>
+      _RenderWallpaperBoundary()..onPainted = onPainted;
+
+  @override
+  void updateRenderObject(BuildContext context, RenderObject renderObject) {
+    (renderObject as _RenderWallpaperBoundary).onPainted = onPainted;
+  }
+}
+
+class _RenderWallpaperBoundary extends RenderRepaintBoundary {
+  ValueChanged<RenderRepaintBoundary>? onPainted;
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    super.paint(context, offset);
+    onPainted?.call(this);
   }
 }
 

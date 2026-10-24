@@ -50,6 +50,7 @@ impl WaylandFrontend {
         #[cfg(feature = "flutter")]
         let idle_notifier = idle_notify::new(&display_handle, loop_handle.clone());
         let output_power = OutputPowerManager::new(&display_handle);
+        let input_timestamps = input_timestamps::InputTimestamps::new(&display_handle);
         let gamma_control = gamma_control::GammaControlManager::new(&display_handle);
         let screencopy = screencopy::ScreencopyManager::new(&display_handle);
         let text_input = TextInputManager::new(&display_handle);
@@ -344,6 +345,8 @@ impl WaylandFrontend {
             #[cfg(feature = "flutter")]
             pending_frame_callback_windows: HashSet::new(),
             #[cfg(feature = "flutter")]
+            minimized_windows: Default::default(),
+            #[cfg(feature = "flutter")]
             pending_layer_frame_callback_roots: HashSet::new(),
             #[cfg(feature = "flutter")]
             pending_input_method_frame_callbacks: HashSet::new(),
@@ -432,6 +435,8 @@ impl WaylandFrontend {
             #[cfg(feature = "flutter")]
             client_touch_routes: HashMap::new(),
             #[cfg(feature = "flutter")]
+            edge_swipe_candidates: HashMap::new(),
+            #[cfg(feature = "flutter")]
             client_touch_frame_pending: false,
             #[cfg(feature = "flutter")]
             touch_gestures: touch_gestures::TouchGestureState::default(),
@@ -493,9 +498,12 @@ impl WaylandFrontend {
             #[cfg(feature = "flutter")]
             idle_notifier,
             output_power,
+            input_timestamps,
             gamma_control,
             screencopy,
             text_input,
+            #[cfg(feature = "flutter")]
+            keyboard_insets: Default::default(),
             input_method,
             outputs,
             scrolling_layout_axes,

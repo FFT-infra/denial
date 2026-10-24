@@ -22,10 +22,13 @@ import 'mobile_ui_metrics.dart';
 import 'notification_media.dart';
 
 import 'package:denial_flutter_sdk/effects.dart';
+import 'package:denial_flutter_sdk/rendering.dart'
+    show FadeSnapshot, WindowBackdropCache, WindowBackdropSlice;
 
 import 'shade/shade_backdrop_scene.dart';
 
 part 'notification_card.dart';
+part 'notification_reveal.dart';
 part 'notification_card_controls.dart';
 part 'notification_transition.dart';
 part 'mobile_notification_banner.dart';
@@ -52,10 +55,7 @@ class NotificationBannerLayer extends ConsumerWidget {
     final controller = ref.read(desktopNotificationsProvider.notifier);
     if (mobile) {
       final shadeVisible = ref.watch(
-        referenceShellProvider.select(
-          (state) =>
-              state.quickSettingsVisible || state.quickSettingsDragProgress > 0,
-        ),
+        referenceShellProvider.select((state) => state.quickSettingsEngaged),
       );
       return MobileNotificationBannerView(
         notification: shadeVisible || notifications.isEmpty

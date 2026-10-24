@@ -93,6 +93,8 @@ const KEYBOARD_PRESSED: u32 = 1 << 1;
 const KEYBOARD_RELEASED: u32 = 1 << 2;
 const KEYBOARD_PHASE_MASK: u32 = KEYBOARD_PRESSED | KEYBOARD_RELEASED;
 const KEYBOARD_FLAGS_MASK: u32 = KEYBOARD_CTRL | KEYBOARD_PHASE_MASK;
+const MAX_KEYBOARD_PANEL_HEIGHT: u32 = 16_384;
+const MAX_KEYBOARD_PANEL_DURATION_MS: u32 = 10_000;
 
 pub const INPUT_LAYOUT_KEYBOARD_CAPTURE: u32 = 1 << 0;
 pub const INPUT_LAYOUT_EXCLUSIVE_SHELL: u32 = 1 << 1;
@@ -133,6 +135,10 @@ pub enum WindowCommand {
         window_id: u64,
     },
     Minimize {
+        window_id: u64,
+    },
+    /// The system Back action, as Android's navigation bar sends it.
+    NavigateBack {
         window_id: u64,
     },
     Configure {
@@ -194,6 +200,12 @@ pub enum KeyboardKeyPhase {
 pub enum KeyboardCommand {
     DismissPanel {
         activation_serial: u64,
+    },
+    /// The keyboard panel starts moving to `height` logical pixels, zero
+    /// when hidden, over `duration_ms`.
+    PanelMotion {
+        height: u32,
+        duration_ms: u32,
     },
     Text(String),
     Key {
@@ -273,6 +285,7 @@ impl WindowCommand {
             Self::Close { window_id }
             | Self::Focus { window_id }
             | Self::Minimize { window_id }
+            | Self::NavigateBack { window_id }
             | Self::Configure { window_id, .. }
             | Self::MoveToWorkspace { window_id, .. }
             | Self::DropOnWorkspace { window_id, .. }
@@ -441,12 +454,27 @@ impl InputWindowRegion {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InputEdge {
+    Left,
+    Right,
+}
+
+/// A touch starting in `rect` over a client stays with that client until it
+/// travels inward from `edge`; the shell then claims it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EdgeSwipeRegion {
+    pub rect: InputRect,
+    pub edge: InputEdge,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct InputLayoutSnapshot {
     pub epoch: u64,
     pub flags: u32,
     pub shell_regions: Vec<InputRect>,
     pub software_keyboard_regions: Vec<InputRect>,
+    pub edge_swipe_regions: Vec<EdgeSwipeRegion>,
     pub windows: Vec<InputWindowRegion>,
     pub visible_surface_ids: Vec<u64>,
 }
@@ -688,6 +716,9 @@ pub struct WindowDescription {
     /// What the shell knows of this layer surface if it is a desktop pet
     /// (denial-pet-v1).
     pub pet: Option<PetDescription>,
+    /// The client lays the window out around the on-screen keyboard
+    /// (denial-insets-v1), so the mobile shell does not lift it.
+    pub keyboard_inset: bool,
 }
 
 /// A desktop pet (denial-pet-v1) as the shell knows it. A held pet is drawn

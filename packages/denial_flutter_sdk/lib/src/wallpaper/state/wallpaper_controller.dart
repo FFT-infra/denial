@@ -14,6 +14,7 @@ import '../providers/wallhaven_wallpaper_provider.dart';
 import '../wallpaper.dart';
 import '../wallpaper_provider.dart';
 import '../wallpaper_pagination.dart';
+import 'wallpaper_depth.dart';
 
 final localWallpaperSourceProvider = Provider<WallpaperProvider>((ref) {
   final paths = ref.watch(runtimePathsProvider);
@@ -319,6 +320,7 @@ class WallpaperController extends Notifier<WallpaperExperienceState>
       loading: false,
       clearError: true,
     );
+    ref.read(wallpaperDepthProvider.notifier).pickerClosed();
   }
 
   void setQuery(String query) {

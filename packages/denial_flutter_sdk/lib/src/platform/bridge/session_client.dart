@@ -54,6 +54,7 @@ final class BridgeSessionClient {
     required bool suspendEnabled,
     required Duration suspendTimeout,
     required SuspendMode suspendMode,
+    Duration? lockAfterScreenOff,
   }) {
     final lockMilliseconds = lockTimeout.inMilliseconds;
     final dpmsMilliseconds = dpmsTimeout.inMilliseconds;
@@ -65,15 +66,21 @@ final class BridgeSessionClient {
         dpmsMilliseconds > suspendMilliseconds) {
       return;
     }
+    final screenOffMilliseconds = lockAfterScreenOff?.inMilliseconds ?? 0;
+    if (screenOffMilliseconds < 0 || screenOffMilliseconds > 0xffffffff) {
+      return;
+    }
     final flags =
         (lockEnabled ? 1 : 0) |
         (dpmsEnabled ? 2 : 0) |
-        (suspendEnabled ? 4 : 0);
+        (suspendEnabled ? 4 : 0) |
+        (lockAfterScreenOff != null ? 8 : 0);
     final data = ByteData(32)
-      ..setUint8(0, 3)
+      ..setUint8(0, 4)
       ..setUint8(1, flags)
       ..setUint8(2, suspendMode.wireValue)
       ..setUint8(3, powerButtonAction.wireValue)
+      ..setUint32(4, screenOffMilliseconds, Endian.little)
       ..setUint64(8, lockMilliseconds, Endian.little)
       ..setUint64(16, dpmsMilliseconds, Endian.little)
       ..setUint64(24, suspendMilliseconds, Endian.little);
@@ -84,8 +91,14 @@ final class BridgeSessionClient {
 
   /// Requests compositor-owned DPMS-off for every currently powered output.
   /// The next physical input wakes outputs through the native idle policy.
-  void requestDpmsOff() {
-    final data = ByteData(1)..setUint8(0, 1);
+  void requestDpmsOff() => _sendDisplayPower(1);
+
+  /// Lights the dark outputs as an input would; the idle timeout starts
+  /// again.
+  void requestDisplayOn() => _sendDisplayPower(2);
+
+  void _sendDisplayPower(int command) {
+    final data = ByteData(1)..setUint8(0, command);
     _context.platform
         .send(_displayPowerChannel, data)
         ?.catchError((Object _) => null);

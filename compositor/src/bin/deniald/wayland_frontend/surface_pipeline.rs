@@ -283,7 +283,7 @@ mod popup_visible_geometry_tests {
 
 /// Maps a rectangle in a [`cropped_buffer_canvas`] back to buffer pixels.
 #[cfg(feature = "flutter")]
-pub(super) fn canvas_rect_to_buffer(
+pub(crate) fn canvas_rect_to_buffer(
     canvas: Option<&denial_flutter_engine::ExternalTexturePresentation>,
     rect: [f64; 4],
 ) -> [f64; 4] {
@@ -579,6 +579,19 @@ impl WaylandFrontend {
         root: &WlSurface,
         cursor_fast_path: bool,
     ) -> PublishedSurfaceCommits {
+        // A frozen window's commits wait, unpublished, for it to thaw: its
+        // buffers are neither snapshotted nor released early meanwhile.
+        if !cursor_fast_path
+            && self.mobile_shell
+            && self
+                .owning_toplevel_surface(root)
+                .is_some_and(|toplevel| self.window_frozen(&toplevel.id()))
+        {
+            return PublishedSurfaceCommits {
+                metadata_changed: false,
+                buffer_surface_ids: std::mem::take(&mut self.published_surface_ids_scratch),
+            };
+        }
         let mut committed_surfaces = std::mem::take(&mut self.committed_surfaces_scratch);
         committed_surfaces.clear();
         let mut buffer_surface_ids = std::mem::take(&mut self.published_surface_ids_scratch);
@@ -884,6 +897,7 @@ impl WaylandFrontend {
                     .and_then(|buffer| get_dmabuf(buffer).ok())
                     .cloned();
                 let buffer_guard = dmabuf.as_ref().and_then(|_| renderer_buffer.cloned());
+                let release = crate::client_release::current(states);
                 let (texture_id, width, height) = if let (Some(dmabuf), Some(buffer_guard)) =
                     (dmabuf, buffer_guard)
                 {
@@ -901,6 +915,7 @@ impl WaylandFrontend {
                         texture_id,
                         dmabuf,
                         buffer_guard,
+                        release,
                         revision,
                         expects_sample,
                     ));
@@ -1011,6 +1026,7 @@ impl WaylandFrontend {
             let buffer_guard = dmabuf.as_ref().and_then(|_| renderer_buffer.cloned());
             (renderable, dmabuf.zip(buffer_guard))
         })?;
+        let release = with_states(surface, crate::client_release::current);
         if !renderable {
             return None;
         }
@@ -1026,6 +1042,7 @@ impl WaylandFrontend {
                     texture_id,
                     dmabuf,
                     buffer_guard,
+                    release,
                     revision,
                     expects_sample,
                 )
@@ -1178,12 +1195,13 @@ impl WaylandFrontend {
         dirty_windows: Option<&HashSet<u64>>,
         previous_windows: &[WindowDescription],
     ) -> Result<(Vec<WindowDescription>, Vec<ExternalTextureFrame>), Box<dyn Error>> {
-        let previous_by_id = dirty_windows.map(|_| {
+        let previous_by_id = (dirty_windows.is_some() || self.mobile_shell).then(|| {
             previous_windows
                 .iter()
                 .map(|window| (window.window_id, window))
                 .collect::<HashMap<_, _>>()
         });
+        self.clear_kept_textures();
         // Pets whose windows went go back to their own place first.
         self.settle_pets();
         let mut windows = std::mem::take(&mut self.scene_windows_scratch);
@@ -1223,6 +1241,29 @@ impl WaylandFrontend {
                 // Xwayland override-redirect remaps.
                 continue;
             };
+            if self.window_frozen(&surface.id())
+                && let Some(previous) = previous_by_id
+                    .as_ref()
+                    .and_then(|windows| windows.get(&stable_id))
+            {
+                // A frozen window keeps its last frame: the same layers and
+                // textures, with no new texture frames. Only its minimized
+                // state follows the window.
+                for layer in &previous.surfaces {
+                    if layer.texture_id > 0 {
+                        surface_windows.insert(layer.surface_id, stable_id);
+                        self.keep_texture(layer.texture_id);
+                    }
+                }
+                if let Some(description) = windows.get_mut(window_count) {
+                    description.clone_from(previous);
+                } else {
+                    windows.push((*previous).clone());
+                }
+                windows[window_count].minimized = self.surface_is_minimized(&surface.id());
+                window_count += 1;
+                continue;
+            }
             if !self.mobile_shell
                 && dirty_windows.is_some_and(|dirty| !dirty.contains(&stable_id))
                 && let Some(previous) = previous_by_id
@@ -1495,6 +1536,7 @@ impl WaylandFrontend {
                 content_kind: client_surface_content_kind(protocol_facts.override_redirect),
                 opacity_class,
                 pet: None,
+                keyboard_inset: self.keyboard_inset_surface(&surface),
             };
             if let Some(previous) = windows.get_mut(window_count) {
                 *previous = description;
@@ -1603,6 +1645,7 @@ impl WaylandFrontend {
                 content_kind: WindowContentKind::LocalFlutter,
                 opacity_class: WindowOpacityClass::FullyOpaque,
                 pet: None,
+                keyboard_inset: false,
             };
             if let Some(previous) = windows.get_mut(window_count) {
                 *previous = description;
@@ -1789,6 +1832,7 @@ impl WaylandFrontend {
                     content_kind: layer_shell_content_kind(layer.layer()),
                     opacity_class: WindowOpacityClass::ContentTranslucent,
                     pet,
+                    keyboard_inset: false,
                 };
                 if let Some(previous) = windows.get_mut(window_count) {
                     *previous = description;
@@ -1932,6 +1976,7 @@ impl WaylandFrontend {
                     content_kind: WindowContentKind::PopupSurface,
                     opacity_class: WindowOpacityClass::ContentTranslucent,
                     pet: None,
+                    keyboard_inset: false,
                 };
                 if let Some(previous) = windows.get_mut(window_count) {
                     *previous = description;

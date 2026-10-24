@@ -18,6 +18,7 @@ import 'package:denial_flutter_sdk/state.dart';
 import 'package:denial_flutter_sdk/theme.dart';
 import 'package:denial_flutter_sdk/wallpaper.dart';
 
+import '../state/reference_shell_profile.dart';
 import 'settings_wallpaper_status.dart';
 import 'widgets/focused_border_color_picker.dart';
 import 'widgets/settings_about_page.dart';
@@ -389,6 +390,9 @@ class _SettingsPageBody extends ConsumerWidget {
             await ref.read(cursorThemeCatalogProvider.notifier).remove(theme);
           },
           onReset: controller.resetAppearance,
+          mobile:
+              ref.watch(referenceShellProfileProvider) ==
+              ReferenceShellProfile.mobile,
         );
       case SettingsPageId.language:
         final settings = ref.watch(
@@ -506,11 +510,11 @@ class _SettingsPageBody extends ConsumerWidget {
         return SettingsPowerPage(
           settings: settings,
           onLockEnabledChanged: controller.setIdleLockEnabled,
-          onLockTimeoutChanged: controller.setIdleLockTimeoutMinutes,
+          onLockTimeoutChanged: controller.setIdleLockTimeoutSeconds,
           onDpmsEnabledChanged: controller.setIdleDpmsEnabled,
-          onDpmsTimeoutChanged: controller.setIdleDpmsTimeoutMinutes,
+          onDpmsTimeoutChanged: controller.setIdleDpmsTimeoutSeconds,
           onSuspendEnabledChanged: controller.setIdleSuspendEnabled,
-          onSuspendTimeoutChanged: controller.setIdleSuspendTimeoutMinutes,
+          onSuspendTimeoutChanged: controller.setIdleSuspendTimeoutSeconds,
           onSuspendModeChanged: controller.setSuspendMode,
           onPowerButtonActionChanged: controller.setPowerButtonAction,
           onReset: controller.resetPower,

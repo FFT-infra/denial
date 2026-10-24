@@ -8,9 +8,17 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
+use denial_flutter_engine::ExternalTexturePresentation;
+
+use crate::wayland_frontend::canvas_rect_to_buffer;
 use crate::wire::SurfaceLayerDescription;
 
 const NATIVE_WINDOW_TEXTURE_NAMESPACE: u64 = 1 << 62;
+
+/// Whether `texture_id` names a merged native window image.
+pub(in crate::flutter_runtime) const fn is_native_window_texture(texture_id: i64) -> bool {
+    texture_id >= NATIVE_WINDOW_TEXTURE_NAMESPACE as i64
+}
 const MAX_NATIVE_WINDOW_PLANS: usize = 32;
 const MAX_NATIVE_WINDOW_LAYERS: usize = 32;
 const MAX_NATIVE_WINDOW_DIMENSION: u32 = 8192;
@@ -67,6 +75,26 @@ impl ClientRect {
             && self.right() >= other.right()
             && self.bottom() >= other.bottom()
     }
+}
+
+/// Whether the merge pass reproduces an input's presentation: none, or a
+/// virtual canvas that only crops its buffer. Canvases that place the image
+/// or paint a background, such as mobile inset strips, keep the surface tree.
+pub(super) fn reproduces_presentation(presentation: &ExternalTexturePresentation) -> bool {
+    // The engine applies only presentations with a canvas width.
+    let presented = presentation.width > 0.0;
+    if !presented {
+        return true;
+    }
+    let [x, y, width, height] = presentation.source;
+    let canvas = [0.0, 0.0, presentation.width, presentation.height];
+    let paints_background = presentation.background[2] > 0.0 && presentation.background[3] > 0.0;
+    presentation.width.is_finite()
+        && presentation.height.is_finite()
+        && presentation.height > 0.0
+        && presentation.destination == canvas
+        && !paints_background
+        && ClientRect::new(x, y, width, height).is_some()
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -242,6 +270,46 @@ impl NativeWindowPlan {
             scale,
             width,
             height,
+            layers,
+        })
+    }
+
+    /// Cropped inputs are published as virtual canvases, so layer sources
+    /// address those canvases. Map them into the buffers the pass samples,
+    /// using the presentation current with each input buffer, in layer order.
+    /// `None` marks a layer without a current buffer; it is not drawn.
+    pub(super) fn presented(
+        &self,
+        presentations: &[Option<ExternalTexturePresentation>],
+    ) -> Option<Self> {
+        if presentations.len() != self.layers.len() {
+            return None;
+        }
+        let mut layers = Vec::with_capacity(self.layers.len());
+        for (layer, presentation) in self.layers.iter().zip(presentations) {
+            let Some(presentation) = presentation else {
+                continue;
+            };
+            if !reproduces_presentation(presentation) {
+                return None;
+            }
+            let source = layer.source;
+            let [x, y, width, height] = canvas_rect_to_buffer(
+                Some(presentation),
+                [source.x, source.y, source.width, source.height],
+            );
+            layers.push(NativeWindowLayer {
+                source: ClientRect::new(x, y, width, height)?,
+                ..layer.clone()
+            });
+        }
+        Some(Self {
+            window_id: self.window_id,
+            texture_id: self.texture_id,
+            canvas: self.canvas,
+            scale: self.scale,
+            width: self.width,
+            height: self.height,
             layers,
         })
     }
@@ -472,6 +540,96 @@ mod tests {
         close(limits[2], 59.5 / 60.0);
         close(limits[3], 39.5 / 40.0);
         assert!(layer.sample_limits([0, 40]).is_none());
+    }
+
+    /// As published by `cropped_buffer_canvas` for an integral viewport crop.
+    fn crop(source: [f64; 4]) -> ExternalTexturePresentation {
+        ExternalTexturePresentation {
+            struct_size: std::mem::size_of::<ExternalTexturePresentation>(),
+            width: source[2],
+            height: source[3],
+            source,
+            destination: [0.0, 0.0, source[2], source[3]],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn cropped_inputs_sample_their_crop_origin_instead_of_the_buffer_corner() {
+        // The child shows the (200, 120) 200x150 crop of a 1000x800 buffer.
+        // Its description carries only the virtual 200x150 canvas.
+        let canvas = ClientRect::new(0.0, 0.0, 400.0, 300.0).unwrap();
+        let child = ClientRect::new(50.0, 40.0, 200.0, 150.0).unwrap();
+        let plan = NativeWindowPlan::new(
+            1,
+            canvas,
+            1.0,
+            &[
+                surface(1, canvas, [400, 300]),
+                surface(2, child, [200, 150]),
+            ],
+        )
+        .unwrap();
+        let presented = plan
+            .presented(&[
+                Some(ExternalTexturePresentation::default()),
+                Some(crop([200.0, 120.0, 200.0, 150.0])),
+            ])
+            .unwrap();
+        assert_eq!(presented.layers[0], plan.layers[0]);
+        let layer = &presented.layers[1];
+        assert_eq!(
+            layer.source,
+            ClientRect::new(200.0, 120.0, 200.0, 150.0).unwrap()
+        );
+        let vertices = presented.vertices(layer, [1000, 800]).unwrap();
+        assert_eq!(vertices[0].position, [50.0, 40.0]);
+        close(vertices[0].uv[0], 200.0 / 1000.0);
+        close(vertices[0].uv[1], 120.0 / 800.0);
+        close(vertices[3].uv[0], 400.0 / 1000.0);
+        close(vertices[3].uv[1], 270.0 / 800.0);
+        let limits = layer.sample_limits([1000, 800]).unwrap();
+        close(limits[0], 200.5 / 1000.0);
+        close(limits[1], 120.5 / 800.0);
+        close(limits[2], 399.5 / 1000.0);
+        close(limits[3], 269.5 / 800.0);
+    }
+
+    #[test]
+    fn presentations_other_than_crops_keep_the_surface_tree() {
+        let plan = firefox_plan();
+        let none = ExternalTexturePresentation::default();
+        assert!(reproduces_presentation(&none));
+        assert!(plan.presented(&[Some(none), Some(none)]).is_some());
+        assert!(plan.presented(&[Some(none)]).is_none());
+        // Mobile inset canvas: the image is placed below a background strip.
+        let mut inset = crop([0.0, 0.0, 3460.0, 2364.0]);
+        inset.height += 96.0;
+        inset.destination[1] = 96.0;
+        inset.background = [0.0, 0.0, 3460.0, 96.0];
+        assert!(!reproduces_presentation(&inset));
+        assert!(plan.presented(&[Some(inset), Some(none)]).is_none());
+        let mut strip = crop([0.0, 0.0, 3460.0, 2364.0]);
+        strip.background = [0.0, 0.0, 3460.0, 96.0];
+        assert!(!reproduces_presentation(&strip));
+        let mut invalid = crop([0.0, 0.0, 3460.0, 2364.0]);
+        invalid.source[0] = f64::NAN;
+        assert!(!reproduces_presentation(&invalid));
+    }
+
+    #[test]
+    fn layers_without_a_current_buffer_wait_instead_of_failing_the_window() {
+        // A tooltip subsurface mapped since the last tick: the plan already
+        // lists it, but its first buffer has not advanced.
+        let plan = firefox_plan();
+        let none = ExternalTexturePresentation::default();
+        let presented = plan.presented(&[Some(none), None]).unwrap();
+        assert_eq!(presented.layers, [plan.layers[0].clone()]);
+        assert_eq!(
+            (presented.texture_id, presented.width, presented.height),
+            (plan.texture_id, plan.width, plan.height)
+        );
+        assert!(plan.presented(&[None, None]).unwrap().layers.is_empty());
     }
 
     #[test]

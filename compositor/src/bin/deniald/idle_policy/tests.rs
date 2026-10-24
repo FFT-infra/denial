@@ -15,6 +15,7 @@ fn configuration(
         suspend_timeout,
         suspend_mode: SuspendMode::SystemDefault,
         power_button_action: PowerButtonAction::Dpms,
+        lock_after_screen_off: None,
     }
 }
 
@@ -122,6 +123,18 @@ fn packet_is_versioned_bounded_ordered_and_preserves_optional_actions() {
 }
 
 #[test]
+fn display_power_packet_is_one_known_byte() {
+    assert_eq!(decode_display_power(&[1]), Ok(DisplayPowerRequest::Off));
+    assert_eq!(decode_display_power(&[2]), Ok(DisplayPowerRequest::On));
+    for packet in [&[][..], &[0], &[3], &[1, 0]] {
+        assert_eq!(
+            decode_display_power(packet),
+            Err(DisplayPowerPacketError::InvalidPacket)
+        );
+    }
+}
+
+#[test]
 fn power_button_system_actions_map_to_logind_methods() {
     assert_eq!(PowerButtonAction::Dpms.logind_method(), None);
     assert_eq!(PowerButtonAction::Suspend.logind_method(), Some("Suspend"));
@@ -215,6 +228,10 @@ fn idle_inhibitor_cannot_undo_a_power_button_blank() {
 fn power_button_locks_when_blanking_but_does_not_relock_on_wake() {
     let now = Instant::now();
     let mut policy = IdlePolicy::default();
+    policy.configure(
+        configuration(Some(Duration::from_secs(300)), None, None),
+        now,
+    );
     let sleep = policy.toggle_now([(output(1), true)], now);
     assert!(sleep.lock);
     assert!(!sleep.suspend);
@@ -225,6 +242,16 @@ fn power_button_locks_when_blanking_but_does_not_relock_on_wake() {
     assert!(!wake.suspend);
     assert!(wake.power_requests[0].powered);
     assert!(!policy.toggle_now([], now).lock);
+}
+
+#[test]
+fn power_button_does_not_lock_when_locking_is_off() {
+    let now = Instant::now();
+    let mut policy = IdlePolicy::default();
+    policy.configure(configuration(None, None, None), now);
+    let sleep = policy.toggle_now([(output(1), true)], now);
+    assert!(!sleep.lock);
+    assert!(!sleep.power_requests[0].powered);
 }
 
 #[test]
@@ -566,4 +593,130 @@ fn hardware_wake_is_one_way_targets_one_output_and_resets_idle() {
             .power_requests
             .is_empty()
     );
+}
+
+#[test]
+fn screen_off_lock_delay_is_a_version_four_flag() {
+    let mut delayed = packet(
+        DPMS_ENABLED | SCREEN_OFF_LOCK_ENABLED,
+        60_000,
+        30_000,
+        60_000,
+    );
+    delayed[4..8].copy_from_slice(&5_000u32.to_le_bytes());
+    assert_eq!(
+        decode_configuration(&delayed)
+            .unwrap()
+            .lock_after_screen_off,
+        Some(Duration::from_secs(5))
+    );
+    let mut at_once = delayed;
+    at_once[4..8].fill(0);
+    assert_eq!(
+        decode_configuration(&at_once)
+            .unwrap()
+            .lock_after_screen_off,
+        Some(Duration::ZERO)
+    );
+    let mut stray = delayed;
+    stray[1] = DPMS_ENABLED;
+    assert_eq!(
+        decode_configuration(&stray),
+        Err(IdlePolicyPacketError::NonZeroReservedBytes)
+    );
+    let mut older = at_once;
+    older[0] = POWER_BUTTON_CONFIGURATION_PACKET_VERSION;
+    assert_eq!(
+        decode_configuration(&older),
+        Err(IdlePolicyPacketError::InvalidFlags(
+            DPMS_ENABLED | SCREEN_OFF_LOCK_ENABLED
+        ))
+    );
+}
+
+#[test]
+fn power_button_locks_after_the_screen_off_delay_unless_woken() {
+    let now = Instant::now();
+    let mut policy = IdlePolicy::default();
+    policy.configure(
+        IdlePolicyConfiguration {
+            lock_after_screen_off: Some(Duration::from_secs(5)),
+            ..configuration(None, None, None)
+        },
+        now,
+    );
+    let sleep = policy.toggle_now([(output(1), true)], now);
+    assert!(!sleep.lock);
+    assert_eq!(policy.next_deadline(), Some(now + Duration::from_secs(5)));
+    // Playback holds idling off, not the lock of a screen turned off.
+    assert!(
+        !policy
+            .evaluate(now + Duration::from_secs(4), true, [(output(1), false)])
+            .lock
+    );
+    assert!(
+        policy
+            .evaluate(now + Duration::from_secs(5), true, [(output(1), false)])
+            .lock
+    );
+    assert_eq!(policy.next_deadline(), None);
+
+    policy.toggle_now([(output(1), false)], now);
+    policy.toggle_now([(output(1), true)], now);
+    policy.toggle_now([(output(1), false)], now + Duration::from_secs(1));
+    assert_eq!(policy.next_deadline(), None);
+    assert!(
+        !policy
+            .evaluate(now + Duration::from_secs(9), false, [(output(1), true)])
+            .lock
+    );
+}
+
+#[test]
+fn idle_screen_off_starts_the_lock_delay_and_zero_locks_with_it() {
+    let now = Instant::now();
+    let dpms = Duration::from_secs(30);
+    let mut policy = IdlePolicy::default();
+    policy.configure(
+        IdlePolicyConfiguration {
+            lock_after_screen_off: Some(Duration::from_secs(10)),
+            ..configuration(None, Some(dpms), None)
+        },
+        now,
+    );
+    let off = policy.evaluate(now + dpms, false, [(output(1), true)]);
+    assert!(!off.power_requests[0].powered);
+    assert!(!off.lock);
+    assert_eq!(
+        policy.next_deadline(),
+        Some(now + dpms + Duration::from_secs(10))
+    );
+    assert!(
+        policy
+            .evaluate(
+                now + dpms + Duration::from_secs(10),
+                false,
+                [(output(1), false)]
+            )
+            .lock
+    );
+
+    let mut policy = IdlePolicy::default();
+    policy.configure(
+        IdlePolicyConfiguration {
+            lock_after_screen_off: Some(Duration::ZERO),
+            ..configuration(None, Some(dpms), None)
+        },
+        now,
+    );
+    assert!(policy.evaluate(now + dpms, false, [(output(1), true)]).lock);
+    let mut policy = IdlePolicy::default();
+    policy.configure(
+        IdlePolicyConfiguration {
+            lock_after_screen_off: Some(Duration::ZERO),
+            ..configuration(None, None, None)
+        },
+        now,
+    );
+    assert!(policy.toggle_now([(output(1), true)], now).lock);
 }

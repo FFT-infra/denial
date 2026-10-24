@@ -6,6 +6,8 @@ mod application_theming;
 #[cfg(feature = "flutter")]
 #[path = "deniald/authentication.rs"]
 mod authentication;
+#[path = "deniald/client_release.rs"]
+mod client_release;
 #[path = "deniald/clipboard.rs"]
 mod clipboard;
 #[path = "deniald/cpu_scheduling.rs"]
@@ -107,6 +109,9 @@ mod presentation_clock;
 mod runtime_state;
 #[path = "deniald/scene_sync.rs"]
 mod scene_sync;
+#[cfg(feature = "flutter")]
+#[path = "deniald/screen_off_touch.rs"]
+mod screen_off_touch;
 #[cfg(feature = "flutter")]
 #[path = "deniald/screenshot.rs"]
 mod screenshot;
@@ -225,7 +230,8 @@ const DEFAULT_QT_QPA_PLATFORMTHEME: &str = "xdgdesktopportal";
 #[cfg(feature = "flutter")]
 use dpms::{
     apply_output_power_requests, collect_output_power_requests, synchronize_idle_dpms,
-    synchronize_idle_dpms_configuration, synchronize_power_button, synchronize_requested_dpms_off,
+    synchronize_idle_dpms_configuration, synchronize_power_button,
+    synchronize_requested_display_power,
 };
 #[cfg(feature = "flutter")]
 use flutter_event_loop::{FlutterEventLoopContext, run_flutter_event_loop};
@@ -250,9 +256,9 @@ use flutter_session::{
 #[cfg(feature = "flutter")]
 use flutter_settings_sync::{
     apply_automatic_orientation, apply_resident_output_geometry, send_flutter_window_event,
-    synchronize_flutter_window_commands, synchronize_flutter_window_management,
-    synchronize_resident_flutter_geometry_state, synchronize_settings,
-    synchronize_system_bar_configuration,
+    synchronize_fingerprint_unlock, synchronize_flutter_window_commands,
+    synchronize_flutter_window_management, synchronize_resident_flutter_geometry_state,
+    synchronize_settings, synchronize_system_bar_configuration,
 };
 use frame_loop::{FrameLoopContext, run_frame_loop};
 use hotplug_transaction::{
@@ -369,6 +375,18 @@ fn main() {
         if let Err(error) = authentication::fingerprint_settings::run() {
             println!("{}", serde_json::json!({"event":"unavailable"}));
             eprintln!("deniald fingerprint settings: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    #[cfg(feature = "flutter")]
+    if std::env::args_os()
+        .skip(1)
+        .eq([std::ffi::OsString::from("--lock-pin")])
+    {
+        if let Err(error) = authentication::pin::run_settings() {
+            println!("{}", serde_json::json!({"event":"unavailable"}));
+            eprintln!("deniald lock PIN: {error}");
             std::process::exit(1);
         }
         return;

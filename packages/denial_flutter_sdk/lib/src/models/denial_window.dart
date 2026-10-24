@@ -237,6 +237,7 @@ class DenialWindow {
     this.contentKind = DenialWindowContentKind.surfaceTree,
     this.opacityClass = DenialWindowOpacityClass.contentTranslucent,
     this.pet,
+    this.keyboardInset = false,
   });
 
   final int objectId;
@@ -286,6 +287,11 @@ class DenialWindow {
   /// What the shell knows of this layer surface if it is a desktop pet
   /// (denial-pet-v1); null for anything else.
   final DenialPet? pet;
+
+  /// The client lays this window out around the on-screen keyboard
+  /// (denial-insets-v1 keyboard inset), so the mobile shell leaves it in
+  /// place while the keyboard is shown instead of lifting it.
+  final bool keyboardInset;
 
   /// The window holding this layer surface, if it is a pet one holds. A held
   /// pet is drawn and hit with that window instead of in its layer's plane.
@@ -547,6 +553,7 @@ class DenialWindow {
         other.contentKind == contentKind &&
         other.opacityClass == opacityClass &&
         other.pet == pet &&
+        other.keyboardInset == keyboardInset &&
         listEquals(other.surfaceLayers, surfaceLayers);
   }
 
@@ -602,6 +609,7 @@ class DenialWindow {
     contentHeight,
     contentKind,
     pet,
+    keyboardInset,
     ...surfaceLayers,
   ]);
 }

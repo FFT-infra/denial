@@ -1,7 +1,7 @@
 //! Touch-output reservation and virtual input through Denial's normal seat routers.
 use std::error::Error;
 
-use smithay::backend::input::{Axis, AxisSource, ButtonState, KeyState};
+use smithay::backend::input::{Axis, AxisSource, ButtonState, InputTime, KeyState};
 use smithay::input::keyboard::Keycode;
 use smithay::input::pointer::{AxisFrame, RelativeMotionEvent};
 use smithay::utils::Point;
@@ -58,7 +58,7 @@ fn release(state: &mut RuntimeState) {
         return;
     };
     let keyboard = frontend.seat.get_keyboard().expect("seat has no keyboard");
-    let time = frontend.start_time.elapsed().as_millis() as u32;
+    let time = InputTime::now();
     for keycode in keys {
         input::inject_shell_key_transition(
             state,
@@ -216,7 +216,7 @@ pub(in super::super) fn synchronize_input_deck(
             command => {
                 state.note_user_activity();
                 let frontend = state.wayland.as_ref().expect("missing Wayland frontend");
-                let time = frontend.start_time.elapsed().as_millis() as u32;
+                let time = InputTime::now();
                 match command {
                     Command::Motion { dx, dy } => {
                         let captured = state.flutter_input.pointer_captured();
@@ -239,7 +239,7 @@ pub(in super::super) fn synchronize_input_deck(
                             Some(RelativeMotionEvent {
                                 delta,
                                 delta_unaccel: delta,
-                                utime: u64::from(time) * 1000,
+                                time,
                             }),
                         );
                     }

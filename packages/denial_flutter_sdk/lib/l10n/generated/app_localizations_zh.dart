@@ -39,6 +39,50 @@ class AppLocalizationsZh extends AppLocalizations {
   String get homeResizeWidget => '调整小组件大小';
 
   @override
+  String get homeFolderDefaultName => '文件夹';
+
+  @override
+  String get homeFolderGames => '游戏';
+
+  @override
+  String get homeFolderInternet => '网络';
+
+  @override
+  String get homeFolderOffice => '办公';
+
+  @override
+  String get homeFolderGraphics => '图形';
+
+  @override
+  String get homeFolderMedia => '影音';
+
+  @override
+  String get homeFolderDevelopment => '开发';
+
+  @override
+  String get homeFolderEducation => '教育';
+
+  @override
+  String get homeFolderScience => '科学';
+
+  @override
+  String get homeFolderSystem => '系统';
+
+  @override
+  String get homeFolderUtilities => '工具';
+
+  @override
+  String get homeFolderSettings => '设置';
+
+  @override
+  String get homeFolderRename => '重命名文件夹';
+
+  @override
+  String homeFolderApps(String name, int count) {
+    return '$name，$count 个应用';
+  }
+
+  @override
   String get actionCancel => '取消';
 
   @override
@@ -1195,7 +1239,13 @@ class AppLocalizationsZh extends AppLocalizations {
   }
 
   @override
-  String get quickSettingsAutomatic => '自动';
+  String get quickSettingsAutoRotate => '自动旋转';
+
+  @override
+  String get quickSettingsScreenRecording => '屏幕录制';
+
+  @override
+  String get quickSettingsRecording => '正在录制';
 
   @override
   String get quickSettingsBalanced => '均衡';
@@ -1210,18 +1260,10 @@ class AppLocalizationsZh extends AppLocalizations {
   String get quickSettingsControls => '控件';
 
   @override
-  String quickSettingsDate(String weekday, int day) {
-    return '$weekday $day日';
-  }
-
-  @override
   String get quickSettingsHighPerformance => '高性能';
 
   @override
   String get quickSettingsKeyboard => '键盘';
-
-  @override
-  String get quickSettingsLocked => '已锁定';
 
   @override
   String get quickSettingsNormal => '正常';
@@ -1244,9 +1286,6 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get quickSettingsPerformance => '性能';
-
-  @override
-  String get quickSettingsRotation => '旋转';
 
   @override
   String get quickSettingsSettingsUnavailable => '设置不可用。';
@@ -3848,16 +3887,10 @@ class AppLocalizationsZh extends AppLocalizations {
   String get simPinTitle => '解锁 SIM 卡';
 
   @override
-  String get simPinLabel => 'SIM PIN';
-
-  @override
   String get simPinUnlock => '解锁 SIM 卡';
 
   @override
   String get simPinLater => '稍后';
-
-  @override
-  String get simPinFailed => '无法解锁 SIM 卡。请检查 PIN 和剩余尝试次数。';
 
   @override
   String get simPukRequired => 'SIM 卡需要 PUK。请联系运营商。';
@@ -4728,4 +4761,89 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get inputDeckRightClick => '右键单击';
+
+  @override
+  String get lockEnterPin => '输入 PIN 码';
+
+  @override
+  String lockPinProgress(int entered, int length) {
+    return 'PIN 码，已输入 $entered/$length 位';
+  }
+
+  @override
+  String get lockPinObscured => 'PIN 码，已隐藏';
+
+  @override
+  String get lockWrongPin => 'PIN 码错误';
+
+  @override
+  String get lockUsePassword => '使用密码';
+
+  @override
+  String get lockUsePin => '使用 PIN 码';
+
+  @override
+  String get lockPinDelete => '删除';
+
+  @override
+  String get settingsLockPinTitle => 'PIN 码';
+
+  @override
+  String get settingsLockPinLabel => '使用 PIN 码解锁';
+
+  @override
+  String get settingsLockPinDescription =>
+      '在锁屏上输入简短的数字 PIN 码代替密码。密码仍可解锁，其他操作仍需输入密码。';
+
+  @override
+  String settingsLockPinOn(int length) {
+    return '已开启，$length 位';
+  }
+
+  @override
+  String get settingsLockPinOff => '关闭';
+
+  @override
+  String get settingsLockPinSetUp => '设置 PIN 码';
+
+  @override
+  String get settingsLockPinChange => '更改 PIN 码';
+
+  @override
+  String get settingsLockPinRemove => '移除 PIN 码';
+
+  @override
+  String get settingsLockPinSave => '保存 PIN 码';
+
+  @override
+  String get settingsLockPinPassword => '账户密码';
+
+  @override
+  String get settingsLockPinNew => '新 PIN 码';
+
+  @override
+  String get settingsLockPinConfirm => '确认 PIN 码';
+
+  @override
+  String get settingsLockPinLengthHint => '4 到 12 位数字';
+
+  @override
+  String get settingsLockPinMismatch => '两次输入的 PIN 码不一致';
+
+  @override
+  String get settingsLockPinWrongPassword => '密码错误';
+
+  @override
+  String get settingsLockPinUnavailable => '无法更改 PIN 码，请重试。';
+
+  @override
+  String timeTwelveHour(String hour, String minute, String period) {
+    return '$period$hour:$minute';
+  }
+
+  @override
+  String get timeMorning => '上午';
+
+  @override
+  String get timeAfternoon => '下午';
 }

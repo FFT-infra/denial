@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:denial_flutter_sdk/localization.dart';
 import 'package:denial_flutter_sdk/system_services.dart';
+import 'package:denial_flutter_sdk/settings.dart';
 import 'package:denial_flutter_sdk/state.dart';
 import 'package:denial_flutter_sdk/motion.dart';
 import 'package:denial_flutter_sdk/shell_theme.dart';
@@ -35,6 +36,9 @@ class _NotificationCenterState extends ConsumerState<NotificationCenter> {
   Widget build(BuildContext context) {
     final state = ref.watch(desktopNotificationsProvider);
     final controller = ref.read(desktopNotificationsProvider.notifier);
+    final policyLoaded =
+        ref.watch(shellSettingsSyncStatusProvider).phase ==
+        ShellSettingsSyncPhase.ready;
     final records = state.history;
     if (widget.active && state.unreadCount > 0 && !_markReadScheduled) {
       _markReadScheduled = true;
@@ -54,7 +58,7 @@ class _NotificationCenterState extends ConsumerState<NotificationCenter> {
             showTitle: widget.showTitle,
             unreadCount: state.unreadCount,
             doNotDisturb: state.doNotDisturb,
-            policyLoaded: state.policyLoaded,
+            policyLoaded: policyLoaded,
             hasNotifications: records.isNotEmpty || state.active.isNotEmpty,
             onToggleDoNotDisturb: controller.toggleDoNotDisturb,
             onClearAll: controller.clearAll,
@@ -62,7 +66,7 @@ class _NotificationCenterState extends ConsumerState<NotificationCenter> {
           const SizedBox(height: 10),
           _PrivacyModeSelector(
             selected: state.lockPreview,
-            enabled: state.policyLoaded,
+            enabled: policyLoaded,
             onSelected: controller.setLockPreview,
           ),
           const SizedBox(height: 10),
@@ -311,8 +315,6 @@ class _PrivacyChoiceState extends State<_PrivacyChoice> {
     final l10n = context.l10n;
     final label = switch (widget.mode) {
       NotificationPreviewMode.hidden => l10n.notificationsPreviewHidden,
-      NotificationPreviewMode.applicationOnly =>
-        l10n.notificationsPreviewApplicationOnly,
       NotificationPreviewMode.full => l10n.notificationsPreviewFull,
     };
     final accent = ShellTheme.of(context).accent;

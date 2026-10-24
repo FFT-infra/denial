@@ -51,6 +51,12 @@ final class BridgeInputClient {
     );
   }
 
+  void reportKeyboardPanelMotion(int height, Duration duration) {
+    _context.sendWire(
+      _context.codec.encodeKeyboardPanelMotion(height, duration),
+    );
+  }
+
   void pressKeyboardKey(String key) {
     if (key.isEmpty) {
       return;

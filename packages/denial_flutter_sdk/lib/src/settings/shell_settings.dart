@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 
 import '../core/utf8_size.dart';
 import '../models/display_layout.dart';
+import '../models/notification_policy.dart';
 import '../models/power_button_action.dart';
 import '../models/shell_popup_placement.dart';
 import '../models/suspend_mode.dart';
@@ -71,9 +72,15 @@ enum ShellLocalePreference { system, english, simplifiedChinese }
 
 @immutable
 class ShellLocalizationSettings {
-  const ShellLocalizationSettings({this.locale = ShellLocalePreference.system});
+  const ShellLocalizationSettings({
+    this.locale = ShellLocalePreference.system,
+    this.twentyFourHourClock = true,
+  });
 
   final ShellLocalePreference locale;
+
+  /// Clocks show 17:45; otherwise 5:45 PM, as the language writes it.
+  final bool twentyFourHourClock;
 
   Locale? get localeOverride => switch (locale) {
     ShellLocalePreference.system => null,
@@ -81,17 +88,25 @@ class ShellLocalizationSettings {
     ShellLocalePreference.simplifiedChinese => const Locale('zh'),
   };
 
-  ShellLocalizationSettings copyWith({ShellLocalePreference? locale}) {
-    return ShellLocalizationSettings(locale: locale ?? this.locale);
+  ShellLocalizationSettings copyWith({
+    ShellLocalePreference? locale,
+    bool? twentyFourHourClock,
+  }) {
+    return ShellLocalizationSettings(
+      locale: locale ?? this.locale,
+      twentyFourHourClock: twentyFourHourClock ?? this.twentyFourHourClock,
+    );
   }
 
   @override
   bool operator ==(Object other) {
-    return other is ShellLocalizationSettings && other.locale == locale;
+    return other is ShellLocalizationSettings &&
+        other.locale == locale &&
+        other.twentyFourHourClock == twentyFourHourClock;
   }
 
   @override
-  int get hashCode => locale.hashCode;
+  int get hashCode => Object.hash(locale, twentyFourHourClock);
 }
 
 @immutable
@@ -488,6 +503,7 @@ class ShellLockScreenSettings {
     this.blurRadius = 8,
     this.clockScale = 1,
     this.showSystemStatus = true,
+    this.fingerprintUnlock = true,
   });
 
   final bool useSystemWallpaper;
@@ -496,12 +512,17 @@ class ShellLockScreenSettings {
   final double clockScale;
   final bool showSystemStatus;
 
+  /// The lock screen offers the fingerprint reader; Denial reads this
+  /// itself and keeps the reader unarmed when it is off.
+  final bool fingerprintUnlock;
+
   ShellLockScreenSettings copyWith({
     bool? useSystemWallpaper,
     double? dimAmount,
     double? blurRadius,
     double? clockScale,
     bool? showSystemStatus,
+    bool? fingerprintUnlock,
   }) {
     return ShellLockScreenSettings(
       useSystemWallpaper: useSystemWallpaper ?? this.useSystemWallpaper,
@@ -509,6 +530,7 @@ class ShellLockScreenSettings {
       blurRadius: blurRadius ?? this.blurRadius,
       clockScale: clockScale ?? this.clockScale,
       showSystemStatus: showSystemStatus ?? this.showSystemStatus,
+      fingerprintUnlock: fingerprintUnlock ?? this.fingerprintUnlock,
     );
   }
 
@@ -519,7 +541,8 @@ class ShellLockScreenSettings {
         other.dimAmount == dimAmount &&
         other.blurRadius == blurRadius &&
         other.clockScale == clockScale &&
-        other.showSystemStatus == showSystemStatus;
+        other.showSystemStatus == showSystemStatus &&
+        other.fingerprintUnlock == fingerprintUnlock;
   }
 
   @override
@@ -529,6 +552,7 @@ class ShellLockScreenSettings {
     blurRadius,
     clockScale,
     showSystemStatus,
+    fingerprintUnlock,
   );
 }
 
@@ -537,50 +561,61 @@ class ShellPowerSettings {
   const ShellPowerSettings({
     this.powerButtonAction = PowerButtonAction.powerOff,
     this.idleLockEnabled = true,
-    this.idleLockTimeoutMinutes = 16,
+    this.idleLockTimeoutSeconds = 16 * 60,
     this.idleDpmsEnabled = true,
-    this.idleDpmsTimeoutMinutes = 15,
+    this.idleDpmsTimeoutSeconds = 15 * 60,
     this.idleSuspendEnabled = false,
-    this.idleSuspendTimeoutMinutes = 30,
+    this.idleSuspendTimeoutSeconds = 30 * 60,
     this.suspendMode = SuspendMode.deep,
+    this.screenOffLockDelaySeconds = 0,
   });
 
-  static const int minimumIdleTimeoutMinutes = 1;
-  static const int maximumIdleTimeoutMinutes = 120;
-  static const int minimumIdleDpmsMinutes = minimumIdleTimeoutMinutes;
-  static const int maximumIdleDpmsMinutes = maximumIdleTimeoutMinutes;
+  /// Idle timeouts are whole seconds, from half a minute to two hours.
+  static const int minimumIdleTimeoutSeconds = 30;
+  static const int maximumIdleTimeoutSeconds = 2 * 60 * 60;
+
+  /// The longest a dark screen may stay unlocked.
+  static const int maximumScreenOffLockDelaySeconds = 60 * 60;
 
   final PowerButtonAction powerButtonAction;
   final bool idleLockEnabled;
-  final int idleLockTimeoutMinutes;
+  final int idleLockTimeoutSeconds;
   final bool idleDpmsEnabled;
-  final int idleDpmsTimeoutMinutes;
+  final int idleDpmsTimeoutSeconds;
   final bool idleSuspendEnabled;
-  final int idleSuspendTimeoutMinutes;
+  final int idleSuspendTimeoutSeconds;
   final SuspendMode suspendMode;
+
+  /// On a phone, seconds a dark screen stays unlocked, by the power button
+  /// or the idle timeout; 0 locks with the screen. `idleLockEnabled` turns
+  /// locking on or off there, and the idle lock timeout has no say.
+  final int screenOffLockDelaySeconds;
 
   ShellPowerSettings copyWith({
     PowerButtonAction? powerButtonAction,
     bool? idleLockEnabled,
-    int? idleLockTimeoutMinutes,
+    int? idleLockTimeoutSeconds,
     bool? idleDpmsEnabled,
-    int? idleDpmsTimeoutMinutes,
+    int? idleDpmsTimeoutSeconds,
     bool? idleSuspendEnabled,
-    int? idleSuspendTimeoutMinutes,
+    int? idleSuspendTimeoutSeconds,
     SuspendMode? suspendMode,
+    int? screenOffLockDelaySeconds,
   }) {
     return ShellPowerSettings(
       powerButtonAction: powerButtonAction ?? this.powerButtonAction,
       idleLockEnabled: idleLockEnabled ?? this.idleLockEnabled,
-      idleLockTimeoutMinutes:
-          idleLockTimeoutMinutes ?? this.idleLockTimeoutMinutes,
+      idleLockTimeoutSeconds:
+          idleLockTimeoutSeconds ?? this.idleLockTimeoutSeconds,
       idleDpmsEnabled: idleDpmsEnabled ?? this.idleDpmsEnabled,
-      idleDpmsTimeoutMinutes:
-          idleDpmsTimeoutMinutes ?? this.idleDpmsTimeoutMinutes,
+      idleDpmsTimeoutSeconds:
+          idleDpmsTimeoutSeconds ?? this.idleDpmsTimeoutSeconds,
       idleSuspendEnabled: idleSuspendEnabled ?? this.idleSuspendEnabled,
-      idleSuspendTimeoutMinutes:
-          idleSuspendTimeoutMinutes ?? this.idleSuspendTimeoutMinutes,
+      idleSuspendTimeoutSeconds:
+          idleSuspendTimeoutSeconds ?? this.idleSuspendTimeoutSeconds,
       suspendMode: suspendMode ?? this.suspendMode,
+      screenOffLockDelaySeconds:
+          screenOffLockDelaySeconds ?? this.screenOffLockDelaySeconds,
     );
   }
 
@@ -589,24 +624,26 @@ class ShellPowerSettings {
     return other is ShellPowerSettings &&
         other.powerButtonAction == powerButtonAction &&
         other.idleLockEnabled == idleLockEnabled &&
-        other.idleLockTimeoutMinutes == idleLockTimeoutMinutes &&
+        other.idleLockTimeoutSeconds == idleLockTimeoutSeconds &&
         other.idleDpmsEnabled == idleDpmsEnabled &&
-        other.idleDpmsTimeoutMinutes == idleDpmsTimeoutMinutes &&
+        other.idleDpmsTimeoutSeconds == idleDpmsTimeoutSeconds &&
         other.idleSuspendEnabled == idleSuspendEnabled &&
-        other.idleSuspendTimeoutMinutes == idleSuspendTimeoutMinutes &&
-        other.suspendMode == suspendMode;
+        other.idleSuspendTimeoutSeconds == idleSuspendTimeoutSeconds &&
+        other.suspendMode == suspendMode &&
+        other.screenOffLockDelaySeconds == screenOffLockDelaySeconds;
   }
 
   @override
   int get hashCode => Object.hash(
     powerButtonAction,
     idleLockEnabled,
-    idleLockTimeoutMinutes,
+    idleLockTimeoutSeconds,
     idleDpmsEnabled,
-    idleDpmsTimeoutMinutes,
+    idleDpmsTimeoutSeconds,
     idleSuspendEnabled,
-    idleSuspendTimeoutMinutes,
+    idleSuspendTimeoutSeconds,
     suspendMode,
+    screenOffLockDelaySeconds,
   );
 }
 
@@ -645,6 +682,106 @@ bool isValidApplicationEnvironmentDesktopFileId(String desktopFileId) {
         desktopFileId,
         applicationEnvironmentMaximumDesktopFileIdBytes,
       );
+}
+
+@immutable
+class ShellNotificationSettings {
+  const ShellNotificationSettings({
+    this.doNotDisturb = false,
+    this.lockPreview = NotificationPreviewMode.full,
+    this.wakeScreen = true,
+  });
+
+  /// Holds back popups, sound and vibration; critical ones still show.
+  final bool doNotDisturb;
+
+  /// What the lock screen shows of them.
+  final NotificationPreviewMode lockPreview;
+
+  /// A notification that pops up also turns the screen on.
+  final bool wakeScreen;
+
+  ShellNotificationSettings copyWith({
+    bool? doNotDisturb,
+    NotificationPreviewMode? lockPreview,
+    bool? wakeScreen,
+  }) {
+    return ShellNotificationSettings(
+      doNotDisturb: doNotDisturb ?? this.doNotDisturb,
+      lockPreview: lockPreview ?? this.lockPreview,
+      wakeScreen: wakeScreen ?? this.wakeScreen,
+    );
+  }
+
+  Map<String, Object> toJson() => <String, Object>{
+    'doNotDisturb': doNotDisturb,
+    'lockPreview': lockPreview.name,
+    'wakeScreen': wakeScreen,
+  };
+
+  factory ShellNotificationSettings.fromJson(Object? value) {
+    final json = _map(value);
+    const defaults = ShellNotificationSettings();
+    return ShellNotificationSettings(
+      doNotDisturb: json['doNotDisturb'] is bool
+          ? json['doNotDisturb'] as bool
+          : defaults.doNotDisturb,
+      lockPreview: json.containsKey('lockPreview')
+          ? NotificationPreviewMode.parse(json['lockPreview'])
+          : defaults.lockPreview,
+      wakeScreen: json['wakeScreen'] is bool
+          ? json['wakeScreen'] as bool
+          : defaults.wakeScreen,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return other is ShellNotificationSettings &&
+        other.doNotDisturb == doNotDisturb &&
+        other.lockPreview == lockPreview &&
+        other.wakeScreen == wakeScreen;
+  }
+
+  @override
+  int get hashCode => Object.hash(doNotDisturb, lockPreview, wakeScreen);
+}
+
+@immutable
+class ShellSoundSettings {
+  const ShellSoundSettings({this.keyboardVibration = true});
+
+  /// The on-screen keyboard's keys pulse the vibration motor.
+  final bool keyboardVibration;
+
+  ShellSoundSettings copyWith({bool? keyboardVibration}) {
+    return ShellSoundSettings(
+      keyboardVibration: keyboardVibration ?? this.keyboardVibration,
+    );
+  }
+
+  Map<String, Object> toJson() => <String, Object>{
+    'keyboardVibration': keyboardVibration,
+  };
+
+  factory ShellSoundSettings.fromJson(Object? value) {
+    final json = _map(value);
+    const defaults = ShellSoundSettings();
+    return ShellSoundSettings(
+      keyboardVibration: json['keyboardVibration'] is bool
+          ? json['keyboardVibration'] as bool
+          : defaults.keyboardVibration,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return other is ShellSoundSettings &&
+        other.keyboardVibration == keyboardVibration;
+  }
+
+  @override
+  int get hashCode => keyboardVibration.hashCode;
 }
 
 @immutable
@@ -875,12 +1012,14 @@ class ShellSettings {
     this.animations = const ShellAnimationSettings(),
     this.lockScreen = const ShellLockScreenSettings(),
     this.power = const ShellPowerSettings(),
+    this.notifications = const ShellNotificationSettings(),
+    this.sound = const ShellSoundSettings(),
     this.applicationEnvironment = const ShellApplicationEnvironmentSettings(),
   });
 
   // Blur levels are additive in schema 9. Keep emitting the derived legacy
   // sigma so older shells can read settings written by this version.
-  static const int schemaVersion = 29;
+  static const int schemaVersion = 30;
 
   final InputDeckSettings inputDeck;
   final ShellLocalizationSettings localization;
@@ -890,6 +1029,8 @@ class ShellSettings {
   final ShellAnimationSettings animations;
   final ShellLockScreenSettings lockScreen;
   final ShellPowerSettings power;
+  final ShellNotificationSettings notifications;
+  final ShellSoundSettings sound;
   final ShellApplicationEnvironmentSettings applicationEnvironment;
 
   ShellSettings copyWith({
@@ -901,6 +1042,8 @@ class ShellSettings {
     ShellAnimationSettings? animations,
     ShellLockScreenSettings? lockScreen,
     ShellPowerSettings? power,
+    ShellNotificationSettings? notifications,
+    ShellSoundSettings? sound,
     ShellApplicationEnvironmentSettings? applicationEnvironment,
   }) {
     return ShellSettings(
@@ -912,6 +1055,8 @@ class ShellSettings {
       animations: animations ?? this.animations,
       lockScreen: lockScreen ?? this.lockScreen,
       power: power ?? this.power,
+      notifications: notifications ?? this.notifications,
+      sound: sound ?? this.sound,
       applicationEnvironment:
           applicationEnvironment ?? this.applicationEnvironment,
     );
@@ -933,6 +1078,10 @@ class ShellSettings {
       final section = <String, Object?>{};
       if (localization.locale != previous.localization.locale) {
         section['locale'] = localization.locale.name;
+      }
+      if (localization.twentyFourHourClock !=
+          previous.localization.twentyFourHourClock) {
+        section['twentyFourHourClock'] = localization.twentyFourHourClock;
       }
       patch['localization'] = section;
     }
@@ -1123,6 +1272,9 @@ class ShellSettings {
       if (lockScreen.showSystemStatus != before.showSystemStatus) {
         section['showSystemStatus'] = lockScreen.showSystemStatus;
       }
+      if (lockScreen.fingerprintUnlock != before.fingerprintUnlock) {
+        section['fingerprintUnlock'] = lockScreen.fingerprintUnlock;
+      }
       patch['lockScreen'] = section;
     }
 
@@ -1135,25 +1287,36 @@ class ShellSettings {
       if (power.idleLockEnabled != before.idleLockEnabled) {
         section['idleLockEnabled'] = power.idleLockEnabled;
       }
-      if (power.idleLockTimeoutMinutes != before.idleLockTimeoutMinutes) {
-        section['idleLockTimeoutMinutes'] = power.idleLockTimeoutMinutes;
+      if (power.idleLockTimeoutSeconds != before.idleLockTimeoutSeconds) {
+        section['idleLockTimeoutSeconds'] = power.idleLockTimeoutSeconds;
       }
       if (power.idleDpmsEnabled != before.idleDpmsEnabled) {
         section['idleDpmsEnabled'] = power.idleDpmsEnabled;
       }
-      if (power.idleDpmsTimeoutMinutes != before.idleDpmsTimeoutMinutes) {
-        section['idleDpmsTimeoutMinutes'] = power.idleDpmsTimeoutMinutes;
+      if (power.idleDpmsTimeoutSeconds != before.idleDpmsTimeoutSeconds) {
+        section['idleDpmsTimeoutSeconds'] = power.idleDpmsTimeoutSeconds;
       }
       if (power.idleSuspendEnabled != before.idleSuspendEnabled) {
         section['idleSuspendEnabled'] = power.idleSuspendEnabled;
       }
-      if (power.idleSuspendTimeoutMinutes != before.idleSuspendTimeoutMinutes) {
-        section['idleSuspendTimeoutMinutes'] = power.idleSuspendTimeoutMinutes;
+      if (power.idleSuspendTimeoutSeconds != before.idleSuspendTimeoutSeconds) {
+        section['idleSuspendTimeoutSeconds'] = power.idleSuspendTimeoutSeconds;
       }
       if (power.suspendMode != before.suspendMode) {
         section['suspendMode'] = power.suspendMode.name;
       }
+      if (power.screenOffLockDelaySeconds != before.screenOffLockDelaySeconds) {
+        section['screenOffLockDelaySeconds'] = power.screenOffLockDelaySeconds;
+      }
       patch['power'] = section;
+    }
+
+    if (notifications != previous.notifications) {
+      patch['notifications'] = notifications.toJson();
+    }
+
+    if (sound != previous.sound) {
+      patch['sound'] = sound.toJson();
     }
 
     if (applicationEnvironment != previous.applicationEnvironment) {
@@ -1168,7 +1331,10 @@ class ShellSettings {
   Map<String, Object> toJson() {
     return <String, Object>{
       'version': schemaVersion,
-      'localization': <String, Object>{'locale': localization.locale.name},
+      'localization': <String, Object>{
+        'locale': localization.locale.name,
+        'twentyFourHourClock': localization.twentyFourHourClock,
+      },
       'appearance': <String, Object>{
         'colorSchemePreference': appearance.colorSchemePreference.name,
         'accentSource': appearance.accentSource.name,
@@ -1229,17 +1395,21 @@ class ShellSettings {
         'blurRadius': lockScreen.blurRadius,
         'clockScale': lockScreen.clockScale,
         'showSystemStatus': lockScreen.showSystemStatus,
+        'fingerprintUnlock': lockScreen.fingerprintUnlock,
       },
       'power': <String, Object>{
         'powerButtonAction': power.powerButtonAction.name,
         'idleLockEnabled': power.idleLockEnabled,
-        'idleLockTimeoutMinutes': power.idleLockTimeoutMinutes,
+        'idleLockTimeoutSeconds': power.idleLockTimeoutSeconds,
         'idleDpmsEnabled': power.idleDpmsEnabled,
-        'idleDpmsTimeoutMinutes': power.idleDpmsTimeoutMinutes,
+        'idleDpmsTimeoutSeconds': power.idleDpmsTimeoutSeconds,
         'idleSuspendEnabled': power.idleSuspendEnabled,
-        'idleSuspendTimeoutMinutes': power.idleSuspendTimeoutMinutes,
+        'idleSuspendTimeoutSeconds': power.idleSuspendTimeoutSeconds,
         'suspendMode': power.suspendMode.name,
+        'screenOffLockDelaySeconds': power.screenOffLockDelaySeconds,
       },
+      'notifications': notifications.toJson(),
+      'sound': sound.toJson(),
       'inputDeck': inputDeck.toJson(),
       'applicationEnvironment': applicationEnvironment.toJson(),
     };
@@ -1295,34 +1465,34 @@ class ShellSettings {
         outputNames.add(outputName);
       }
     }
-    final idleDpmsTimeoutMinutes = _integer(
-      powerJson['idleDpmsTimeoutMinutes'],
-      defaults.power.idleDpmsTimeoutMinutes,
-      ShellPowerSettings.minimumIdleTimeoutMinutes,
-      ShellPowerSettings.maximumIdleTimeoutMinutes,
+    final idleDpmsTimeoutSeconds = _integer(
+      powerJson['idleDpmsTimeoutSeconds'],
+      defaults.power.idleDpmsTimeoutSeconds,
+      ShellPowerSettings.minimumIdleTimeoutSeconds,
+      ShellPowerSettings.maximumIdleTimeoutSeconds,
     );
-    final idleSuspendTimeoutMinutes =
+    final idleSuspendTimeoutSeconds =
         _integer(
-              powerJson['idleSuspendTimeoutMinutes'],
-              defaults.power.idleSuspendTimeoutMinutes,
-              ShellPowerSettings.minimumIdleTimeoutMinutes,
-              ShellPowerSettings.maximumIdleTimeoutMinutes,
+              powerJson['idleSuspendTimeoutSeconds'],
+              defaults.power.idleSuspendTimeoutSeconds,
+              ShellPowerSettings.minimumIdleTimeoutSeconds,
+              ShellPowerSettings.maximumIdleTimeoutSeconds,
             )
             .clamp(
-              idleDpmsTimeoutMinutes,
-              ShellPowerSettings.maximumIdleTimeoutMinutes,
+              idleDpmsTimeoutSeconds,
+              ShellPowerSettings.maximumIdleTimeoutSeconds,
             )
             .toInt();
-    final idleLockTimeoutMinutes =
+    final idleLockTimeoutSeconds =
         _integer(
-              powerJson['idleLockTimeoutMinutes'],
-              defaults.power.idleLockTimeoutMinutes,
-              ShellPowerSettings.minimumIdleTimeoutMinutes,
-              ShellPowerSettings.maximumIdleTimeoutMinutes,
+              powerJson['idleLockTimeoutSeconds'],
+              defaults.power.idleLockTimeoutSeconds,
+              ShellPowerSettings.minimumIdleTimeoutSeconds,
+              ShellPowerSettings.maximumIdleTimeoutSeconds,
             )
             .clamp(
-              ShellPowerSettings.minimumIdleTimeoutMinutes,
-              idleSuspendTimeoutMinutes,
+              ShellPowerSettings.minimumIdleTimeoutSeconds,
+              idleSuspendTimeoutSeconds,
             )
             .toInt();
     final legacyTransparencyMode = appearanceJson['backdropBlurEnabled'] is bool
@@ -1337,6 +1507,9 @@ class ShellSettings {
           localizationJson['locale'],
           defaults.localization.locale,
         ),
+        twentyFourHourClock: localizationJson['twentyFourHourClock'] is bool
+            ? localizationJson['twentyFourHourClock'] as bool
+            : defaults.localization.twentyFourHourClock,
       ),
       appearance: ShellAppearanceSettings(
         colorSchemePreference: _enumValue(
@@ -1577,6 +1750,9 @@ class ShellSettings {
         showSystemStatus: lockJson['showSystemStatus'] is bool
             ? lockJson['showSystemStatus'] as bool
             : defaults.lockScreen.showSystemStatus,
+        fingerprintUnlock: lockJson['fingerprintUnlock'] is bool
+            ? lockJson['fingerprintUnlock'] as bool
+            : defaults.lockScreen.fingerprintUnlock,
       ),
       power: ShellPowerSettings(
         powerButtonAction: _enumValue(
@@ -1587,21 +1763,29 @@ class ShellSettings {
         idleLockEnabled: powerJson['idleLockEnabled'] is bool
             ? powerJson['idleLockEnabled'] as bool
             : defaults.power.idleLockEnabled,
-        idleLockTimeoutMinutes: idleLockTimeoutMinutes,
+        idleLockTimeoutSeconds: idleLockTimeoutSeconds,
         idleDpmsEnabled: powerJson['idleDpmsEnabled'] is bool
             ? powerJson['idleDpmsEnabled'] as bool
             : defaults.power.idleDpmsEnabled,
-        idleDpmsTimeoutMinutes: idleDpmsTimeoutMinutes,
+        idleDpmsTimeoutSeconds: idleDpmsTimeoutSeconds,
         idleSuspendEnabled: powerJson['idleSuspendEnabled'] is bool
             ? powerJson['idleSuspendEnabled'] as bool
             : defaults.power.idleSuspendEnabled,
-        idleSuspendTimeoutMinutes: idleSuspendTimeoutMinutes,
+        idleSuspendTimeoutSeconds: idleSuspendTimeoutSeconds,
         suspendMode: _enumValue(
           SuspendMode.values,
           powerJson['suspendMode'],
           defaults.power.suspendMode,
         ),
+        screenOffLockDelaySeconds: _integer(
+          powerJson['screenOffLockDelaySeconds'],
+          defaults.power.screenOffLockDelaySeconds,
+          0,
+          ShellPowerSettings.maximumScreenOffLockDelaySeconds,
+        ),
       ),
+      notifications: ShellNotificationSettings.fromJson(json['notifications']),
+      sound: ShellSoundSettings.fromJson(json['sound']),
       inputDeck: InputDeckSettings.fromJson(json['inputDeck']),
       applicationEnvironment: ShellApplicationEnvironmentSettings.fromJson(
         json['applicationEnvironment'],
@@ -1620,6 +1804,8 @@ class ShellSettings {
         other.animations == animations &&
         other.lockScreen == lockScreen &&
         other.power == power &&
+        other.notifications == notifications &&
+        other.sound == sound &&
         other.applicationEnvironment == applicationEnvironment;
   }
 
@@ -1633,6 +1819,8 @@ class ShellSettings {
     animations,
     lockScreen,
     power,
+    notifications,
+    sound,
     applicationEnvironment,
   );
 }

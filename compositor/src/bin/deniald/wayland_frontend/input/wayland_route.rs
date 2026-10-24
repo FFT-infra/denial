@@ -87,7 +87,7 @@ pub(super) fn process_wayland_input_event(
             state,
             event.key_code(),
             event.state(),
-            event.time_msec(),
+            event.time(),
         ),
         InputEvent::PointerMotion { event, .. } => {
             let (position, under) = {
@@ -120,7 +120,7 @@ pub(super) fn process_wayland_input_event(
                 &RelativeMotionEvent {
                     delta: event.delta(),
                     delta_unaccel: event.delta_unaccel(),
-                    utime: event.time_usec(),
+                    time: event.time(),
                 },
             );
             if blocked {
@@ -138,7 +138,7 @@ pub(super) fn process_wayland_input_event(
                 &MotionEvent {
                     location: position,
                     serial: SERIAL_COUNTER.next_serial(),
-                    time: event.time_msec(),
+                    time: event.time(),
                 },
             );
             pointer.frame(state);
@@ -177,7 +177,7 @@ pub(super) fn process_wayland_input_event(
                 &MotionEvent {
                     location: position,
                     serial: SERIAL_COUNTER.next_serial(),
-                    time: event.time_msec(),
+                    time: event.time(),
                 },
             );
             pointer.frame(state);
@@ -222,7 +222,7 @@ pub(super) fn process_wayland_input_event(
                     button: event.button_code(),
                     state: event.state(),
                     serial,
-                    time: event.time_msec(),
+                    time: event.time(),
                 },
             );
             pointer.frame(state);
@@ -256,7 +256,7 @@ pub(super) fn process_wayland_input_event(
                     slot: event.slot(),
                     location: position,
                     serial,
-                    time: event.time_msec(),
+                    time: event.time(),
                 },
             );
             state.scene_sync.mark_dirty();
@@ -283,7 +283,7 @@ pub(super) fn process_wayland_input_event(
                 &TouchMotionEvent {
                     slot: event.slot(),
                     location: position,
-                    time: event.time_msec(),
+                    time: event.time(),
                 },
             );
         }
@@ -300,7 +300,7 @@ pub(super) fn process_wayland_input_event(
                 &UpEvent {
                     slot: event.slot(),
                     serial: SERIAL_COUNTER.next_serial(),
-                    time: event.time_msec(),
+                    time: event.time(),
                 },
             );
         }

@@ -167,7 +167,8 @@ enum WindowRequestKind {
   ConfigureSystemBar(6),
   SwitchWorkspace(7),
   MoveWindowToWorkspace(8),
-  MinimizeWindow(9);
+  MinimizeWindow(9),
+  NavigateBack(10);
 
   final int value;
   const WindowRequestKind(this.value);
@@ -184,6 +185,7 @@ enum WindowRequestKind {
       case 7: return WindowRequestKind.SwitchWorkspace;
       case 8: return WindowRequestKind.MoveWindowToWorkspace;
       case 9: return WindowRequestKind.MinimizeWindow;
+      case 10: return WindowRequestKind.NavigateBack;
       default: throw StateError('Invalid value $value for bit flag enum');
     }
   }
@@ -192,7 +194,7 @@ enum WindowRequestKind {
       value == null ? null : WindowRequestKind.fromValue(value);
 
   static const int minValue = 0;
-  static const int maxValue = 9;
+  static const int maxValue = 10;
   static const fb.Reader<WindowRequestKind> reader = _WindowRequestKindReader();
 }
 
@@ -388,7 +390,8 @@ class _ShellActionKindReader extends fb.Reader<ShellActionKind> {
 enum KeyboardCommandKind {
   Text(0),
   Key(1),
-  DismissPanel(2);
+  DismissPanel(2),
+  PanelMotion(3);
 
   final int value;
   const KeyboardCommandKind(this.value);
@@ -398,6 +401,7 @@ enum KeyboardCommandKind {
       case 0: return KeyboardCommandKind.Text;
       case 1: return KeyboardCommandKind.Key;
       case 2: return KeyboardCommandKind.DismissPanel;
+      case 3: return KeyboardCommandKind.PanelMotion;
       default: throw StateError('Invalid value $value for bit flag enum');
     }
   }
@@ -406,7 +410,7 @@ enum KeyboardCommandKind {
       value == null ? null : KeyboardCommandKind.fromValue(value);
 
   static const int minValue = 0;
-  static const int maxValue = 2;
+  static const int maxValue = 3;
   static const fb.Reader<KeyboardCommandKind> reader = _KeyboardCommandKindReader();
 }
 
@@ -1041,6 +1045,40 @@ class _CursorStateKindReader extends fb.Reader<CursorStateKind> {
       CursorStateKind.fromValue(const fb.Uint8Reader().read(bc, offset));
 }
 
+enum InputEdge {
+  Left(0),
+  Right(1);
+
+  final int value;
+  const InputEdge(this.value);
+
+  factory InputEdge.fromValue(int value) {
+    switch (value) {
+      case 0: return InputEdge.Left;
+      case 1: return InputEdge.Right;
+      default: throw StateError('Invalid value $value for bit flag enum');
+    }
+  }
+
+  static InputEdge? _createOrNull(int? value) =>
+      value == null ? null : InputEdge.fromValue(value);
+
+  static const int minValue = 0;
+  static const int maxValue = 1;
+  static const fb.Reader<InputEdge> reader = _InputEdgeReader();
+}
+
+class _InputEdgeReader extends fb.Reader<InputEdge> {
+  const _InputEdgeReader();
+
+  @override
+  int get size => 1;
+
+  @override
+  InputEdge read(fb.BufferContext bc, int offset) =>
+      InputEdge.fromValue(const fb.Uint8Reader().read(bc, offset));
+}
+
 enum ShortcutTargetTypeId {
   NONE(0),
   ShortcutDenialActionTarget(1),
@@ -1505,6 +1543,76 @@ class InputWindowRegionObjectBuilder extends fb.ObjectBuilder {
     return fbBuilder.buffer;
   }
 }
+class EdgeSwipeRegion {
+  EdgeSwipeRegion._(this._bc, this._bcOffset);
+
+  static const fb.Reader<EdgeSwipeRegion> reader = _EdgeSwipeRegionReader();
+
+  final fb.BufferContext _bc;
+  final int _bcOffset;
+
+  WireRect get rect => WireRect.reader.read(_bc, _bcOffset + 0);
+  InputEdge get edge => InputEdge.fromValue(const fb.Uint8Reader().read(_bc, _bcOffset + 32));
+
+  @override
+  String toString() {
+    return 'EdgeSwipeRegion{rect: ${rect}, edge: ${edge}}';
+  }
+}
+
+class _EdgeSwipeRegionReader extends fb.StructReader<EdgeSwipeRegion> {
+  const _EdgeSwipeRegionReader();
+
+  @override
+  int get size => 40;
+
+  @override
+  EdgeSwipeRegion createObject(fb.BufferContext bc, int offset) => 
+    EdgeSwipeRegion._(bc, offset);
+}
+
+class EdgeSwipeRegionBuilder {
+  EdgeSwipeRegionBuilder(this.fbBuilder);
+
+  final fb.Builder fbBuilder;
+
+  int finish(fb.StructBuilder rect, InputEdge edge) {
+    fbBuilder.pad(7);
+    fbBuilder.putUint8(edge.value);
+    rect();
+    return fbBuilder.offset;
+  }
+
+}
+
+class EdgeSwipeRegionObjectBuilder extends fb.ObjectBuilder {
+  final WireRectObjectBuilder _rect;
+  final InputEdge _edge;
+
+  EdgeSwipeRegionObjectBuilder({
+    required WireRectObjectBuilder rect,
+    required InputEdge edge,
+  })
+      : _rect = rect,
+        _edge = edge;
+
+  /// Finish building, and store into the [fbBuilder].
+  @override
+  int finish(fb.Builder fbBuilder) {
+    fbBuilder.pad(7);
+    fbBuilder.putUint8(_edge.value);
+    _rect.finish(fbBuilder);
+    return fbBuilder.offset;
+  }
+
+  /// Convenience method to serialize to byte list.
+  @override
+  Uint8List toBytes([String? fileIdentifier]) {
+    final fbBuilder = fb.Builder(deduplicateTables: false);
+    fbBuilder.finish(finish(fbBuilder), fileIdentifier);
+    return fbBuilder.buffer;
+  }
+}
 class InputLayout {
   InputLayout._(this._bc, this._bcOffset);
   factory InputLayout(List<int> bytes) {
@@ -1523,10 +1631,11 @@ class InputLayout {
   List<InputWindowRegion>? get windows => const fb.ListReader<InputWindowRegion>(InputWindowRegion.reader).vTableGetNullable(_bc, _bcOffset, 10);
   List<int>? get visibleSurfaceIds => const fb.ListReader<int>(fb.Uint64Reader()).vTableGetNullable(_bc, _bcOffset, 12);
   List<WireRect>? get softwareKeyboardRegions => const fb.ListReader<WireRect>(WireRect.reader).vTableGetNullable(_bc, _bcOffset, 14);
+  List<EdgeSwipeRegion>? get edgeSwipeRegions => const fb.ListReader<EdgeSwipeRegion>(EdgeSwipeRegion.reader).vTableGetNullable(_bc, _bcOffset, 16);
 
   @override
   String toString() {
-    return 'InputLayout{epoch: ${epoch}, flags: ${flags}, shellRegions: ${shellRegions}, windows: ${windows}, visibleSurfaceIds: ${visibleSurfaceIds}, softwareKeyboardRegions: ${softwareKeyboardRegions}}';
+    return 'InputLayout{epoch: ${epoch}, flags: ${flags}, shellRegions: ${shellRegions}, windows: ${windows}, visibleSurfaceIds: ${visibleSurfaceIds}, softwareKeyboardRegions: ${softwareKeyboardRegions}, edgeSwipeRegions: ${edgeSwipeRegions}}';
   }
 }
 
@@ -1544,7 +1653,7 @@ class InputLayoutBuilder {
   final fb.Builder fbBuilder;
 
   void begin() {
-    fbBuilder.startTable(6);
+    fbBuilder.startTable(7);
   }
 
   int addEpoch(int? epoch) {
@@ -1571,6 +1680,10 @@ class InputLayoutBuilder {
     fbBuilder.addOffset(5, offset);
     return fbBuilder.offset;
   }
+  int addEdgeSwipeRegionsOffset(int? offset) {
+    fbBuilder.addOffset(6, offset);
+    return fbBuilder.offset;
+  }
 
   int finish() {
     return fbBuilder.endTable();
@@ -1584,6 +1697,7 @@ class InputLayoutObjectBuilder extends fb.ObjectBuilder {
   final List<InputWindowRegionObjectBuilder>? _windows;
   final List<int>? _visibleSurfaceIds;
   final List<WireRectObjectBuilder>? _softwareKeyboardRegions;
+  final List<EdgeSwipeRegionObjectBuilder>? _edgeSwipeRegions;
 
   InputLayoutObjectBuilder({
     int? epoch,
@@ -1592,13 +1706,15 @@ class InputLayoutObjectBuilder extends fb.ObjectBuilder {
     List<InputWindowRegionObjectBuilder>? windows,
     List<int>? visibleSurfaceIds,
     List<WireRectObjectBuilder>? softwareKeyboardRegions,
+    List<EdgeSwipeRegionObjectBuilder>? edgeSwipeRegions,
   })
       : _epoch = epoch,
         _flags = flags,
         _shellRegions = shellRegions,
         _windows = windows,
         _visibleSurfaceIds = visibleSurfaceIds,
-        _softwareKeyboardRegions = softwareKeyboardRegions;
+        _softwareKeyboardRegions = softwareKeyboardRegions,
+        _edgeSwipeRegions = edgeSwipeRegions;
 
   /// Finish building, and store into the [fbBuilder].
   @override
@@ -1611,13 +1727,16 @@ class InputLayoutObjectBuilder extends fb.ObjectBuilder {
         : fbBuilder.writeListUint64(_visibleSurfaceIds!);
     final int? softwareKeyboardRegionsOffset = _softwareKeyboardRegions == null ? null
         : fbBuilder.writeListOfStructs(_softwareKeyboardRegions!);
-    fbBuilder.startTable(6);
+    final int? edgeSwipeRegionsOffset = _edgeSwipeRegions == null ? null
+        : fbBuilder.writeListOfStructs(_edgeSwipeRegions!);
+    fbBuilder.startTable(7);
     fbBuilder.addUint64(0, _epoch);
     fbBuilder.addUint32(1, _flags);
     fbBuilder.addOffset(2, shellRegionsOffset);
     fbBuilder.addOffset(3, windowsOffset);
     fbBuilder.addOffset(4, visibleSurfaceIdsOffset);
     fbBuilder.addOffset(5, softwareKeyboardRegionsOffset);
+    fbBuilder.addOffset(6, edgeSwipeRegionsOffset);
     return fbBuilder.endTable();
   }
 
@@ -2053,10 +2172,11 @@ class Window {
   int get petHolds => const fb.Uint32Reader().vTableGet(_bc, _bcOffset, 102, 0);
   bool get petDragged => const fb.BoolReader().vTableGet(_bc, _bcOffset, 104, false);
   ClientTexture? get clientTexture => ClientTexture.reader.vTableGetNullable(_bc, _bcOffset, 106);
+  bool get keyboardInset => const fb.BoolReader().vTableGet(_bc, _bcOffset, 108, false);
 
   @override
   String toString() {
-    return 'Window{objectId: ${objectId}, objectKind: ${objectKind}, surfaceId: ${surfaceId}, windowId: ${windowId}, textureId: ${textureId}, title: ${title}, appId: ${appId}, width: ${width}, height: ${height}, surfaceX: ${surfaceX}, surfaceY: ${surfaceY}, surfaceWidth: ${surfaceWidth}, surfaceHeight: ${surfaceHeight}, textureSourceX: ${textureSourceX}, textureSourceY: ${textureSourceY}, textureSourceWidth: ${textureSourceWidth}, textureSourceHeight: ${textureSourceHeight}, geometryX: ${geometryX}, geometryY: ${geometryY}, geometryWidth: ${geometryWidth}, geometryHeight: ${geometryHeight}, monitorId: ${monitorId}, transform: ${transform}, scale120: ${scale120}, statusColorArgb: ${statusColorArgb}, hasStatusColor: ${hasStatusColor}, contentX: ${contentX}, contentY: ${contentY}, contentWidth: ${contentWidth}, contentHeight: ${contentHeight}, surfaces: ${surfaces}, pinned: ${pinned}, suppressAnimations: ${suppressAnimations}, serverSideDecorated: ${serverSideDecorated}, opacity: ${opacity}, contentKind: ${contentKind}, opacityClass: ${opacityClass}, workspaceId: ${workspaceId}, minimized: ${minimized}, fullscreen: ${fullscreen}, maximized: ${maximized}, transientParentId: ${transientParentId}, heldByWindowId: ${heldByWindowId}, heldHold: ${heldHold}, heldShare: ${heldShare}, petAnchorX: ${petAnchorX}, petAnchorY: ${petAnchorY}, petBelow: ${petBelow}, pet: ${pet}, petHolds: ${petHolds}, petDragged: ${petDragged}, clientTexture: ${clientTexture}}';
+    return 'Window{objectId: ${objectId}, objectKind: ${objectKind}, surfaceId: ${surfaceId}, windowId: ${windowId}, textureId: ${textureId}, title: ${title}, appId: ${appId}, width: ${width}, height: ${height}, surfaceX: ${surfaceX}, surfaceY: ${surfaceY}, surfaceWidth: ${surfaceWidth}, surfaceHeight: ${surfaceHeight}, textureSourceX: ${textureSourceX}, textureSourceY: ${textureSourceY}, textureSourceWidth: ${textureSourceWidth}, textureSourceHeight: ${textureSourceHeight}, geometryX: ${geometryX}, geometryY: ${geometryY}, geometryWidth: ${geometryWidth}, geometryHeight: ${geometryHeight}, monitorId: ${monitorId}, transform: ${transform}, scale120: ${scale120}, statusColorArgb: ${statusColorArgb}, hasStatusColor: ${hasStatusColor}, contentX: ${contentX}, contentY: ${contentY}, contentWidth: ${contentWidth}, contentHeight: ${contentHeight}, surfaces: ${surfaces}, pinned: ${pinned}, suppressAnimations: ${suppressAnimations}, serverSideDecorated: ${serverSideDecorated}, opacity: ${opacity}, contentKind: ${contentKind}, opacityClass: ${opacityClass}, workspaceId: ${workspaceId}, minimized: ${minimized}, fullscreen: ${fullscreen}, maximized: ${maximized}, transientParentId: ${transientParentId}, heldByWindowId: ${heldByWindowId}, heldHold: ${heldHold}, heldShare: ${heldShare}, petAnchorX: ${petAnchorX}, petAnchorY: ${petAnchorY}, petBelow: ${petBelow}, pet: ${pet}, petHolds: ${petHolds}, petDragged: ${petDragged}, clientTexture: ${clientTexture}, keyboardInset: ${keyboardInset}}';
   }
 }
 
@@ -2074,7 +2194,7 @@ class WindowBuilder {
   final fb.Builder fbBuilder;
 
   void begin() {
-    fbBuilder.startTable(52);
+    fbBuilder.startTable(53);
   }
 
   int addObjectId(int? objectId) {
@@ -2285,6 +2405,10 @@ class WindowBuilder {
     fbBuilder.addOffset(51, offset);
     return fbBuilder.offset;
   }
+  int addKeyboardInset(bool? keyboardInset) {
+    fbBuilder.addBool(52, keyboardInset);
+    return fbBuilder.offset;
+  }
 
   int finish() {
     return fbBuilder.endTable();
@@ -2344,6 +2468,7 @@ class WindowObjectBuilder extends fb.ObjectBuilder {
   final int? _petHolds;
   final bool? _petDragged;
   final ClientTextureObjectBuilder? _clientTexture;
+  final bool? _keyboardInset;
 
   WindowObjectBuilder({
     int? objectId,
@@ -2398,6 +2523,7 @@ class WindowObjectBuilder extends fb.ObjectBuilder {
     int? petHolds,
     bool? petDragged,
     ClientTextureObjectBuilder? clientTexture,
+    bool? keyboardInset,
   })
       : _objectId = objectId,
         _objectKind = objectKind,
@@ -2450,7 +2576,8 @@ class WindowObjectBuilder extends fb.ObjectBuilder {
         _pet = pet,
         _petHolds = petHolds,
         _petDragged = petDragged,
-        _clientTexture = clientTexture;
+        _clientTexture = clientTexture,
+        _keyboardInset = keyboardInset;
 
   /// Finish building, and store into the [fbBuilder].
   @override
@@ -2462,7 +2589,7 @@ class WindowObjectBuilder extends fb.ObjectBuilder {
     final int? surfacesOffset = _surfaces == null ? null
         : fbBuilder.writeList(_surfaces!.map((b) => b.getOrCreateOffset(fbBuilder)).toList());
     final int? clientTextureOffset = _clientTexture?.getOrCreateOffset(fbBuilder);
-    fbBuilder.startTable(52);
+    fbBuilder.startTable(53);
     fbBuilder.addUint64(0, _objectId);
     fbBuilder.addUint8(1, _objectKind?.value);
     fbBuilder.addUint64(2, _surfaceId);
@@ -2515,6 +2642,7 @@ class WindowObjectBuilder extends fb.ObjectBuilder {
     fbBuilder.addUint32(49, _petHolds);
     fbBuilder.addBool(50, _petDragged);
     fbBuilder.addOffset(51, clientTextureOffset);
+    fbBuilder.addBool(52, _keyboardInset);
     return fbBuilder.endTable();
   }
 
@@ -3865,10 +3993,12 @@ class KeyboardCommand {
   String? get key => const fb.StringReader().vTableGetNullable(_bc, _bcOffset, 8);
   int get flags => const fb.Uint32Reader().vTableGet(_bc, _bcOffset, 10, 0);
   int get activationSerial => const fb.Uint64Reader().vTableGet(_bc, _bcOffset, 12, 0);
+  int get panelHeight => const fb.Uint32Reader().vTableGet(_bc, _bcOffset, 14, 0);
+  int get panelDurationMs => const fb.Uint32Reader().vTableGet(_bc, _bcOffset, 16, 0);
 
   @override
   String toString() {
-    return 'KeyboardCommand{kind: ${kind}, text: ${text}, key: ${key}, flags: ${flags}, activationSerial: ${activationSerial}}';
+    return 'KeyboardCommand{kind: ${kind}, text: ${text}, key: ${key}, flags: ${flags}, activationSerial: ${activationSerial}, panelHeight: ${panelHeight}, panelDurationMs: ${panelDurationMs}}';
   }
 }
 
@@ -3886,7 +4016,7 @@ class KeyboardCommandBuilder {
   final fb.Builder fbBuilder;
 
   void begin() {
-    fbBuilder.startTable(5);
+    fbBuilder.startTable(7);
   }
 
   int addKind(KeyboardCommandKind? kind) {
@@ -3909,6 +4039,14 @@ class KeyboardCommandBuilder {
     fbBuilder.addUint64(4, activationSerial);
     return fbBuilder.offset;
   }
+  int addPanelHeight(int? panelHeight) {
+    fbBuilder.addUint32(5, panelHeight);
+    return fbBuilder.offset;
+  }
+  int addPanelDurationMs(int? panelDurationMs) {
+    fbBuilder.addUint32(6, panelDurationMs);
+    return fbBuilder.offset;
+  }
 
   int finish() {
     return fbBuilder.endTable();
@@ -3921,6 +4059,8 @@ class KeyboardCommandObjectBuilder extends fb.ObjectBuilder {
   final String? _key;
   final int? _flags;
   final int? _activationSerial;
+  final int? _panelHeight;
+  final int? _panelDurationMs;
 
   KeyboardCommandObjectBuilder({
     KeyboardCommandKind? kind,
@@ -3928,12 +4068,16 @@ class KeyboardCommandObjectBuilder extends fb.ObjectBuilder {
     String? key,
     int? flags,
     int? activationSerial,
+    int? panelHeight,
+    int? panelDurationMs,
   })
       : _kind = kind,
         _text = text,
         _key = key,
         _flags = flags,
-        _activationSerial = activationSerial;
+        _activationSerial = activationSerial,
+        _panelHeight = panelHeight,
+        _panelDurationMs = panelDurationMs;
 
   /// Finish building, and store into the [fbBuilder].
   @override
@@ -3942,12 +4086,14 @@ class KeyboardCommandObjectBuilder extends fb.ObjectBuilder {
         : fbBuilder.writeString(_text!);
     final int? keyOffset = _key == null ? null
         : fbBuilder.writeString(_key!);
-    fbBuilder.startTable(5);
+    fbBuilder.startTable(7);
     fbBuilder.addUint8(0, _kind?.value);
     fbBuilder.addOffset(1, textOffset);
     fbBuilder.addOffset(2, keyOffset);
     fbBuilder.addUint32(3, _flags);
     fbBuilder.addUint64(4, _activationSerial);
+    fbBuilder.addUint32(5, _panelHeight);
+    fbBuilder.addUint32(6, _panelDurationMs);
     return fbBuilder.endTable();
   }
 

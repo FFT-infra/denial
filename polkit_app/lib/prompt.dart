@@ -43,6 +43,15 @@ class _AuthenticationDialogState extends State<AuthenticationDialog>
     with SingleTickerProviderStateMixin {
   static const _cardWidth = 520.0;
   static const _canvasMargin = 28.0;
+
+  /// On a phone the shell frosts the whole overlay as one card, the way it
+  /// frosts windows. The card then fills the surface, which follows the
+  /// card's height.
+  static final _phone =
+      Platform.environment['DENIAL_SHELL_PROFILE'] == 'mobile';
+  static const _overlay = MethodChannel('denial/overlay', JSONMethodCodec());
+  final _cardKey = GlobalKey();
+  Size? _fitted;
   static const _avatarSize = 72.0;
   static const _accountWidth = 96.0;
   static const _gap = 16.0;
@@ -359,7 +368,9 @@ class _AuthenticationDialogState extends State<AuthenticationDialog>
     );
 
     final card = CustomPaint(
-      painter: CardShadowPainter(palette: palette, borderRadius: radius),
+      painter: _phone
+          ? null
+          : CardShadowPainter(palette: palette, borderRadius: radius),
       child: CustomPaint(
         painter: CardPainter(palette: palette, borderRadius: radius),
         foregroundPainter: RimPainter(
@@ -375,6 +386,12 @@ class _AuthenticationDialogState extends State<AuthenticationDialog>
           ),
         ),
       ),
+    );
+
+    // Hidden, not faded, until its final colors are known.
+    final shown = IgnorePointer(
+      ignoring: !_revealed,
+      child: Opacity(opacity: _revealed ? 1 : 0, child: card),
     );
 
     return Actions(
@@ -396,56 +413,62 @@ class _AuthenticationDialogState extends State<AuthenticationDialog>
             color: palette.foreground,
             decoration: TextDecoration.none,
           ),
-          // The overlay canvas has a fixed size. An unusually long message
-          // scrolls rather than overflowing it.
-          child: LayoutBuilder(
-            builder: (context, constraints) => SingleChildScrollView(
-              physics: const ClampingScrollPhysics(),
-              child: ConstrainedBox(
-                constraints: BoxConstraints(minHeight: constraints.maxHeight),
-                child: Center(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      vertical: _canvasMargin,
-                    ),
-                    child: SizedBox(
-                      width: math.max(
-                        0,
-                        math.min(
-                          _cardWidth,
-                          constraints.maxWidth - _canvasMargin * 2,
-                        ),
-                      ),
-                      // Hidden, not faded, until its final colors are known.
-                      child: IgnorePointer(
-                        ignoring: !_revealed,
-                        child: Opacity(
-                          opacity: _revealed ? 1 : 0,
-                          child: AnimatedBuilder(
-                            animation: _shake,
-                            builder: (context, card) {
-                              final t = _shake.value;
-                              return Transform.translate(
-                                offset: Offset(
-                                  10 * math.sin(t * math.pi * 6) * (1 - t),
-                                  0,
-                                ),
-                                child: card,
-                              );
-                            },
-                            child: card,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
+          child: _phone ? _phoneCanvas(shown) : _desktopCanvas(shown),
+        ),
+      ),
+    );
+  }
+
+  /// The card, centered in the overlay's fixed canvas. An unusually long
+  /// message scrolls rather than overflowing it.
+  Widget _desktopCanvas(Widget card) => LayoutBuilder(
+    builder: (context, constraints) => SingleChildScrollView(
+      physics: const ClampingScrollPhysics(),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(minHeight: constraints.maxHeight),
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: _canvasMargin),
+            child: SizedBox(
+              width: math.max(
+                0,
+                math.min(_cardWidth, constraints.maxWidth - _canvasMargin * 2),
+              ),
+              child: AnimatedBuilder(
+                animation: _shake,
+                builder: (context, card) {
+                  final t = _shake.value;
+                  return Transform.translate(
+                    offset: Offset(10 * math.sin(t * math.pi * 6) * (1 - t), 0),
+                    child: card,
+                  );
+                },
+                child: card,
               ),
             ),
           ),
         ),
       ),
+    ),
+  );
+
+  /// The card as the whole overlay, which takes the card's height once it
+  /// is laid out. It stays still: the shell's glass under it does not shake.
+  Widget _phoneCanvas(Widget card) {
+    WidgetsBinding.instance.addPostFrameCallback((_) => _fit());
+    return SingleChildScrollView(
+      physics: const ClampingScrollPhysics(),
+      child: KeyedSubtree(key: _cardKey, child: card),
     );
+  }
+
+  void _fit() {
+    final size = _cardKey.currentContext?.size;
+    if (!mounted || size == null || size.isEmpty || size == _fitted) return;
+    _fitted = size;
+    _overlay
+        .invokeMethod<void>('resize', [size.width, size.height])
+        .catchError((Object _) {});
   }
 }
 

@@ -89,7 +89,6 @@ class LegacyNotificationReducer {
       bannerQueue: List<int>.unmodifiable(bannerQueue),
       pendingDismissals: Set<int>.unmodifiable(pending),
       doNotDisturb: state.doNotDisturb,
-      policyLoaded: state.policyLoaded,
       lockPreview: state.lockPreview,
       lastEvent: event,
     );

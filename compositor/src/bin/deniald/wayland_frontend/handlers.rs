@@ -1313,7 +1313,11 @@ impl CompositorHandler for RuntimeState {
                 frontend.pending_shm_snapshots.remove(&surface.id());
             }
         }
+        let attached_release = crate::client_release::take_attached(surface);
         on_commit_buffer_handler::<Self>(surface);
+        if buffer_attached || buffer_removed {
+            crate::client_release::replace(surface, attached_release);
+        }
         signal_unclaimed_release_point(surface);
         #[cfg(feature = "flutter")]
         if matches!(
@@ -1396,6 +1400,7 @@ impl CompositorHandler for RuntimeState {
         #[cfg(feature = "flutter")]
         if let Some(kind) = commit_kind {
             frontend.queue_surface_commit(surface, kind);
+            frontend.thaw_on_visual_commit(surface);
         }
         #[cfg(feature = "flutter")]
         let mut published_surface_commits = None;
@@ -1476,7 +1481,9 @@ impl CompositorHandler for RuntimeState {
                     managed.flush_pending_resize();
                 }
                 #[cfg(feature = "flutter")]
-                if frontend.mobile_shell && frontend.exact_window_geometry(&window).is_none() {
+                if frontend.mobile_shell
+                    && frontend.recorded_exact_window_geometry(&window).is_none()
+                {
                     frontend.configure_mobile_window(&window);
                 }
                 frontend.reconcile_committed_window_geometry(&window);
@@ -1564,7 +1571,7 @@ impl CompositorHandler for RuntimeState {
                     .as_ref()
                     .cloned()
                     .unwrap_or_else(|| frontend.toplevel_candidate_surface(surface));
-                frontend.pending_frame_callback_windows.insert(owner.id());
+                frontend.queue_window_frame_callbacks(owner.id());
             }
         }
         #[cfg(feature = "flutter")]
@@ -1741,7 +1748,7 @@ impl smithay::wayland::fractional_scale::FractionalScaleHandler for RuntimeState
 impl denial_core::touch_grab::TouchCancellation for RuntimeState {
     type Recipient = Client;
 
-    fn touch_recipient(&self, focus: &WlSurface) -> Option<Client> {
+    fn touch_recipient(&self, focus: &Self::TouchFocus) -> Option<Client> {
         focus.client()
     }
 
@@ -1762,8 +1769,8 @@ impl denial_core::touch_grab::TouchCancellation for RuntimeState {
 
 impl SeatHandler for RuntimeState {
     type KeyboardFocus = KeyboardFocusTarget;
-    type PointerFocus = WlSurface;
-    type TouchFocus = WlSurface;
+    type PointerFocus = super::focus::ClientSurface;
+    type TouchFocus = super::focus::ClientSurface;
 
     fn seat_state(&mut self) -> &mut SeatState<Self> {
         &mut self
@@ -1847,6 +1854,8 @@ impl SeatHandler for RuntimeState {
 // Keep tablet-tool cursor requests on the same software-cursor path used by
 // client pointer cursors so Flutter can publish them with the scene.
 impl TabletSeatHandler for RuntimeState {
+    type ToolFocus = WlSurface;
+
     fn tablet_tool_image(
         &mut self,
         _tool: &smithay::backend::input::TabletToolDescriptor,
@@ -1876,7 +1885,10 @@ impl PointerConstraintsHandler for RuntimeState {
         {
             return;
         }
-        if pointer.current_focus().as_ref() == Some(surface) {
+        if pointer
+            .current_focus()
+            .is_some_and(|focus| focus.0 == *surface)
+        {
             smithay::wayland::pointer_constraints::with_pointer_constraint(
                 surface,
                 pointer,
@@ -1887,16 +1899,6 @@ impl PointerConstraintsHandler for RuntimeState {
                 },
             );
         }
-    }
-
-    fn remove_constraint(&mut self, _surface: &WlSurface, _pointer: &PointerHandle<Self>) {}
-
-    fn cursor_position_hint(
-        &mut self,
-        _surface: &WlSurface,
-        _pointer: &PointerHandle<Self>,
-        _location: Point<f64, Logical>,
-    ) {
     }
 }
 

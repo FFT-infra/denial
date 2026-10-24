@@ -35,7 +35,7 @@ class HomeLayoutRepository {
     try {
       final file = await _paths.layoutFile();
       final payload = jsonEncode({
-        'version': 2,
+        'version': 3,
         'slots': slots.map(_encodeSlot).toList(growable: false),
       });
       await file.writeAsString('$payload\n', flush: true);
@@ -56,10 +56,16 @@ class HomeLayoutRepository {
       }
       final colSpan = item['colSpan'];
       final rowSpan = item['rowSpan'];
+      final name = item['name'];
+      final apps = item['apps'];
       return HomeLayoutSlot(
         id: id,
         colSpan: colSpan is int ? colSpan : null,
         rowSpan: rowSpan is int ? rowSpan : null,
+        name: name is String ? name : null,
+        children: apps is List
+            ? List<String>.unmodifiable(apps.whereType<String>())
+            : null,
       );
     }
 
@@ -71,10 +77,18 @@ class HomeLayoutRepository {
       return null;
     }
 
-    if (item.resizable) {
-      return {'id': item.id, 'colSpan': item.colSpan, 'rowSpan': item.rowSpan};
-    }
-
-    return item.id;
+    return switch (item.type) {
+      HomeGridItemType.app => item.id,
+      HomeGridItemType.clock => {
+        'id': item.id,
+        'colSpan': item.colSpan,
+        'rowSpan': item.rowSpan,
+      },
+      HomeGridItemType.folder => {
+        'id': item.id,
+        'name': item.folderName,
+        'apps': [for (final app in item.folderApps) app.id],
+      },
+    };
   }
 }

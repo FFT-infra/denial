@@ -5,7 +5,7 @@ use std::ffi::OsStr;
 use denial_core::topology::OutputTransform;
 use smithay::backend::input::{
     AbsolutePositionEvent, Axis, AxisSource, ButtonState, Device, DeviceCapability, Event,
-    GestureBeginEvent, GestureEndEvent, GestureSwipeUpdateEvent, InputEvent, KeyState,
+    GestureBeginEvent, GestureEndEvent, GestureSwipeUpdateEvent, InputEvent, InputTime, KeyState,
     KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent, TouchEvent,
 };
 #[cfg(feature = "flutter")]
@@ -27,7 +27,6 @@ use smithay::input::touch::{DownEvent, MotionEvent as TouchMotionEvent, UpEvent}
 use smithay::reexports::calloop::EventLoop;
 #[cfg(feature = "flutter")]
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
-use smithay::reexports::input::event::pointer::PointerEventTrait;
 use smithay::reexports::input::{Device as LibinputDevice, Libinput, TapButtonMap};
 #[cfg(feature = "flutter")]
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
@@ -61,6 +60,7 @@ use super::super::wire::{
     InputLayoutSnapshot, InputWindowRegion, WindowPlacementChange, WindowPlacementPhase,
 };
 use super::super::{RuntimeState, logical_axis_scroll_delta};
+use super::ClientSurface;
 #[cfg(feature = "flutter")]
 use super::FlutterPointerPress;
 use super::WaylandFrontend;
@@ -73,6 +73,9 @@ use super::touch_gestures::{
     WINDOW_TOUCH_STRIP_HEIGHT,
 };
 
+#[cfg(feature = "flutter")]
+#[path = "input/edge_swipe.rs"]
+pub(super) mod edge_swipe;
 #[path = "input/flutter_route.rs"]
 pub(super) mod flutter_route;
 #[path = "input/tablet.rs"]
@@ -112,7 +115,7 @@ pub(super) fn cancel_touch_for_surface(state: &mut RuntimeState, surface: &WlSur
         .with_grab(|_, grab| {
             grab.downcast_ref::<denial_core::touch_grab::TouchSessionGrab<RuntimeState>>()
                 .and_then(|grab| grab.focus())
-                .is_some_and(belongs_to_surface)
+                .is_some_and(|focus| belongs_to_surface(focus))
         })
         .unwrap_or(false);
     #[cfg(feature = "flutter")]
@@ -344,7 +347,7 @@ fn inject_shell_key_stroke(
     keyboard: &KeyboardHandle<RuntimeState>,
     stroke: ShellKeyStroke,
     ctrl: bool,
-    time: u32,
+    time: InputTime,
 ) -> bool {
     const XKB_KEYCODE_OFFSET: u32 = 8;
     const LEFT_CTRL: u32 = 29;
@@ -392,7 +395,7 @@ pub(super) fn inject_shell_key_transition(
     keyboard: &KeyboardHandle<RuntimeState>,
     stroke: ShellKeyStroke,
     key_state: KeyState,
-    time: u32,
+    time: InputTime,
 ) -> bool {
     const XKB_KEYCODE_OFFSET: u32 = 8;
 
@@ -416,6 +419,53 @@ pub(super) fn inject_shell_key_transition(
     accepted && process_keyboard_transition(state, keycode, key_state, time)
 }
 
+/// Linux evdev `KEY_BACK`: a phone's hardware Back key. XKB names it
+/// `XF86Back`, and Android, including Droidloom, maps it to `KEYCODE_BACK`.
+#[cfg(feature = "flutter")]
+const EVDEV_KEY_BACK: u32 = 158;
+
+/// Delivers the system Back action to a client window as one Back key tap.
+///
+/// Browsers, GTK, Qt and Droidloom's Android tasks treat this key as
+/// navigation back, so the action follows keyboard focus like Android's own
+/// Back. A dialog of the same client that already holds the focus keeps it:
+/// Back belongs to whatever the application presents on top.
+#[cfg(feature = "flutter")]
+pub(super) fn navigate_back(state: &mut RuntimeState, window: &smithay::desktop::Window) -> bool {
+    let (keyboard, time, focused) = {
+        let frontend = state.wayland.as_ref().expect("missing Wayland frontend");
+        let keyboard = frontend.seat.get_keyboard().expect("seat has no keyboard");
+        let client = frontend
+            .window_root_surface(window)
+            .and_then(|root| root.client())
+            .map(|client| client.id());
+        let focused = client.is_some()
+            && keyboard.current_focus().is_some_and(|focus| {
+                smithay::wayland::seat::WaylandFocus::wl_surface(&focus)
+                    .and_then(|surface| surface.client())
+                    .map(|client| client.id())
+                    == client
+            });
+        (keyboard, InputTime::now(), focused)
+    };
+    if !focused
+        && !super::window_management::activate_window(state, window, SERIAL_COUNTER.next_serial())
+    {
+        warn!("ignored Back for a window that cannot take keyboard focus");
+        return false;
+    }
+    inject_shell_key_stroke(
+        state,
+        &keyboard,
+        ShellKeyStroke {
+            evdev_keycode: EVDEV_KEY_BACK,
+            shift: false,
+        },
+        false,
+        time,
+    )
+}
+
 #[cfg(feature = "flutter")]
 /// Turn one shell-keyboard intent into complete virtual key lifecycles.
 ///
@@ -430,7 +480,7 @@ pub(crate) fn dispatch_shell_keyboard(
         let frontend = state.wayland.as_ref().expect("missing Wayland frontend");
         (
             frontend.seat.get_keyboard().expect("seat has no keyboard"),
-            frontend.start_time.elapsed().as_millis() as u32,
+            InputTime::now(),
         )
     };
     // Do not gate the shared router on a focused Wayland surface. Flutter is a
@@ -440,6 +490,14 @@ pub(crate) fn dispatch_shell_keyboard(
         super::super::wire::KeyboardCommand::DismissPanel { activation_serial } => {
             let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
             frontend.text_input.dismiss_panel(*activation_serial);
+            true
+        }
+        super::super::wire::KeyboardCommand::PanelMotion {
+            height,
+            duration_ms,
+        } => {
+            let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
+            frontend.set_keyboard_height(*height, *duration_ms);
             true
         }
         super::super::wire::KeyboardCommand::Text(text) => {
@@ -494,7 +552,7 @@ pub(super) struct ClientInputRoute {
 pub(super) struct ClientPointerPress {
     serial: Serial,
     button: u32,
-    focus: (WlSurface, Point<f64, Logical>),
+    focus: (ClientSurface, Point<f64, Logical>),
     location: Point<f64, Logical>,
 }
 
@@ -551,25 +609,31 @@ impl ClientInputRoute {
     fn focus_at_if_hit(
         &self,
         position: Point<f64, Logical>,
-    ) -> Option<(WlSurface, Point<f64, Logical>)> {
+    ) -> Option<(ClientSurface, Point<f64, Logical>)> {
         let local_point = self.mapped_position(position);
         let (surface, local_origin) =
             under_from_surface_tree(&self.surface, local_point, (0, 0), WindowSurfaceType::ALL)?;
-        Some((surface, position - local_point + local_origin.to_f64()))
+        Some((
+            surface.into(),
+            position - local_point + local_origin.to_f64(),
+        ))
     }
 
-    fn focus_at(&self, position: Point<f64, Logical>) -> (WlSurface, Point<f64, Logical>) {
+    fn focus_at(&self, position: Point<f64, Logical>) -> (ClientSurface, Point<f64, Logical>) {
         let local_point = self.mapped_position(position);
         let (surface, local_origin) =
             under_from_surface_tree(&self.surface, local_point, (0, 0), WindowSurfaceType::ALL)
                 .unwrap_or_else(|| (self.surface.clone(), (0, 0).into()));
-        (surface, position - local_point + local_origin.to_f64())
+        (
+            surface.into(),
+            position - local_point + local_origin.to_f64(),
+        )
     }
 
     fn touch_at(
         &self,
         position: Point<f64, Logical>,
-    ) -> ((WlSurface, Point<f64, Logical>), Point<f64, Logical>) {
+    ) -> ((ClientSurface, Point<f64, Logical>), Point<f64, Logical>) {
         let (location, origin) = projected_touch_point(
             self.region.rect,
             self.region.source_rect,
@@ -583,7 +647,7 @@ impl ClientInputRoute {
         // Smithay retains the down event's origin for the whole contact. Feed
         // it source-space motion around a fixed origin, so scaling/cropping
         // the texture does not scale input deltas or add the mobile strip.
-        ((surface, origin + local_origin.to_f64()), location)
+        ((surface.into(), origin + local_origin.to_f64()), location)
     }
 }
 
@@ -777,7 +841,7 @@ pub(super) enum RoutedPointerTarget {
 #[cfg(feature = "flutter")]
 pub(super) struct PointerMotionTarget {
     routed: RoutedPointerTarget,
-    focus: Option<(WlSurface, Point<f64, Logical>)>,
+    focus: Option<(ClientSurface, Point<f64, Logical>)>,
 }
 
 #[cfg(feature = "flutter")]
@@ -1162,7 +1226,7 @@ fn process_keyboard_transition(
     state: &mut RuntimeState,
     keycode: Keycode,
     key_state: KeyState,
-    time: u32,
+    time: InputTime,
 ) -> bool {
     state.note_user_activity();
     if intercept_native_escape(state, keycode.raw(), key_state) {
@@ -1365,14 +1429,16 @@ fn process_touchpad_gesture_event(
                 device.sysname(),
                 event.delta_x(),
                 event.delta_y(),
-                event.time(),
+                event.time().micros(),
             )
         }
         InputEvent::GestureSwipeEnd { event } => {
             let device = event.device();
-            state
-                .touchpad_gestures
-                .end_swipe(device.sysname(), event.cancelled(), event.time())
+            state.touchpad_gestures.end_swipe(
+                device.sysname(),
+                event.cancelled(),
+                event.time().micros(),
+            )
         }
         _ => return None,
     };
@@ -1637,6 +1703,7 @@ fn process_input_event(
         #[cfg(feature = "flutter")]
         {
             state.touchscreen_devices.remove(device.sysname());
+            state.screen_off_touch.remove_device(device.sysname());
         }
         if Device::has_capability(device, DeviceCapability::Keyboard) {
             state.keyboard_devices.remove(device.sysname());
@@ -1682,8 +1749,53 @@ fn process_input_event(
             state,
             key_event.key_code(),
             key_event.state(),
-            key_event.time_msec(),
+            key_event.time(),
         );
+    }
+
+    #[cfg(feature = "flutter")]
+    {
+        use crate::screen_off_touch::Event as TouchPowerEvent;
+        let touch = match &event {
+            InputEvent::TouchDown { event, .. } => Some((
+                event.device(),
+                TouchPowerEvent::Down(i32::from(event.slot())),
+            )),
+            InputEvent::TouchMotion { event, .. } => Some((
+                event.device(),
+                TouchPowerEvent::Motion(i32::from(event.slot())),
+            )),
+            InputEvent::TouchUp { event, .. } => {
+                Some((event.device(), TouchPowerEvent::Up(i32::from(event.slot()))))
+            }
+            InputEvent::TouchCancel { event, .. } => {
+                Some((event.device(), TouchPowerEvent::Cancel))
+            }
+            InputEvent::TouchFrame { event, .. } => Some((event.device(), TouchPowerEvent::Frame)),
+            _ => None,
+        };
+        if let Some((device, touch)) = touch {
+            let powered = state
+                .wayland
+                .as_ref()
+                .and_then(|frontend| touch_output_for_device(frontend, &device))
+                .is_none_or(|output| {
+                    state
+                        .output_power_requests
+                        .get(&output.id)
+                        .copied()
+                        .unwrap_or(output.powered)
+                });
+            // The root fingerprint listener has its own read-only evdev stream.
+            // Only its bounded presentation or an explicit wake gesture/button
+            // may wake this panel; raw DOWN/MOTION must not expose the lock UI.
+            if state
+                .screen_off_touch
+                .suppress(device.sysname(), touch, powered)
+            {
+                return false;
+            }
+        }
     }
 
     #[cfg(feature = "flutter")]
@@ -1857,7 +1969,7 @@ fn reset_input_devices(state: &mut RuntimeState, reset: InputDeviceReset) {
     let Some(frontend) = state.wayland.as_mut() else {
         return;
     };
-    let time = frontend.start_time.elapsed().as_millis() as u32;
+    let time = InputTime::now();
     let pointer = reset
         .pointer
         .then(|| frontend.seat.get_pointer().expect("seat has no pointer"));
@@ -2171,11 +2283,7 @@ fn dispatch_flutter_repeat(state: &mut RuntimeState, keycode: u32) -> bool {
     if !owned {
         return false;
     }
-    let time = state
-        .wayland
-        .as_ref()
-        .map(|frontend| frontend.start_time.elapsed().as_millis() as u32)
-        .unwrap_or_default();
+    let time = InputTime::now();
     super::input_method::forward_key(
         state,
         &keyboard,
@@ -2745,10 +2853,7 @@ fn release_pointer_to_shell(state: &mut RuntimeState) {
             .retired_pointer_buttons
             .extend(pressed_buttons.iter().copied());
         frontend.update_cursor_image(CursorImageStatus::default_named());
-        (
-            pressed_buttons,
-            frontend.start_time.elapsed().as_millis() as u32,
-        )
+        (pressed_buttons, InputTime::now())
     };
 
     let had_grab = pointer.is_grabbed();
@@ -2867,7 +2972,7 @@ fn process_flutter_keyboard_transition(
     state: &mut RuntimeState,
     keycode: Keycode,
     key_state: KeyState,
-    time: u32,
+    time: InputTime,
 ) -> bool {
     let secure_locked = state.secure_session_locked();
     let keyboard = state

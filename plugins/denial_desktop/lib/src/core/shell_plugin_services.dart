@@ -91,8 +91,8 @@ final _applications = Provider<List<LaunchableApplication>>((ref) {
   final launcher = ref.watch(appLauncherProvider);
   final local = ref.watch(localFlutterApplicationRegistryProvider);
   return List.unmodifiable([
-    for (final slot in grid?.slots ?? [])
-      if (slot?.app case final app?)
+    for (final item in grid?.apps ?? const <HomeGridItem>[])
+      if (item.app case final app?)
         LaunchableApplication(
           id: desktopApplicationRecentId(app.id),
           appId: app.id,
@@ -192,9 +192,10 @@ final class DesktopShellServices implements ShellServices {
     ref.read(windowEmphasisProvider.notifier).clear();
     ref.read(desktopVisibleProvider.notifier).restore();
     bool started = false;
-    for (final slot
-        in ref.read(homeGridControllerProvider).value?.slots ?? []) {
-      final app = slot?.app;
+    for (final item
+        in ref.read(homeGridControllerProvider).value?.apps ??
+            const <HomeGridItem>[]) {
+      final app = item.app;
       if (app == null || desktopApplicationRecentId(app.id) != id) continue;
       started = await ref.read(appLauncherProvider).launch(app);
       break;
@@ -398,8 +399,8 @@ class _ApplicationIcon extends ConsumerWidget {
     final path = ref.watch(
       homeGridControllerProvider.select((value) {
         final id = appId.toLowerCase().replaceFirst(RegExp(r'\.desktop$'), '');
-        for (final slot in value.value?.slots ?? []) {
-          final app = slot?.app;
+        for (final item in value.value?.apps ?? const <HomeGridItem>[]) {
+          final app = item.app;
           if (app == null) continue;
           if (app.id.toLowerCase().replaceFirst(RegExp(r'\.desktop$'), '') ==
                   id ||

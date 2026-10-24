@@ -804,6 +804,11 @@ fn application_command(
     if let Some(socket) = output_control_socket {
         command.env("DENIAL_SOCKET", socket);
     }
+    // Settings runs `deniald --lock-pin` and `--fingerprint-settings`; they
+    // must speak this compositor's protocol, not whatever is first on PATH.
+    if let Ok(compositor) = std::env::current_exe() {
+        command.env("DENIAL_COMPOSITOR_BINARY", compositor);
+    }
     crate::xcursor_sentinel::apply_to_command(&mut command);
     // These overrides affect only processes spawned by the compositor. Apply
     // them after Denial's inherited-session cleanup and endpoint defaults so

@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:ui' show Rect;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -33,7 +35,10 @@ class AuthenticationPrompt {
   final String message;
 
   bool get requiresResponse => style.requiresResponse;
-  bool get obscure => style == AuthenticationPromptStyle.echoOff;
+  bool get obscure =>
+      style == AuthenticationPromptStyle.echoOff ||
+      style == AuthenticationPromptStyle.pin;
+  bool get isPin => style == AuthenticationPromptStyle.pin;
 }
 
 @immutable
@@ -50,6 +55,10 @@ class AuthenticationState {
     required this.resultMessage,
     required this.resultIsError,
     this.fingerprintRejected = false,
+    this.pinLength = 0,
+    this.fingerprintReader = false,
+    this.fingerprintAvailable = false,
+    this.fingerprintSensor,
   });
 
   const AuthenticationState.initial()
@@ -63,7 +72,11 @@ class AuthenticationState {
       prompt = null,
       resultMessage = null,
       resultIsError = false,
-      fingerprintRejected = false;
+      fingerprintRejected = false,
+      pinLength = 0,
+      fingerprintReader = false,
+      fingerprintAvailable = false,
+      fingerprintSensor = null;
 
   final bool synchronized;
   final bool locked;
@@ -77,7 +90,25 @@ class AuthenticationState {
   final bool resultIsError;
   final bool fingerprintRejected;
 
+  /// Digits in the configured lock PIN, or 0 when the password is the only
+  /// typed credential. It sizes the PIN UI before deniald's prompt arrives;
+  /// the prompt style stays authoritative for what is actually asked.
+  final int pinLength;
+
+  /// A reader with enrolled prints has armed since deniald started; the lock
+  /// screen marks its sensor.
+  final bool fingerprintReader;
+
+  /// The reader is armed and a touch can unlock right now. False between
+  /// scans while it re-arms.
+  final bool fingerprintAvailable;
+
+  /// Under-display sensor, as fractions of the panel in its native
+  /// orientation. Null for readers that sit outside the screen.
+  final Rect? fingerprintSensor;
+
   bool get rateLimited => cooldown > Duration.zero;
+  bool get pinConfigured => pinLength > 0;
 
   AuthenticationState copyWith({
     bool? synchronized,
@@ -94,6 +125,11 @@ class AuthenticationState {
     bool clearResultMessage = false,
     bool? resultIsError,
     bool? fingerprintRejected,
+    int? pinLength,
+    bool? fingerprintReader,
+    bool? fingerprintAvailable,
+    Rect? fingerprintSensor,
+    bool clearFingerprintSensor = false,
   }) {
     return AuthenticationState(
       synchronized: synchronized ?? this.synchronized,
@@ -111,6 +147,12 @@ class AuthenticationState {
           : (resultMessage ?? this.resultMessage),
       resultIsError: resultIsError ?? this.resultIsError,
       fingerprintRejected: fingerprintRejected ?? this.fingerprintRejected,
+      pinLength: pinLength ?? this.pinLength,
+      fingerprintReader: fingerprintReader ?? this.fingerprintReader,
+      fingerprintAvailable: fingerprintAvailable ?? this.fingerprintAvailable,
+      fingerprintSensor: clearFingerprintSensor
+          ? null
+          : (fingerprintSensor ?? this.fingerprintSensor),
     );
   }
 }
@@ -149,12 +191,12 @@ class AuthenticationController extends Notifier<AuthenticationState>
 
   void lock() => _service.lock();
 
-  void begin() {
+  void begin({bool password = false}) {
     if (!state.locked || !state.available || state.busy || state.rateLimited) {
       return;
     }
     state = state.copyWith(clearResultMessage: true);
-    _service.begin();
+    _service.begin(password: password);
   }
 
   void respond(String response) {
@@ -177,6 +219,10 @@ class AuthenticationController extends Notifier<AuthenticationState>
     _service.cancel(attemptId: state.attemptId);
   }
 
+  /// The lock screen shows its fingerprint face; false while it asks for a
+  /// PIN, password or SIM PIN.
+  void offerFingerprint(bool offered) => _service.offerFingerprint(offered);
+
   void clearResult() {
     state = state.copyWith(clearResultMessage: true);
   }
@@ -196,6 +242,17 @@ class AuthenticationController extends Notifier<AuthenticationState>
           }
         });
       }
+      return;
+    }
+    if (packet.kind == AuthenticationPacketKind.credential) {
+      final fingerprint = _credentialFingerprint(packet.payload);
+      state = state.copyWith(
+        pinLength: packet.argument,
+        fingerprintReader: fingerprint != null,
+        fingerprintAvailable: fingerprint?.ready ?? false,
+        fingerprintSensor: fingerprint?.sensor,
+        clearFingerprintSensor: fingerprint?.sensor == null,
+      );
       return;
     }
     if (!packet.locked) {
@@ -255,6 +312,42 @@ class AuthenticationController extends Notifier<AuthenticationState>
       resultIsError: resultIsError,
     );
     _scheduleCooldownSync(cooldown);
+  }
+
+  /// Null without a reader; deniald sends an empty payload then. A payload
+  /// without `ready` comes from a deniald that reported only armed readers.
+  static ({Rect? sensor, bool ready})? _credentialFingerprint(String payload) {
+    if (payload.isEmpty) return null;
+    try {
+      final fingerprint = (jsonDecode(payload) as Map)['fingerprint'];
+      if (fingerprint is! Map) return null;
+      final ready = fingerprint['ready'] != false;
+      final sensor = fingerprint['sensor'];
+      if (sensor is! Map) return (sensor: null, ready: ready);
+      final values = [
+        for (final key in const ['x', 'y', 'width', 'height'])
+          (sensor[key] as num?)?.toDouble(),
+      ];
+      if (values.any((value) => value == null || !value.isFinite)) {
+        return (sensor: null, ready: ready);
+      }
+      final rect = Rect.fromLTWH(
+        values[0]!,
+        values[1]!,
+        values[2]!,
+        values[3]!,
+      );
+      final valid =
+          rect.width > 0 &&
+          rect.height > 0 &&
+          rect.left >= 0 &&
+          rect.top >= 0 &&
+          rect.right <= 1 &&
+          rect.bottom <= 1;
+      return (sensor: valid ? rect : null, ready: ready);
+    } on Object {
+      return null;
+    }
   }
 
   void _scheduleCooldownSync(Duration cooldown) {

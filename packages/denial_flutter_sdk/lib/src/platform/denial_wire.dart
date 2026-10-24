@@ -164,6 +164,7 @@ class DenialWireCodec {
   Uint8List? encodeInputLayout(InputLayoutSnapshot snapshot) {
     if (snapshot.shellRegions.length > denialWireMaxRegions ||
         snapshot.softwareKeyboardRegions.length > denialWireMaxRegions ||
+        snapshot.edgeSwipeRegions.length > denialWireMaxRegions ||
         snapshot.windows.length > denialWireMaxRegions ||
         snapshot.visibleSurfaceIds.length > denialWireMaxSurfaces ||
         snapshot.visibleSurfaceIds.any((surfaceId) => surfaceId <= 0)) {
@@ -184,6 +185,22 @@ class DenialWireCodec {
         return null;
       }
       softwareKeyboardRegions.add(_rectBuilder(rect));
+    }
+
+    final edgeSwipeRegions = <generated.EdgeSwipeRegionObjectBuilder>[];
+    for (final region in snapshot.edgeSwipeRegions) {
+      if (!_validRect(region.rect)) {
+        return null;
+      }
+      edgeSwipeRegions.add(
+        generated.EdgeSwipeRegionObjectBuilder(
+          rect: _rectBuilder(region.rect),
+          edge: switch (region.edge) {
+            InputEdge.left => generated.InputEdge.Left,
+            InputEdge.right => generated.InputEdge.Right,
+          },
+        ),
+      );
     }
 
     final orderedWindows = _inputWindowsAreOrdered(snapshot.windows)
@@ -250,6 +267,7 @@ class DenialWireCodec {
         windows: windows,
         visibleSurfaceIds: snapshot.visibleSurfaceIds,
         softwareKeyboardRegions: softwareKeyboardRegions,
+        edgeSwipeRegions: edgeSwipeRegions,
       ),
     );
   }
@@ -366,6 +384,17 @@ class DenialWireCodec {
       generated.KeyboardCommandObjectBuilder(
         kind: generated.KeyboardCommandKind.DismissPanel,
         activationSerial: activationSerial,
+      ),
+    );
+  }
+
+  Uint8List encodeKeyboardPanelMotion(int height, Duration duration) {
+    return _encodeEnvelope(
+      generated.PayloadTypeId.KeyboardCommand,
+      generated.KeyboardCommandObjectBuilder(
+        kind: generated.KeyboardCommandKind.PanelMotion,
+        panelHeight: height,
+        panelDurationMs: duration.inMilliseconds,
       ),
     );
   }
@@ -1574,6 +1603,7 @@ class DenialWireCodec {
                 },
               )
             : null,
+        keyboardInset: window.keyboardInset,
       );
       // FlatBuffers getters parse their field on each access. Validate the
       // materialized snapshot so geometry and layer fields are read only once.

@@ -1,6 +1,7 @@
 //! Bounded compositor-to-Flutter input ingress.
 
 use super::*;
+use smithay::backend::input::Event as _;
 
 const APPLICATION_WHEEL_SCROLL_PIXELS: f64 = 120.0;
 // GTK's Wayland backend divides compositor axis values by 10 before Flutter's
@@ -33,6 +34,11 @@ pub(super) struct PointerRecord {
     /// observes them. Button transitions can also use Flutter's `Move` phase,
     /// so deriving this from `phase` would occasionally lose state changes.
     pub(super) replaceable_motion: bool,
+    /// When the device sampled this event, in microseconds on the engine's
+    /// monotonic clock. Flutter resamples touch at frame time, which needs the
+    /// sample time; the delivery time carries the compositor's dispatch jitter.
+    /// Synthesized transitions have none.
+    pub(super) sampled_at_micros: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -223,12 +229,14 @@ impl InputQueue {
                         device_kind: sys::FlutterPointerDeviceKind_kFlutterPointerDeviceKindMouse,
                         buttons: self.pointer_buttons,
                         replaceable_motion: false,
+                        sampled_at_micros: None,
                     }));
                 }
             }
             SmithayInputEvent::TouchDown { event, .. } => {
                 let position = event.position_transformed(self.size);
                 let device = touch_device(event.slot());
+                let sampled_at = Some(event.time().micros());
                 self.touch_positions
                     .insert(device, (position.x, position.y));
                 self.push_touch(
@@ -237,6 +245,7 @@ impl InputQueue {
                     position.y,
                     device,
                     false,
+                    sampled_at,
                 );
                 self.push_touch(
                     sys::FlutterPointerPhase_kDown,
@@ -244,6 +253,7 @@ impl InputQueue {
                     position.y,
                     device,
                     false,
+                    sampled_at,
                 );
             }
             SmithayInputEvent::TouchMotion { event, .. } => {
@@ -257,19 +267,50 @@ impl InputQueue {
                     position.y,
                     device,
                     true,
+                    Some(event.time().micros()),
                 );
             }
             SmithayInputEvent::TouchUp { event, .. } => {
                 let device = touch_device(event.slot());
+                let sampled_at = Some(event.time().micros());
                 let (x, y) = self.touch_positions.remove(&device).unwrap_or((0.0, 0.0));
-                self.push_touch(sys::FlutterPointerPhase_kUp, x, y, device, false);
-                self.push_touch(sys::FlutterPointerPhase_kRemove, x, y, device, false);
+                self.push_touch(
+                    sys::FlutterPointerPhase_kUp,
+                    x,
+                    y,
+                    device,
+                    false,
+                    sampled_at,
+                );
+                self.push_touch(
+                    sys::FlutterPointerPhase_kRemove,
+                    x,
+                    y,
+                    device,
+                    false,
+                    sampled_at,
+                );
             }
             SmithayInputEvent::TouchCancel { event, .. } => {
                 let device = touch_device(event.slot());
+                let sampled_at = Some(event.time().micros());
                 let (x, y) = self.touch_positions.remove(&device).unwrap_or((0.0, 0.0));
-                self.push_touch(sys::FlutterPointerPhase_kCancel, x, y, device, false);
-                self.push_touch(sys::FlutterPointerPhase_kRemove, x, y, device, false);
+                self.push_touch(
+                    sys::FlutterPointerPhase_kCancel,
+                    x,
+                    y,
+                    device,
+                    false,
+                    sampled_at,
+                );
+                self.push_touch(
+                    sys::FlutterPointerPhase_kRemove,
+                    x,
+                    y,
+                    device,
+                    false,
+                    sampled_at,
+                );
             }
             _ => {}
         }
@@ -315,14 +356,36 @@ impl InputQueue {
         match event {
             SmithayInputEvent::TouchDown { event, .. } => {
                 let device = touch_device(event.slot());
+                let sampled_at = Some(event.time().micros());
                 self.touch_positions.insert(device, (x, y));
-                self.push_touch(sys::FlutterPointerPhase_kAdd, x, y, device, false);
-                self.push_touch(sys::FlutterPointerPhase_kDown, x, y, device, false);
+                self.push_touch(
+                    sys::FlutterPointerPhase_kAdd,
+                    x,
+                    y,
+                    device,
+                    false,
+                    sampled_at,
+                );
+                self.push_touch(
+                    sys::FlutterPointerPhase_kDown,
+                    x,
+                    y,
+                    device,
+                    false,
+                    sampled_at,
+                );
             }
             SmithayInputEvent::TouchMotion { event, .. } => {
                 let device = touch_device(event.slot());
                 self.touch_positions.insert(device, (x, y));
-                self.push_touch(sys::FlutterPointerPhase_kMove, x, y, device, true);
+                self.push_touch(
+                    sys::FlutterPointerPhase_kMove,
+                    x,
+                    y,
+                    device,
+                    true,
+                    Some(event.time().micros()),
+                );
             }
             _ => debug_assert!(false, "touch position supplied for a non-positional event"),
         }
@@ -401,10 +464,48 @@ impl InputQueue {
             let mut positions = self.touch_positions.drain().collect::<Vec<_>>();
             positions.sort_unstable_by_key(|(device, _)| *device);
             for (device, (x, y)) in positions {
-                self.push_touch(sys::FlutterPointerPhase_kCancel, x, y, device, false);
-                self.push_touch(sys::FlutterPointerPhase_kRemove, x, y, device, false);
+                self.push_touch(sys::FlutterPointerPhase_kCancel, x, y, device, false, None);
+                self.push_touch(sys::FlutterPointerPhase_kRemove, x, y, device, false, None);
             }
         }
+    }
+
+    /// Starts the lifecycle of a contact the compositor claimed from a client
+    /// mid-swipe. It goes down where the finger went down and moves to where
+    /// it is now, so Flutter's recognizers see the whole swipe. Both positions
+    /// are in Flutter's physical pixels, like [`Self::handle_touch_at`].
+    pub fn handle_claimed_touch(
+        &mut self,
+        slot: i32,
+        down: (f64, f64),
+        down_time_usec: u64,
+        current: (f64, f64),
+        time_usec: u64,
+    ) {
+        let clamp = |(x, y): (f64, f64)| {
+            (
+                x.clamp(0.0, f64::from(self.size.w)),
+                y.clamp(0.0, f64::from(self.size.h)),
+            )
+        };
+        let device = touch_device_from_slot(slot);
+        let (down_x, down_y) = clamp(down);
+        let (x, y) = clamp(current);
+        self.touch_positions.insert(device, (x, y));
+        for phase in [
+            sys::FlutterPointerPhase_kAdd,
+            sys::FlutterPointerPhase_kDown,
+        ] {
+            self.push_touch(phase, down_x, down_y, device, false, Some(down_time_usec));
+        }
+        self.push_touch(
+            sys::FlutterPointerPhase_kMove,
+            x,
+            y,
+            device,
+            true,
+            Some(time_usec),
+        );
     }
 
     /// Retires only the Flutter touch contacts claimed by a compositor
@@ -415,8 +516,8 @@ impl InputQueue {
             let Some((x, y)) = self.touch_positions.remove(&device) else {
                 continue;
             };
-            self.push_touch(sys::FlutterPointerPhase_kCancel, x, y, device, false);
-            self.push_touch(sys::FlutterPointerPhase_kRemove, x, y, device, false);
+            self.push_touch(sys::FlutterPointerPhase_kCancel, x, y, device, false, None);
+            self.push_touch(sys::FlutterPointerPhase_kRemove, x, y, device, false, None);
         }
     }
 
@@ -460,6 +561,7 @@ impl InputQueue {
             device_kind: sys::FlutterPointerDeviceKind_kFlutterPointerDeviceKindMouse,
             buttons: self.pointer_buttons,
             replaceable_motion,
+            sampled_at_micros: None,
         }));
     }
 
@@ -470,6 +572,7 @@ impl InputQueue {
         y: f64,
         device: i32,
         replaceable_motion: bool,
+        sampled_at_micros: Option<u64>,
     ) {
         self.push(InputRecord::Pointer(PointerRecord {
             phase,
@@ -486,6 +589,7 @@ impl InputQueue {
             device_kind: sys::FlutterPointerDeviceKind_kFlutterPointerDeviceKindTouch,
             buttons: 0,
             replaceable_motion,
+            sampled_at_micros,
         }));
     }
 
@@ -571,6 +675,7 @@ impl InputQueue {
             device_kind: sys::FlutterPointerDeviceKind_kFlutterPointerDeviceKindTrackpad,
             buttons: 0,
             replaceable_motion: false,
+            sampled_at_micros: None,
         }));
     }
 
@@ -625,6 +730,102 @@ pub(super) fn push_bounded_input(
         }
     }
     events.push_back(event);
+}
+
+const TOUCH_TIMING_AUDIT_INTERVAL_MICROS: usize = 1_000_000;
+
+/// How often the panel samples touch and how long a sample takes to reach
+/// Flutter. Flutter resamples touch at a fixed offset before each frame, and
+/// that offset must cover both, or frames fall back to a stale sample.
+#[derive(Debug, Default)]
+pub(super) struct TouchTimingAudit {
+    last_samples: Vec<(i32, usize)>,
+    intervals_us: Vec<u32>,
+    delivery_us: Vec<u32>,
+    window_start: Option<usize>,
+}
+
+impl TouchTimingAudit {
+    /// Records one touch event at delivery. Times are engine microseconds.
+    pub(super) fn record(
+        &mut self,
+        device: i32,
+        phase: sys::FlutterPointerPhase,
+        sampled_at: usize,
+        delivered_at: usize,
+    ) {
+        let window_start = *self.window_start.get_or_insert(delivered_at);
+        let saturate = |micros: usize| u32::try_from(micros).unwrap_or(u32::MAX);
+        let last = self
+            .last_samples
+            .iter()
+            .position(|(sample_device, _)| *sample_device == device);
+        match phase {
+            sys::FlutterPointerPhase_kDown | sys::FlutterPointerPhase_kMove => {
+                self.delivery_us
+                    .push(saturate(delivered_at.saturating_sub(sampled_at)));
+                match last {
+                    Some(index) => {
+                        let previous = mem::replace(&mut self.last_samples[index].1, sampled_at);
+                        if phase == sys::FlutterPointerPhase_kMove {
+                            self.intervals_us
+                                .push(saturate(sampled_at.saturating_sub(previous)));
+                        }
+                    }
+                    None => self.last_samples.push((device, sampled_at)),
+                }
+            }
+            sys::FlutterPointerPhase_kUp
+            | sys::FlutterPointerPhase_kCancel
+            | sys::FlutterPointerPhase_kRemove => {
+                if let Some(index) = last {
+                    self.last_samples.swap_remove(index);
+                }
+            }
+            _ => {}
+        }
+        // Report each second of contact, and the remainder when the last
+        // finger lifts.
+        let elapsed = delivered_at.saturating_sub(window_start);
+        if elapsed >= TOUCH_TIMING_AUDIT_INTERVAL_MICROS || self.last_samples.is_empty() {
+            self.report(elapsed);
+            self.window_start = None;
+        }
+    }
+
+    fn report(&mut self, elapsed_micros: usize) {
+        if self.delivery_us.is_empty() {
+            self.intervals_us.clear();
+            return;
+        }
+        self.intervals_us.sort_unstable();
+        self.delivery_us.sort_unstable();
+        let percentile = |values: &[u32], percentile: usize| {
+            values
+                .get((values.len() - 1) * percentile / 100)
+                .copied()
+                .unwrap_or(0)
+        };
+        let intervals = &self.intervals_us;
+        let delivery = &self.delivery_us;
+        info!(
+            target: "deniald::render_audit",
+            source = "touch_input",
+            window_ms = elapsed_micros / 1_000,
+            samples = delivery.len(),
+            interval_p5_us = if intervals.is_empty() { 0 } else { percentile(intervals, 5) },
+            interval_p50_us = if intervals.is_empty() { 0 } else { percentile(intervals, 50) },
+            interval_p95_us = if intervals.is_empty() { 0 } else { percentile(intervals, 95) },
+            interval_max_us = intervals.last().copied().unwrap_or(0),
+            delivery_p50_us = percentile(delivery, 50),
+            delivery_p95_us = percentile(delivery, 95),
+            delivery_p99_us = percentile(delivery, 99),
+            delivery_max_us = delivery.last().copied().unwrap_or(0),
+            "Touch sampling audit"
+        );
+        self.intervals_us.clear();
+        self.delivery_us.clear();
+    }
 }
 
 impl InputRecord {

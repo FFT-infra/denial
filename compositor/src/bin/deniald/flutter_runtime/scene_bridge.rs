@@ -6,6 +6,26 @@ fn accept_scene_texture_identifier(texture_id: i64, desired: &mut HashSet<i64>) 
     texture_id > 0 && desired.insert(texture_id)
 }
 
+/// Flutter may still be drawing a scene that names a merged native window
+/// image, so `removed` keeps such an image only once its grace period has
+/// passed; until then it waits in `retiring`. Publishing it again cancels
+/// the retirement.
+fn defer_native_texture_retirement(
+    removed: &mut Vec<i64>,
+    retiring: &mut HashMap<i64, Instant>,
+    desired: &HashSet<i64>,
+    now: Instant,
+) {
+    retiring.retain(|texture_id, _| !desired.contains(texture_id));
+    removed.retain(|texture_id| {
+        !renderer::native_window::is_native_window_texture(*texture_id)
+            || *retiring
+                .entry(*texture_id)
+                .or_insert(now + NATIVE_TEXTURE_RETIREMENT_GRACE)
+                <= now
+    });
+}
+
 impl FlutterRuntime {
     pub(crate) fn published_window_descriptions(&self) -> &[wire::WindowDescription] {
         self.wire.window_descriptions()
@@ -15,11 +35,15 @@ impl FlutterRuntime {
         metadata_revision: u64,
         mut windows: Vec<wire::WindowDescription>,
         mut frames: Vec<ExternalTextureFrame>,
+        kept_texture_ids: &[u64],
         restored_window_ids: &BTreeSet<u64>,
     ) -> Result<SyncedWaylandScene, Box<dyn Error>> {
         self.changed_texture_scratch.clear();
-        self.handler
-            .update_native_window_plans(&mut windows, &mut self.changed_texture_scratch);
+        self.handler.update_native_window_plans(
+            &mut windows,
+            &frames,
+            &mut self.changed_texture_scratch,
+        );
         self.rebuild_texture_output_membership(&windows);
         self.reinstall_cursor_texture_membership();
         let mut desired = mem::take(&mut self.scene_texture_ids);
@@ -56,6 +80,8 @@ impl FlutterRuntime {
                 desired.insert(client.texture_id as i64);
             }
         }
+        // Frozen windows keep the frame their textures hold.
+        desired.extend(kept_texture_ids.iter().map(|texture_id| *texture_id as i64));
         // Both work collections retain their capacity across client buffer
         // commits; scene synchronization commonly runs at application frame
         // rate even when the window count is unchanged.
@@ -122,11 +148,15 @@ impl FlutterRuntime {
                 })
                 .copied(),
         );
+        defer_native_texture_retirement(
+            &mut removed,
+            &mut self.retiring_native_textures,
+            &desired,
+            Instant::now(),
+        );
         for texture_id in removed.drain(..) {
-            self.unregister_external_texture(texture_id)?;
-            self.pending_frame_texture_ids
-                .retain(|pending| *pending != texture_id);
-            self.registered_external_textures.remove(&texture_id);
+            self.retiring_native_textures.remove(&texture_id);
+            self.unregister_scene_texture(texture_id)?;
         }
 
         self.scene_texture_ids = desired;
@@ -168,6 +198,46 @@ impl FlutterRuntime {
         Ok(frames)
     }
 
+    fn unregister_scene_texture(&mut self, texture_id: i64) -> Result<(), Box<dyn Error>> {
+        self.unregister_external_texture(texture_id)?;
+        self.pending_frame_texture_ids
+            .retain(|pending| *pending != texture_id);
+        self.registered_external_textures.remove(&texture_id);
+        Ok(())
+    }
+
+    /// Unregisters the retiring merged native window images whose grace
+    /// period has passed and which the scene has not published again.
+    pub(super) fn expire_retiring_native_textures(
+        &mut self,
+        now: Instant,
+    ) -> Result<(), Box<dyn Error>> {
+        if !self
+            .retiring_native_textures
+            .values()
+            .any(|deadline| *deadline <= now)
+        {
+            return Ok(());
+        }
+        let due = self
+            .retiring_native_textures
+            .iter()
+            .filter(|(_, deadline)| **deadline <= now)
+            .map(|(texture_id, _)| *texture_id)
+            .collect::<Vec<_>>();
+        for texture_id in due {
+            self.retiring_native_textures.remove(&texture_id);
+            if self.scene_texture_ids.contains(&texture_id)
+                || !self.registered_external_textures.contains(&texture_id)
+                || self.window_close_texture_leases.retains_texture(texture_id)
+            {
+                continue;
+            }
+            self.unregister_scene_texture(texture_id)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn native_client_composition_stats(&self) -> serde_json::Value {
         self.handler.native_client_composition_stats()
     }
@@ -195,5 +265,51 @@ mod tests {
         assert!(!accept_scene_texture_identifier(39, &mut desired));
         assert!(accept_scene_texture_identifier(41, &mut desired));
         assert_eq!(desired, HashSet::from([37, 39, 41]));
+    }
+
+    #[test]
+    fn merged_native_images_retire_after_the_grace_period() {
+        const MERGED: i64 = (1 << 62) | 26;
+        const SURFACE: i64 = 41;
+        let start = Instant::now();
+        let mut retiring = HashMap::new();
+
+        // A surface texture leaves at once; the merged image waits.
+        let mut removed = vec![SURFACE, MERGED];
+        defer_native_texture_retirement(&mut removed, &mut retiring, &HashSet::new(), start);
+        assert_eq!(removed, [SURFACE]);
+        assert!(retiring.contains_key(&MERGED));
+
+        // Later scene syncs inside the grace period keep it.
+        let mut removed = vec![MERGED];
+        let early = start + NATIVE_TEXTURE_RETIREMENT_GRACE / 2;
+        defer_native_texture_retirement(&mut removed, &mut retiring, &HashSet::new(), early);
+        assert!(removed.is_empty());
+
+        let mut removed = vec![MERGED];
+        let due = start + NATIVE_TEXTURE_RETIREMENT_GRACE;
+        defer_native_texture_retirement(&mut removed, &mut retiring, &HashSet::new(), due);
+        assert_eq!(removed, [MERGED]);
+    }
+
+    #[test]
+    fn republishing_a_merged_native_image_cancels_its_retirement() {
+        const MERGED: i64 = (1 << 62) | 26;
+        let start = Instant::now();
+        let mut retiring = HashMap::new();
+        let mut removed = vec![MERGED];
+        defer_native_texture_retirement(&mut removed, &mut retiring, &HashSet::new(), start);
+        assert!(retiring.contains_key(&MERGED));
+
+        let mut removed = Vec::new();
+        let desired = HashSet::from([MERGED]);
+        defer_native_texture_retirement(&mut removed, &mut retiring, &desired, start);
+        assert!(retiring.is_empty());
+
+        // Leaving again starts a new grace period.
+        let later = start + NATIVE_TEXTURE_RETIREMENT_GRACE;
+        let mut removed = vec![MERGED];
+        defer_native_texture_retirement(&mut removed, &mut retiring, &HashSet::new(), later);
+        assert!(removed.is_empty());
     }
 }

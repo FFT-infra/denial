@@ -2,6 +2,33 @@
 
 use super::*;
 
+/// Index of the output that receives a layer surface which names none: the
+/// configured primary (the snapshot's `ticker`), else the first connected one.
+fn default_output_index(ids: &[OutputId], primary: Option<OutputId>) -> Option<usize> {
+    primary
+        .and_then(|primary| ids.iter().position(|id| *id == primary))
+        .or_else(|| (!ids.is_empty()).then_some(0))
+}
+
+#[cfg(test)]
+mod default_output_tests {
+    use super::*;
+
+    const IDS: [OutputId; 3] = [OutputId(1), OutputId(2), OutputId(3)];
+
+    #[test]
+    fn unnamed_layer_surface_goes_to_the_primary_output() {
+        assert_eq!(default_output_index(&IDS, Some(OutputId(2))), Some(1));
+    }
+
+    #[test]
+    fn falls_back_to_first_without_a_connected_primary() {
+        assert_eq!(default_output_index(&IDS, None), Some(0));
+        assert_eq!(default_output_index(&IDS, Some(OutputId(9))), Some(0));
+        assert_eq!(default_output_index(&[], Some(OutputId(2))), None);
+    }
+}
+
 impl WaylandFrontend {
     pub(super) fn layer_surface_for_surface(
         &self,
@@ -122,7 +149,15 @@ impl WlrLayerShellHandler for RuntimeState {
                     .find(|entry| entry.output == requested)
                     .map(|entry| entry.output.clone())
             })
-            .or_else(|| frontend.outputs.first().map(|entry| entry.output.clone()));
+            .or_else(|| {
+                let ids = frontend
+                    .outputs
+                    .iter()
+                    .map(|entry| entry.id)
+                    .collect::<Vec<_>>();
+                default_output_index(&ids, frontend.ticker_output)
+                    .map(|index| frontend.outputs[index].output.clone())
+            });
         let Some(output) = output else {
             surface.send_close();
             return;

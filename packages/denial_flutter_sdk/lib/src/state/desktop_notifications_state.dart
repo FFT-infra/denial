@@ -43,8 +43,7 @@ class DesktopNotificationsState {
     this.bannerQueue = const <int>[],
     this.pendingDismissals = const <int>{},
     this.doNotDisturb = false,
-    this.policyLoaded = true,
-    this.lockPreview = NotificationPreviewMode.applicationOnly,
+    this.lockPreview = NotificationPreviewMode.full,
     this.lastEvent,
   });
 
@@ -56,7 +55,6 @@ class DesktopNotificationsState {
   final List<int> bannerQueue;
   final Set<int> pendingDismissals;
   final bool doNotDisturb;
-  final bool policyLoaded;
   final NotificationPreviewMode lockPreview;
   final DesktopNotificationEvent? lastEvent;
 
@@ -103,7 +101,6 @@ class DesktopNotificationsState {
     List<int>? bannerQueue,
     Set<int>? pendingDismissals,
     bool? doNotDisturb,
-    bool? policyLoaded,
     NotificationPreviewMode? lockPreview,
     DesktopNotificationEvent? lastEvent,
   }) {
@@ -113,7 +110,6 @@ class DesktopNotificationsState {
       bannerQueue: bannerQueue ?? this.bannerQueue,
       pendingDismissals: pendingDismissals ?? this.pendingDismissals,
       doNotDisturb: doNotDisturb ?? this.doNotDisturb,
-      policyLoaded: policyLoaded ?? this.policyLoaded,
       lockPreview: lockPreview ?? this.lockPreview,
       lastEvent: lastEvent ?? this.lastEvent,
     );

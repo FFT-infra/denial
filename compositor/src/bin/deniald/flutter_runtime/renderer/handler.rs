@@ -789,9 +789,17 @@ impl FlutterGlHandler {
         fence: Option<OwnedFd>,
         batch: Option<SampledBufferHoldBatch>,
     ) -> bool {
-        let Some(batch) = batch else {
+        let Some(mut batch) = batch else {
             return true;
         };
+        if let Some(fence) = &fence {
+            // Without a duplicate the batch keeps the releases until the
+            // event loop sees the fence.
+            match fence.try_clone() {
+                Ok(shared) => batch.sampled_by(&Arc::new(shared)),
+                Err(error) => warn!(%error, "could not share a sampled-buffer fence"),
+            }
+        }
         match self
             .events
             .send(RuntimeEvent::SampledBuffersReady { fence, batch })

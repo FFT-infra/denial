@@ -97,7 +97,16 @@ pub(super) fn synchronize_flutter_scene(
         windows,
         textures,
         window_snapshot_changed,
-    } = runtime.sync_wayland_scene(revision, windows, textures, &events.restored_window_ids)?;
+    } = runtime.sync_wayland_scene(
+        revision,
+        windows,
+        textures,
+        events
+            .wayland
+            .as_ref()
+            .map_or(&[], |frontend| frontend.kept_texture_ids()),
+        &events.restored_window_ids,
+    )?;
     output_control.publish_wallpaper(runtime.published_window_descriptions());
     if window_snapshot_changed {
         // Buffer-only commits take the texture-source fast path above. Rehash

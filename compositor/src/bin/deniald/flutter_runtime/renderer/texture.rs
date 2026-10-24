@@ -584,12 +584,30 @@ impl ShmTextureFrame {
 
 #[derive(Clone)]
 pub(in crate::flutter_runtime) enum ExternalBufferGuard {
-    Wayland { _guard: RendererBufferGuard },
-    OwnedShm { frame: ShmTextureFrame },
-    OwnedNative { storage: Arc<NativeWindowStorage> },
+    Wayland {
+        // Drops first: wl_buffer.release precedes the release point.
+        _guard: RendererBufferGuard,
+        release: Option<Arc<crate::client_release::ClientRelease>>,
+    },
+    OwnedShm {
+        frame: ShmTextureFrame,
+    },
+    OwnedNative {
+        storage: Arc<NativeWindowStorage>,
+    },
 }
 
 impl ExternalBufferGuard {
+    /// Hand `fence`, a submission that sampled this guard's buffer, to the
+    /// client release, and stop holding the release.
+    fn sampled_by(&mut self, fence: &Arc<OwnedFd>) {
+        if let Self::Wayland { release, .. } = self
+            && let Some(release) = release.take()
+        {
+            release.sampled_by(fence);
+        }
+    }
+
     fn owned_native(&self) -> Option<&Arc<NativeWindowStorage>> {
         match self {
             Self::OwnedNative { storage } => Some(storage),
@@ -777,6 +795,14 @@ impl SampledBufferHoldBatch {
             .flatten()
             .map(|hold| (hold.texture_id, hold.generation))
     }
+
+    /// Let `fence`, the submission that sampled this batch, release its
+    /// client buffers without waiting for the event loop to see it.
+    pub(in crate::flutter_runtime) fn sampled_by(&mut self, fence: &Arc<OwnedFd>) {
+        for hold in self.holds.iter_mut().flatten() {
+            hold._buffer_guard.sampled_by(fence);
+        }
+    }
 }
 
 impl std::fmt::Debug for SampledBufferHoldBatch {
@@ -794,7 +820,8 @@ impl Drop for SampledBufferHoldBatch {
             return;
         };
         // RendererBufferGuard destruction may emit wl_buffer.release and, for
-        // wp_linux_drm_syncobj_v1 clients, signal the matching release point.
+        // wp_linux_drm_syncobj_v1 clients a submission did not sample, signal
+        // the matching release point.
         // Batches are deliberately dropped by the compositor event loop only
         // after the Flutter render fence signals, never by the raster thread.
         holds.clear();
@@ -945,6 +972,7 @@ impl ExternalTextureFrame {
         texture_id: i64,
         dmabuf: Dmabuf,
         buffer_guard: RendererBufferGuard,
+        release: Option<Arc<crate::client_release::ClientRelease>>,
         revision: u64,
         expects_sample: bool,
     ) -> Self {
@@ -955,6 +983,7 @@ impl ExternalTextureFrame {
                 dmabuf,
                 buffer_guard: Some(ExternalBufferGuard::Wayland {
                     _guard: buffer_guard,
+                    release,
                 }),
                 revision,
                 feedback: None,

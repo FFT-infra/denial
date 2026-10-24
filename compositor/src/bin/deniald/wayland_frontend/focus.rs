@@ -1,18 +1,32 @@
 use std::borrow::Cow;
 
-use smithay::backend::input::KeyState;
+use smithay::backend::input::{InputTime, KeyState};
 use smithay::desktop::PopupKind;
+use smithay::input::dnd::{DndFocus, Source};
 use smithay::input::keyboard::{KeyboardHandle, KeyboardTarget, KeysymHandle, ModifiersState};
+use smithay::input::pointer::{
+    AxisFrame, ButtonEvent, GestureHoldBeginEvent, GestureHoldEndEvent, GesturePinchBeginEvent,
+    GesturePinchEndEvent, GesturePinchUpdateEvent, GestureSwipeBeginEvent, GestureSwipeEndEvent,
+    GestureSwipeUpdateEvent, MotionEvent, PointerTarget, RelativeMotionEvent,
+};
+use smithay::input::touch::{
+    DownEvent, FrameMarker, MotionEvent as TouchMotionEvent, OrientationEvent, ShapeEvent,
+    TouchTarget, UpEvent,
+};
 use smithay::input::{Seat, SeatHandler};
+use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{IsAlive, Serial};
+use smithay::utils::{Logical, Point};
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::seat::WaylandFocus;
 use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
 #[cfg(feature = "xwayland")]
 use smithay::xwayland::X11Surface;
+use std::sync::Arc;
 
 use super::super::RuntimeState;
+use super::input_timestamps::{self, InputDevice};
 
 /// A keyboard target must preserve the X11 identity of Xwayland windows.
 ///
@@ -143,10 +157,13 @@ impl KeyboardTarget<RuntimeState> for KeyboardFocusTarget {
         key: KeysymHandle<'_>,
         state: KeyState,
         serial: Serial,
-        time: u32,
+        time: InputTime,
     ) {
         match self {
-            Self::Wayland(surface) => surface.key(seat, data, key, state, serial, time),
+            Self::Wayland(surface) => {
+                input_timestamps::send(data, seat, InputDevice::Keyboard, surface, time);
+                surface.key(seat, data, key, state, serial, time);
+            }
             #[cfg(feature = "xwayland")]
             Self::X11(surface) => surface.key(seat, data, key, state, serial, time),
             #[cfg(feature = "flutter")]
@@ -180,6 +197,254 @@ impl WaylandFocus for KeyboardFocusTarget {
             #[cfg(feature = "flutter")]
             Self::Flutter => None,
         }
+    }
+}
+
+/// The pointer and touch focus: a client surface.
+///
+/// Smithay writes `wl_pointer` and `wl_touch` events for a `WlSurface`
+/// itself. This wrapper sends the `zwp_input_timestamps_v1` time first, to
+/// the same client, and then forwards to Smithay.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ClientSurface(pub(crate) WlSurface);
+
+impl From<WlSurface> for ClientSurface {
+    fn from(surface: WlSurface) -> Self {
+        Self(surface)
+    }
+}
+
+impl From<KeyboardFocusTarget> for ClientSurface {
+    fn from(target: KeyboardFocusTarget) -> Self {
+        Self(target.into())
+    }
+}
+
+impl std::ops::Deref for ClientSurface {
+    type Target = WlSurface;
+
+    fn deref(&self) -> &WlSurface {
+        &self.0
+    }
+}
+
+impl IsAlive for ClientSurface {
+    fn alive(&self) -> bool {
+        self.0.alive()
+    }
+}
+
+impl WaylandFocus for ClientSurface {
+    fn wl_surface(&self) -> Option<Cow<'_, WlSurface>> {
+        Some(Cow::Borrowed(&self.0))
+    }
+}
+
+impl PointerTarget<RuntimeState> for ClientSurface {
+    fn enter(&self, seat: &Seat<RuntimeState>, data: &mut RuntimeState, event: &MotionEvent) {
+        PointerTarget::enter(&self.0, seat, data, event);
+    }
+
+    fn motion(&self, seat: &Seat<RuntimeState>, data: &mut RuntimeState, event: &MotionEvent) {
+        input_timestamps::send(data, seat, InputDevice::Pointer, &self.0, event.time);
+        PointerTarget::motion(&self.0, seat, data, event);
+    }
+
+    fn relative_motion(
+        &self,
+        seat: &Seat<RuntimeState>,
+        data: &mut RuntimeState,
+        event: &RelativeMotionEvent,
+    ) {
+        PointerTarget::relative_motion(&self.0, seat, data, event);
+    }
+
+    fn button(&self, seat: &Seat<RuntimeState>, data: &mut RuntimeState, event: &ButtonEvent) {
+        input_timestamps::send(data, seat, InputDevice::Pointer, &self.0, event.time);
+        PointerTarget::button(&self.0, seat, data, event);
+    }
+
+    fn axis(&self, seat: &Seat<RuntimeState>, data: &mut RuntimeState, frame: AxisFrame) {
+        // The timestamp belongs to the frame's first timed event.
+        input_timestamps::send(data, seat, InputDevice::Pointer, &self.0, frame.time);
+        PointerTarget::axis(&self.0, seat, data, frame);
+    }
+
+    fn frame(&self, seat: &Seat<RuntimeState>, data: &mut RuntimeState) {
+        PointerTarget::frame(&self.0, seat, data);
+    }
+
+    fn gesture_swipe_begin(
+        &self,
+        seat: &Seat<RuntimeState>,
+        data: &mut RuntimeState,
+        event: &GestureSwipeBeginEvent,
+    ) {
+        PointerTarget::gesture_swipe_begin(&self.0, seat, data, event);
+    }
+
+    fn gesture_swipe_update(
+        &self,
+        seat: &Seat<RuntimeState>,
+        data: &mut RuntimeState,
+        event: &GestureSwipeUpdateEvent,
+    ) {
+        PointerTarget::gesture_swipe_update(&self.0, seat, data, event);
+    }
+
+    fn gesture_swipe_end(
+        &self,
+        seat: &Seat<RuntimeState>,
+        data: &mut RuntimeState,
+        event: &GestureSwipeEndEvent,
+    ) {
+        PointerTarget::gesture_swipe_end(&self.0, seat, data, event);
+    }
+
+    fn gesture_pinch_begin(
+        &self,
+        seat: &Seat<RuntimeState>,
+        data: &mut RuntimeState,
+        event: &GesturePinchBeginEvent,
+    ) {
+        PointerTarget::gesture_pinch_begin(&self.0, seat, data, event);
+    }
+
+    fn gesture_pinch_update(
+        &self,
+        seat: &Seat<RuntimeState>,
+        data: &mut RuntimeState,
+        event: &GesturePinchUpdateEvent,
+    ) {
+        PointerTarget::gesture_pinch_update(&self.0, seat, data, event);
+    }
+
+    fn gesture_pinch_end(
+        &self,
+        seat: &Seat<RuntimeState>,
+        data: &mut RuntimeState,
+        event: &GesturePinchEndEvent,
+    ) {
+        PointerTarget::gesture_pinch_end(&self.0, seat, data, event);
+    }
+
+    fn gesture_hold_begin(
+        &self,
+        seat: &Seat<RuntimeState>,
+        data: &mut RuntimeState,
+        event: &GestureHoldBeginEvent,
+    ) {
+        PointerTarget::gesture_hold_begin(&self.0, seat, data, event);
+    }
+
+    fn gesture_hold_end(
+        &self,
+        seat: &Seat<RuntimeState>,
+        data: &mut RuntimeState,
+        event: &GestureHoldEndEvent,
+    ) {
+        PointerTarget::gesture_hold_end(&self.0, seat, data, event);
+    }
+
+    fn leave(
+        &self,
+        seat: &Seat<RuntimeState>,
+        data: &mut RuntimeState,
+        serial: Serial,
+        time: InputTime,
+    ) {
+        PointerTarget::leave(&self.0, seat, data, serial, time);
+    }
+}
+
+impl TouchTarget<RuntimeState> for ClientSurface {
+    fn down(&self, seat: &Seat<RuntimeState>, data: &mut RuntimeState, event: &DownEvent) {
+        input_timestamps::send(data, seat, InputDevice::Touch, &self.0, event.time);
+        TouchTarget::down(&self.0, seat, data, event);
+    }
+
+    fn up(&self, seat: &Seat<RuntimeState>, data: &mut RuntimeState, event: &UpEvent) {
+        input_timestamps::send(data, seat, InputDevice::Touch, &self.0, event.time);
+        TouchTarget::up(&self.0, seat, data, event);
+    }
+
+    fn motion(&self, seat: &Seat<RuntimeState>, data: &mut RuntimeState, event: &TouchMotionEvent) {
+        input_timestamps::send(data, seat, InputDevice::Touch, &self.0, event.time);
+        TouchTarget::motion(&self.0, seat, data, event);
+    }
+
+    fn frame(&self, seat: &Seat<RuntimeState>, data: &mut RuntimeState, marker: FrameMarker) {
+        TouchTarget::frame(&self.0, seat, data, marker);
+    }
+
+    fn cancel(&self, seat: &Seat<RuntimeState>, data: &mut RuntimeState, marker: FrameMarker) {
+        TouchTarget::cancel(&self.0, seat, data, marker);
+    }
+
+    fn shape(&self, seat: &Seat<RuntimeState>, data: &mut RuntimeState, event: &ShapeEvent) {
+        TouchTarget::shape(&self.0, seat, data, event);
+    }
+
+    fn orientation(
+        &self,
+        seat: &Seat<RuntimeState>,
+        data: &mut RuntimeState,
+        event: &OrientationEvent,
+    ) {
+        TouchTarget::orientation(&self.0, seat, data, event);
+    }
+
+    fn last_frame(
+        &self,
+        seat: &Seat<RuntimeState>,
+        data: &mut RuntimeState,
+    ) -> Option<FrameMarker> {
+        TouchTarget::last_frame(&self.0, seat, data)
+    }
+}
+
+impl DndFocus<RuntimeState> for ClientSurface {
+    type OfferData<S: Source> = <WlSurface as DndFocus<RuntimeState>>::OfferData<S>;
+
+    fn enter<S: Source>(
+        &self,
+        data: &mut RuntimeState,
+        dh: &DisplayHandle,
+        source: Arc<S>,
+        seat: &Seat<RuntimeState>,
+        location: Point<f64, Logical>,
+        serial: &Serial,
+    ) -> Option<Self::OfferData<S>> {
+        DndFocus::enter(&self.0, data, dh, source, seat, location, serial)
+    }
+
+    fn motion<S: Source>(
+        &self,
+        data: &mut RuntimeState,
+        offer: Option<&mut Self::OfferData<S>>,
+        seat: &Seat<RuntimeState>,
+        location: Point<f64, Logical>,
+        time: InputTime,
+    ) {
+        DndFocus::motion(&self.0, data, offer, seat, location, time);
+    }
+
+    fn leave<S: Source>(
+        &self,
+        data: &mut RuntimeState,
+        offer: Option<&mut Self::OfferData<S>>,
+        seat: &Seat<RuntimeState>,
+    ) {
+        DndFocus::leave(&self.0, data, offer, seat);
+    }
+
+    fn drop<S: Source>(
+        &self,
+        data: &mut RuntimeState,
+        offer: Option<&mut Self::OfferData<S>>,
+        seat: &Seat<RuntimeState>,
+    ) {
+        DndFocus::drop(&self.0, data, offer, seat);
     }
 }
 

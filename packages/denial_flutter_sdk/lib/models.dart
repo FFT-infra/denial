@@ -71,8 +71,7 @@ export 'src/models/logind.dart'
         LogindCapability,
         LogindInhibitor,
         LogindSnapshot;
-export 'src/models/notification_policy.dart'
-    show NotificationPolicy, NotificationPreviewMode;
+export 'src/models/notification_policy.dart' show NotificationPreviewMode;
 export 'src/models/output_configuration.dart'
     show
         DenialOutput,

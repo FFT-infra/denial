@@ -1,9 +1,16 @@
+import 'package:denial_desktop/src/state/reference_shell_metrics.dart';
 import 'package:denial_desktop/src/state/reference_shell_profile.dart';
 
+import 'dart:async' show Timer;
+import 'dart:convert' show jsonDecode;
+import 'dart:io' show File;
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 import 'dart:ui' show ImageFilter, TileMode;
 
 import 'package:flutter/material.dart' show Icons;
+import 'package:flutter/foundation.dart' show ValueListenable;
+import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
@@ -19,17 +26,35 @@ import 'package:denial_flutter_sdk/models.dart';
 import 'package:denial_flutter_sdk/platform.dart';
 import 'package:denial_flutter_sdk/settings.dart';
 import 'package:denial_flutter_sdk/state.dart';
+import 'package:denial_flutter_sdk/system_services.dart'
+    show
+        HapticsService,
+        MobileNetworkSnapshot,
+        hapticsServiceProvider,
+        mobileNetworkProvider,
+        mobileNetworkServiceProvider;
 import 'package:denial_flutter_sdk/motion.dart';
 import 'package:denial_flutter_sdk/shell_theme.dart';
 import 'package:denial_flutter_sdk/tokens.dart';
+import 'package:denial_flutter_sdk/wallpaper.dart'
+    show
+        WallpaperResourceKind,
+        wallpaperControllerProvider,
+        wallpaperDepthDirectory,
+        wallpaperDepthProvider;
 
 import '../edge_panel_layer.dart';
+import '../mobile_ui_metrics.dart';
+import '../notification_banner.dart';
 
 import 'package:denial_flutter_sdk/rendering.dart';
 
 import '../shade/status_glyphs.dart';
 
+import 'sim_pin_lock.dart';
+
 part 'lock_authentication_panels.dart';
+part 'lock_pin_stage.dart';
 part 'lock_screen_background.dart';
 part 'lock_screen_pane.dart';
 
@@ -53,6 +78,12 @@ class LockScreenLayer extends ConsumerStatefulWidget {
 class _LockScreenLayerState extends ConsumerState<LockScreenLayer>
     with SingleTickerProviderStateMixin {
   late final AnimationController _entrance;
+
+  /// The lock backdrop frosted once: the PIN keys draw their glass from it,
+  /// so the glass fades in with the keys instead of appearing at the end.
+  final _glass = FrostedBackdropCapture(
+    frame: GlobalKey(debugLabel: 'lock scene'),
+  );
 
   @override
   void initState() {
@@ -78,8 +109,18 @@ class _LockScreenLayerState extends ConsumerState<LockScreenLayer>
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _glass.configure(
+      theme: context.shellTheme,
+      pixelRatio: math.min(MediaQuery.devicePixelRatioOf(context), 1),
+    );
+  }
+
+  @override
   void dispose() {
     _entrance.dispose();
+    _glass.dispose();
     super.dispose();
   }
 
@@ -115,16 +156,25 @@ class _LockScreenLayerState extends ConsumerState<LockScreenLayer>
               outputs.length > 1;
           late final Widget scene;
           if (outputs.length <= 1) {
-            scene = Stack(
-              fit: StackFit.expand,
-              children: [
-                const _LockBackdrop(),
-                _LockScreenPane(
-                  unlockProgress: widget.unlockProgress,
-                  authenticationEnabled: true,
-                  desktop: desktop,
-                ),
-              ],
+            scene = ValueListenableBuilder<FrostedBackdrop?>(
+              valueListenable: _glass,
+              builder: (context, backdrop, scene) => WindowBackdropCache(
+                backdrop: backdrop,
+                motion: const AlwaysStoppedAnimation<double>(0),
+                child: scene!,
+              ),
+              child: Stack(
+                key: _glass.frame,
+                fit: StackFit.expand,
+                children: [
+                  _LockBackdrop(onPainted: desktop ? null : _glass.painted),
+                  _LockScreenPane(
+                    unlockProgress: widget.unlockProgress,
+                    authenticationEnabled: true,
+                    desktop: desktop,
+                  ),
+                ],
+              ),
             );
           } else {
             final authenticationMonitorId = layout?.mainOutput?.monitorId;

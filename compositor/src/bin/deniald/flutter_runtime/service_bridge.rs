@@ -164,8 +164,8 @@ impl FlutterRuntime {
         self.pending_idle_policy.take()
     }
 
-    pub fn take_dpms_off_requested(&mut self) -> bool {
-        std::mem::take(&mut self.pending_dpms_off)
+    pub fn take_display_power_request(&mut self) -> Option<idle_policy::DisplayPowerRequest> {
+        self.pending_display_power.take()
     }
 
     pub fn take_mouse_cursor_request(&mut self) -> Option<&'static str> {

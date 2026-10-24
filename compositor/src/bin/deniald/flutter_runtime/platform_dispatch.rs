@@ -79,6 +79,11 @@ impl FlutterRuntime {
             self.host().respond(&mut message, &[])?;
             return Ok(());
         }
+        if message.channel == "denial/animation" {
+            crate::cpu_scheduling::note_animation(message.data.first() == Some(&1));
+            self.host().respond(&mut message, &[])?;
+            return Ok(());
+        }
         if message.channel == "denial/haptics" {
             let result = self.authentication.handle_haptics_packet(&message.data);
             self.host().respond(&mut message, &[])?;
@@ -216,8 +221,8 @@ impl FlutterRuntime {
                 Err(error) => warn!(%error, "rejected Denial idle policy from Flutter"),
             }
         } else if message.channel.as_bytes() == idle_policy::DISPLAY_POWER_CHANNEL.to_bytes() {
-            match idle_policy::decode_display_power_off(&message.data) {
-                Ok(()) => self.pending_dpms_off = true,
+            match idle_policy::decode_display_power(&message.data) {
+                Ok(request) => self.pending_display_power = Some(request),
                 Err(error) => warn!(%error, "rejected Denial display-power request from Flutter"),
             }
         } else if message.channel.as_bytes() == WINDOW_CLOSE_COMPLETE_CHANNEL.to_bytes() {

@@ -6,6 +6,9 @@ class ReferenceShellMetrics {
   static const double gestureHitWidth = 176.0;
   static const double gestureHitHeight = 60.0;
   static const double gestureBottomInset = -8.0;
+
+  /// Upward drag over which the home pill rises to its full lift.
+  static const double gesturePillLiftTravel = 280.0;
   static const double edgePanelGestureWidth = 220.0;
   static const double edgePanelGestureHeight = 18.0;
   static const double edgePanelMaxHeight = 368.0;
@@ -90,6 +93,55 @@ class ReferenceShellMetrics {
       if (panel.height > 0.0) panel,
       if (scrollStripVisible) edgePanelScrollStripRect(viewSize),
     ];
+  }
+
+  /// Width of the strip inside each side edge where the Back swipe starts.
+  static const double backGestureEdgeWidth = 32.0;
+
+  /// The Back strips stop above the bottom gesture area, as on Android.
+  static const double backGestureBottomExclusion =
+      gestureHitHeight + gestureBottomInset;
+
+  /// The left and right Back strips, between the status bar and [bottom]:
+  /// the bottom gesture area, or the keyboard's top edge while it is open.
+  static ({Rect left, Rect right}) backGestureRects(
+    Size viewSize, {
+    double? bottom,
+  }) {
+    final top = statusDragHeight.clamp(0.0, viewSize.height).toDouble();
+    final limit = viewSize.height - backGestureBottomExclusion;
+    final strip = Rect.fromLTRB(
+      0,
+      top,
+      backGestureEdgeWidth.clamp(0.0, viewSize.width / 2).toDouble(),
+      (bottom == null || bottom > limit ? limit : bottom)
+          .clamp(top, viewSize.height)
+          .toDouble(),
+    );
+    return (
+      left: strip,
+      right: strip.translate(viewSize.width - strip.width, 0),
+    );
+  }
+
+  /// Where a system overlay of `surface`'s size sits on a phone: centred
+  /// across, and down the space between the status bar and the keyboard as
+  /// far as it is open.
+  static Rect systemOverlayRect(
+    Size viewSize,
+    Size surface,
+    double keyboardProgress,
+  ) {
+    final bottom = edgePanelRect(viewSize, keyboardProgress).top;
+    final top = statusBarHeight.clamp(0.0, bottom).toDouble();
+    return Rect.fromLTWH(
+      (viewSize.width - surface.width) / 2.0,
+      (top + (bottom - top - surface.height) / 2.0)
+          .clamp(0.0, double.infinity)
+          .toDouble(),
+      surface.width,
+      surface.height,
+    );
   }
 
   static Rect statusRect(Size viewSize) {

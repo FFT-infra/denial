@@ -285,14 +285,24 @@ impl WaylandFrontend {
 
     #[cfg(feature = "flutter")]
     pub(super) fn exact_window_geometry(&self, window: &Window) -> Option<Rectangle<i32, Logical>> {
-        self.mobile_window_geometry(window).or_else(|| {
-            self.window_root_surface(window).and_then(|surface| {
-                self.window_record_for_surface(&surface.id())?
-                    .geometry_intent
-                    .as_ref()
-                    .filter(|intent| intent.authority == WindowGeometryAuthority::Exact)
-                    .map(|intent| intent.target)
-            })
+        self.mobile_window_geometry(window)
+            .or_else(|| self.recorded_exact_window_geometry(window))
+    }
+
+    /// The exact target last recorded for the window, ignoring the mobile
+    /// policy. Mobile reconciliation compares against this: the policy
+    /// rectangle itself would always match and suppress the configure.
+    #[cfg(feature = "flutter")]
+    pub(super) fn recorded_exact_window_geometry(
+        &self,
+        window: &Window,
+    ) -> Option<Rectangle<i32, Logical>> {
+        self.window_root_surface(window).and_then(|surface| {
+            self.window_record_for_surface(&surface.id())?
+                .geometry_intent
+                .as_ref()
+                .filter(|intent| intent.authority == WindowGeometryAuthority::Exact)
+                .map(|intent| intent.target)
         })
     }
 
@@ -1598,6 +1608,7 @@ impl WaylandFrontend {
             } else {
                 self.restore_window_workspace(window_id);
             }
+            self.minimized_changed(&surface, minimized);
             self.invalidate_idle_inhibition();
         }
         changed
@@ -1672,6 +1683,7 @@ impl WaylandFrontend {
             self.remove_surface_shm_frame(&object_id);
             self.pending_surface_commits.remove(&object_id);
             self.pending_frame_callback_windows.remove(&object_id);
+            self.forget_minimized_window(&object_id);
             self.pending_layer_frame_callback_roots.remove(&object_id);
             self.pending_input_method_frame_callbacks.remove(&object_id);
             self.pending_cursor_frame_callback_roots.remove(&object_id);

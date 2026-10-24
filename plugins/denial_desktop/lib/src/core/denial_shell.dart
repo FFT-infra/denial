@@ -13,6 +13,7 @@ import 'package:denial_flutter_sdk/environment.dart';
 import '../desktop/desktop_input_layout_publisher.dart';
 import '../diagnostics/desktop_benchmark_binding.dart';
 import '../desktop/desktop_pet_holds.dart';
+import '../features/mobile/mobile_system_overlay_layer.dart';
 
 import 'package:denial_flutter_sdk/localization.dart';
 import 'package:denial_flutter_sdk/settings.dart';
@@ -81,6 +82,7 @@ class DenialShell extends ConsumerWidget {
           appearance: settings.appearance,
           animationDurationScale: settings.animations.durationScale,
           locale: settings.localization.localeOverride,
+          twentyFourHourClock: settings.localization.twentyFourHourClock,
         ),
       ),
     );
@@ -171,6 +173,7 @@ class DenialShell extends ConsumerWidget {
         ),
         child: DenialLocalizationScope(
           locale: presentation.locale,
+          twentyFourHourClock: presentation.twentyFourHourClock,
           child: LowBatteryNotificationBinding(
             child: _ShellEnvironment(
               profile: effectivePresentation,
@@ -212,6 +215,7 @@ class _ProfileScene extends StatelessWidget {
                 chrome: scene.chrome,
               ),
             ),
+            const MobileSystemOverlayLayer(),
             const SystemKeyboardLayer(),
           ],
         ),

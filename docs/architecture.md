@@ -131,6 +131,10 @@ four fingers toward a window's center does not count as closing it.
 
 - shell hits become Flutter pointer events;
 - client hits are transformed and delivered through the Wayland seat;
+- clients that bind `zwp_input_timestamps_manager_v1` receive libinput's
+  microsecond time before each key, pointer motion, button and axis, and touch
+  down, motion and up; events Denial makes itself carry the current monotonic
+  time at millisecond precision;
 - graphics tablets are advertised through `zwp_tablet_manager_v2`; tool
   proximity, motion, pressure, distance, tilt, rotation, wheel, tip and button
   events use the same published client hit-test. An explicit libinput output

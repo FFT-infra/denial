@@ -1,10 +1,12 @@
 import 'package:denial_desktop/src/state/reference_shell_controller.dart';
 import 'package:denial_desktop/src/state/reference_shell_metrics.dart';
+import 'package:denial_desktop/src/state/reference_shell_state.dart';
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:denial_flutter_sdk/platform.dart';
+import 'package:denial_flutter_sdk/settings.dart';
 import 'package:denial_flutter_sdk/system_services.dart';
 import 'package:denial_flutter_sdk/state.dart';
 import 'package:denial_flutter_sdk/motion.dart';
@@ -30,7 +32,9 @@ class SystemKeyboardLayer extends ConsumerWidget {
       inputDeckProvider.select((deck) => deck.activeOutput != null),
     );
     final showKeyboard =
-        enabled && (!deckActive || ref.watch(referenceShellProvider).locked);
+        enabled &&
+        (!deckActive ||
+            ref.watch(referenceShellProvider.select((state) => state.locked)));
     return Offstage(
       offstage: !showKeyboard,
       child: TickerMode(
@@ -50,9 +54,17 @@ class SystemKeyboardLayer extends ConsumerWidget {
 /// every full-screen surface that should follow the user's viewport pan wraps
 /// itself in this boundary instead of duplicating the translation.
 class MobileKeyboardViewport extends ConsumerStatefulWidget {
-  const MobileKeyboardViewport({required this.child, super.key});
+  const MobileKeyboardViewport({
+    required this.child,
+    this.appScene = false,
+    super.key,
+  });
 
   final Widget child;
+
+  /// The application scene stays in place while its primary window lays
+  /// itself out around the keyboard (denial-insets-v1 keyboard inset).
+  final bool appScene;
 
   @override
   ConsumerState<MobileKeyboardViewport> createState() =>
@@ -70,6 +82,13 @@ class _MobileKeyboardViewportState
     _translation.value = Offset(0, -(keyboardOffset - scroll));
   }
 
+  ({double progress, double scroll}) _position(ReferenceShellState state) => (
+    progress: widget.appScene && state.primaryWindowHandlesKeyboard
+        ? 0.0
+        : state.edgePanelDragProgress,
+    scroll: state.edgePanelViewportScroll,
+  );
+
   @override
   void dispose() {
     _translation.dispose();
@@ -79,12 +98,7 @@ class _MobileKeyboardViewportState
   @override
   Widget build(BuildContext context) {
     ref.listen(
-      referenceShellProvider.select(
-        (state) => (
-          progress: state.edgePanelDragProgress,
-          scroll: state.edgePanelViewportScroll,
-        ),
-      ),
+      referenceShellProvider.select(_position),
       (_, next) => _updateTranslation(next),
     );
     return LayoutBuilder(
@@ -92,14 +106,11 @@ class _MobileKeyboardViewportState
         _panelHeight = ReferenceShellMetrics.edgePanelHeight(
           constraints.biggest,
         );
-        final state = ref.read(referenceShellProvider);
-        _updateTranslation((
-          progress: state.edgePanelDragProgress,
-          scroll: state.edgePanelViewportScroll,
-        ));
-        return RetainedTranslation(
+        _updateTranslation(_position(ref.read(referenceShellProvider)));
+        return CompositedTranslation(
           translation: _translation,
-          child: RepaintBoundary(child: widget.child),
+          devicePixelRatio: MediaQuery.devicePixelRatioOf(context),
+          child: widget.child,
         );
       },
     );
@@ -121,6 +132,9 @@ class _EdgePanelLayerState extends ConsumerState<EdgePanelLayer>
   bool _shown = false;
   bool _scrollReady = false;
 
+  /// The keyboard height last reported to applications laid out around it.
+  int? _reportedHeight;
+
   @override
   void initState() {
     super.initState();
@@ -135,10 +149,39 @@ class _EdgePanelLayerState extends ConsumerState<EdgePanelLayer>
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _panelHeight = ReferenceShellMetrics.edgePanelHeight(
+      MediaQuery.sizeOf(context),
+    );
+    _updateTranslation();
+    _reportMotion(ref.read(referenceShellProvider).edgePanelVisible);
+  }
+
+  @override
   void dispose() {
     _controller.dispose();
     _translation.dispose();
     super.dispose();
+  }
+
+  /// Tells applications laid out around the keyboard where it settles and
+  /// how long the spring there takes, once per motion. A drag is reported
+  /// when it is released.
+  void _reportMotion(bool visible) {
+    final height = visible ? _panelHeight.round() : 0;
+    if (height == _reportedHeight) return;
+    _reportedHeight = height;
+    ref
+        .read(denialBridgeProvider)
+        .reportKeyboardPanelMotion(
+          height,
+          springSettleDuration(
+            _controller.value,
+            visible ? 1.0 : 0.0,
+            extent: _panelHeight,
+          ),
+        );
   }
 
   void _updateTranslation() {
@@ -166,6 +209,7 @@ class _EdgePanelLayerState extends ConsumerState<EdgePanelLayer>
       _controller.stop();
       _controller.value = drag;
     } else {
+      _reportMotion(visible);
       springTo(
         _controller,
         visible ? 1.0 : 0.0,
@@ -177,10 +221,6 @@ class _EdgePanelLayerState extends ConsumerState<EdgePanelLayer>
 
   @override
   Widget build(BuildContext context) {
-    _panelHeight = ReferenceShellMetrics.edgePanelHeight(
-      MediaQuery.sizeOf(context),
-    );
-    _updateTranslation();
     ref.listen<(bool, double, bool)>(
       referenceShellProvider.select(
         (state) => (
@@ -329,6 +369,11 @@ class _EdgePanelContent extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final bridge = ref.read(denialBridgeProvider);
     final haptics = ref.read(hapticsServiceProvider);
+    final vibrate = ref.watch(
+      shellSettingsProvider.select(
+        (settings) => settings.sound.keyboardVibration,
+      ),
+    );
     final theme = ShellTheme.of(context);
     return ShellBackdropBlur(
       separateChild: true,
@@ -349,7 +394,7 @@ class _EdgePanelContent extends ConsumerWidget {
           // editor before its command is delivered.
           child: TextFieldTapRegion(
             child: ShellOskPanel(
-              onKeyTap: haptics.pulse,
+              onKeyTap: vibrate ? haptics.pulse : null,
               onKey: (intent) => _sendOskIntent(bridge, intent),
             ),
           ),

@@ -289,6 +289,9 @@ class DenialBridge {
 
   void closeWindow(DenialWindow window) => _windows.closeWindow(window);
 
+  /// Sends the system Back action to [window].
+  void navigateBack(DenialWindow window) => _windows.navigateBack(window);
+
   /// Releases the native last-frame texture retained for a finished close
   /// animation. Native also owns a bounded watchdog, so a lost message cannot
   /// leak a client buffer or Flutter texture.
@@ -399,6 +402,12 @@ class DenialBridge {
   void dismissKeyboardPanel(int activationSerial) =>
       _input.dismissKeyboardPanel(activationSerial);
 
+  /// Tells applications laid out around the keyboard (denial-insets-v1) that
+  /// the keyboard panel starts moving to [height] logical pixels, zero when
+  /// hidden, over [duration]. Once per motion, never per frame.
+  void reportKeyboardPanelMotion(int height, Duration duration) =>
+      _input.reportKeyboardPanelMotion(height, duration);
+
   void pressKeyboardKey(String key) => _input.pressKeyboardKey(key);
 
   void releaseKeyboardKey(String key) => _input.releaseKeyboardKey(key);
@@ -440,6 +449,7 @@ class DenialBridge {
     required bool suspendEnabled,
     required Duration suspendTimeout,
     required SuspendMode suspendMode,
+    Duration? lockAfterScreenOff,
   }) => _session.setIdlePolicy(
     powerButtonAction: powerButtonAction,
     lockEnabled: lockEnabled,
@@ -449,11 +459,16 @@ class DenialBridge {
     suspendEnabled: suspendEnabled,
     suspendTimeout: suspendTimeout,
     suspendMode: suspendMode,
+    lockAfterScreenOff: lockAfterScreenOff,
   );
 
   /// Requests compositor-owned DPMS-off for every currently powered output.
   /// The next physical input wakes outputs through the native idle policy.
   void requestDpmsOff() => _session.requestDpmsOff();
+
+  /// Lights the dark outputs as an input would; the idle timeout starts
+  /// again.
+  void requestDisplayOn() => _session.requestDisplayOn();
 
   int queryUiDevelopmentState() => _session.queryUiDevelopmentState();
 

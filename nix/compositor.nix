@@ -34,8 +34,8 @@ rustPlatform.buildRustPackage {
     # the lock file during evaluation.
     lockFile = ../compositor/Cargo.lock;
     outputHashes = {
-      "smithay-0.7.0" = "sha256-Dov9wh6qGuciLMTwOXM/eRA/Uo4jSvhcCqwJFdB2Vbg=";
-      "smithay-drm-extras-0.1.0" = "sha256-Dov9wh6qGuciLMTwOXM/eRA/Uo4jSvhcCqwJFdB2Vbg=";
+      "smithay-0.7.0" = "sha256-+Ey/zDrbQhw3FkY3Qn+NBaDofTr57KfZ919csFFXP10=";
+      "smithay-drm-extras-0.1.0" = "sha256-+Ey/zDrbQhw3FkY3Qn+NBaDofTr57KfZ919csFFXP10=";
     };
   };
 

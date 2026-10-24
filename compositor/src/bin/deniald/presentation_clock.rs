@@ -4,19 +4,23 @@ use super::*;
 
 #[path = "presentation_clock/feedback.rs"]
 mod feedback;
-pub(super) use feedback::FeedbackClock;
+pub(super) use feedback::{FeedbackClock, ModeTiming};
 
-pub(super) fn mode_blanking_limit(mode: &Mode) -> Duration {
+pub(super) fn mode_timing(mode: &Mode) -> ModeTiming {
     use smithay::reexports::drm::control::ModeFlags;
     if mode
         .flags()
         .intersects(ModeFlags::INTERLACE | ModeFlags::DBLSCAN)
         || mode.vscan() > 1
     {
-        return Duration::ZERO;
+        return ModeTiming::default();
     }
-    feedback::blanking_lead_limit(mode.clock(), mode.hsync().2, mode.vsync().2, mode.size().1)
-        .unwrap_or_default()
+    let (clock, horizontal, vertical) = (mode.clock(), mode.hsync().2, mode.vsync().2);
+    ModeTiming {
+        blanking_limit: feedback::blanking_lead_limit(clock, horizontal, vertical, mode.size().1)
+            .unwrap_or_default(),
+        refresh: feedback::refresh_period(clock, horizontal, vertical),
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -25,6 +29,8 @@ pub(super) struct PageFlipCompletion {
     pub(super) crtc: crtc::Handle,
     pub(super) observed_at: Instant,
     pub(super) presented_at: Option<Duration>,
+    /// The refresh edge clients are told about.
+    pub(super) edge: Option<Duration>,
     pub(super) sequence: Option<u64>,
 }
 
@@ -35,6 +41,7 @@ pub(super) struct PresentedOutput {
     pub(super) logical_sequence: u64,
     pub(super) observed_at: Instant,
     pub(super) presented_at: Option<Duration>,
+    pub(super) edge: Option<Duration>,
     pub(super) sequence: Option<u64>,
     pub(super) timeline_target: Instant,
 }

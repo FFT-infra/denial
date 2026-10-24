@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::os::fd::{AsFd, OwnedFd};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use denial_core::topology::{OutputId, OutputTransform, PixelRect, PixelSize, RenderViewId};
@@ -68,6 +68,28 @@ struct OutputFrame {
     request: OutputFrameRequest,
     submitted_at: Instant,
     feedback: Vec<crate::surface_feedback::SurfaceFeedback>,
+}
+
+/// How long recent frames took from their tick to the end of rendering. It
+/// rises with a slow frame at once and decays slowly, so one fast frame does
+/// not promise that the next will be fast.
+#[derive(Clone, Copy, Debug, Default)]
+struct ProductionEstimate(Option<Duration>);
+
+impl ProductionEstimate {
+    fn observe(&mut self, sample: Duration) {
+        self.0 = Some(match self.0 {
+            Some(previous) => sample.max(previous - previous / 8),
+            None => sample,
+        });
+    }
+
+    /// Whether a frame started at the next tick would be rendered before the
+    /// edge after it closes. Without a measurement, assume it would be.
+    fn reaches_next_edge(self, interval: Duration, submit_lead: Duration) -> bool {
+        self.0
+            .is_none_or(|production| production.saturating_add(submit_lead) <= interval)
+    }
 }
 
 fn ready_target_elapsed(frame: &OutputFrame, presented_at: Instant) -> bool {
@@ -401,6 +423,47 @@ struct OutputPipeline {
     wake_modeset: Option<WakeModeset>,
     wake_frame_pending: bool,
     request: PlaneCommit,
+    production: ProductionEstimate,
+    /// The blanking limit KMS last reported for this output's CRTC.
+    blanking: Duration,
+}
+
+impl OutputPipeline {
+    /// Whether the next frame may start while the ready one still waits for
+    /// its GPU work or for the frame in KMS. That helps only when frames take
+    /// longer than one edge allows: the ready frame then presents an edge
+    /// after its target either way, and a successor that waited for it would
+    /// skip an edge too. The pool's buffers bound how far ahead it can run.
+    fn renders_ahead(&self) -> bool {
+        self.frames.ready.as_ref().is_some_and(|ready| {
+            ready.screenshot_request_id.is_none()
+                && !self.production.reaches_next_edge(
+                    ready.request.tick.interval,
+                    kms_submit_lead(self.blanking, ready.request.tick.nominal_interval),
+                )
+        })
+    }
+}
+
+/// DENIAL_RENDER_AHEAD=1 lets an output render its next frame while the
+/// previous one is still on the GPU, once frames take longer than a refresh
+/// allows. A device whose shell frames often do opts in; elsewhere a frame
+/// starts only after the previous one has left for KMS.
+pub(super) fn render_ahead() -> bool {
+    static RENDER_AHEAD: OnceLock<bool> = OnceLock::new();
+    *RENDER_AHEAD
+        .get_or_init(|| render_ahead_enabled(std::env::var("DENIAL_RENDER_AHEAD").as_deref()))
+}
+
+fn render_ahead_enabled(value: Result<&str, &std::env::VarError>) -> bool {
+    match value {
+        Err(std::env::VarError::NotPresent) | Ok("0") => false,
+        Ok("1") => true,
+        _ => {
+            warn!("DENIAL_RENDER_AHEAD must be 0 or 1; rendering ahead disabled");
+            false
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -461,6 +524,7 @@ struct OutputSchedulerAudit {
     sequence_delta_max: u32,
     missed_vblanks: u64,
     stale_ready_drops: u64,
+    late_successors: u64,
     missed_vblanks_by_output: Vec<u64>,
     ready_to_fence: AuditLatency,
     fence_to_submit: AuditLatency,
@@ -566,6 +630,7 @@ impl OutputSchedulerAudit {
             sequence_delta_max: 0,
             missed_vblanks: 0,
             stale_ready_drops: 0,
+            late_successors: 0,
             missed_vblanks_by_output: vec![0; output_count],
             ready_to_fence: AuditLatency::default(),
             fence_to_submit: AuditLatency::default(),
@@ -876,6 +941,7 @@ impl OutputSchedulerAudit {
             sequence_delta_max = self.sequence_delta_max,
             missed_vblanks = self.missed_vblanks,
             stale_ready_drops = self.stale_ready_drops,
+            late_successors = self.late_successors,
             per_output_timing = %per_output_timing,
             ready_to_fence_avg_us = ready_to_fence.average_us,
             ready_to_fence_p95_us = ready_to_fence.p95_us,
@@ -953,6 +1019,7 @@ impl OutputSchedulerAudit {
         self.sequence_delta_max = 0;
         self.missed_vblanks = 0;
         self.stale_ready_drops = 0;
+        self.late_successors = 0;
         self.missed_vblanks_by_output.fill(0);
         self.ready_to_fence = AuditLatency::default();
         self.fence_to_submit = AuditLatency::default();
@@ -1000,6 +1067,7 @@ pub(super) struct OutputScheduler {
     parked: Vec<(OutputId, usize)>,
     presented_frames: u64,
     delivery_trace: Option<DeliveryTrace>,
+    render_ahead: bool,
 }
 
 impl OutputScheduler {
@@ -1038,6 +1106,8 @@ impl OutputScheduler {
                     wake_modeset: None,
                     wake_frame_pending: false,
                     request: plane_commit(scanout, pool.size)?,
+                    production: ProductionEstimate::default(),
+                    blanking: Duration::ZERO,
                 })
             })
             .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
@@ -1093,6 +1163,10 @@ impl OutputScheduler {
                     .collect(),
             )
         });
+        let render_ahead = render_ahead();
+        if render_ahead {
+            info!("outputs render ahead while frames take longer than a refresh");
+        }
         Ok(Self {
             volition: presentation,
             pipelines,
@@ -1103,6 +1177,7 @@ impl OutputScheduler {
             parked,
             presented_frames: 0,
             delivery_trace: DeliveryTrace::from_environment(),
+            render_ahead,
         })
     }
 
@@ -1242,6 +1317,17 @@ impl OutputScheduler {
             if let Some(slot) = self.ready_fences[pool_index].slots.get_mut(signal.index) {
                 let signaled = slot.mark_signaled(signal.token);
                 if signaled {
+                    let now = Instant::now();
+                    for pipeline in &mut self.pipelines {
+                        if pipeline.output_id == signal.output
+                            && let Some(frame) = pipeline.frames.ready.as_ref()
+                            && frame.index == signal.index
+                        {
+                            pipeline.production.observe(
+                                now.saturating_duration_since(frame.request.tick.render_deadline),
+                            );
+                        }
+                    }
                     if self.delivery_trace.is_some() {
                         for pipeline in &mut self.pipelines {
                             if pipeline.output_id == signal.output
@@ -1474,9 +1560,9 @@ impl OutputScheduler {
             }
 
             let blanking = events
-                .presentation_blanking_limits
+                .presentation_timings
                 .get(&scanouts[pipeline.scanout_index].output.crtc)
-                .copied()
+                .map(|timing| timing.blanking_limit)
                 .unwrap_or_default();
             let submit_lead = kms_submit_lead(blanking, frame.request.tick.nominal_interval);
             let queued_at = frame.delivery.is_some().then(Instant::now);
@@ -1513,7 +1599,8 @@ impl OutputScheduler {
         self.pipelines.iter().any(|pipeline| {
             pipeline.output_id == output
                 && !pipeline.powering_off
-                && pipeline.frames.render_available()
+                && (pipeline.frames.render_available()
+                    || self.render_ahead && pipeline.renders_ahead())
         })
     }
 
@@ -1601,15 +1688,42 @@ impl OutputScheduler {
 
             // A missed edge can leave the already-rendered successor targeting
             // the edge which just completed.  Submitting that generation now
-            // would miss again and keep a one-frame-late stream permanently
-            // serialized.  Drop only the unreachable off-screen successor so
-            // the due output tick can render directly for the next edge.
-            if pipeline
+            // would keep a one-frame-late stream permanently serialized, so
+            // drop the unreachable off-screen successor and let the due output
+            // tick render directly for the next edge.  That only helps when a
+            // fresh frame can be rendered in time: otherwise the next edge
+            // gets no new frame at all, and motion stalls for three refresh
+            // intervals instead of one.  Then present the successor late.
+            pipeline.blanking = events
+                .presentation_timings
+                .get(&completion.crtc)
+                .map(|timing| timing.blanking_limit)
+                .unwrap_or_default();
+            let submit_lead = kms_submit_lead(
+                pipeline.blanking,
+                pipeline
+                    .frames
+                    .ready
+                    .as_ref()
+                    .map_or(Duration::ZERO, |ready| ready.request.tick.nominal_interval),
+            );
+            let elapsed = pipeline
                 .frames
                 .ready
                 .as_ref()
-                .is_some_and(|ready| ready_target_elapsed(ready, completion.observed_at))
+                .filter(|ready| ready_target_elapsed(ready, completion.observed_at));
+            let replaceable = elapsed.is_some_and(|ready| {
+                pipeline
+                    .production
+                    .reaches_next_edge(ready.request.tick.interval, submit_lead)
+            });
+            if elapsed.is_some()
+                && !replaceable
+                && let Some(audit) = self.audit.as_mut()
             {
+                audit.late_successors = audit.late_successors.saturating_add(1);
+            }
+            if replaceable {
                 let stale = pipeline
                     .frames
                     .take_ready()
@@ -1645,6 +1759,7 @@ impl OutputScheduler {
                 logical_sequence: presented.request.tick.sequence,
                 observed_at: completion.observed_at,
                 presented_at: completion.presented_at,
+                edge: completion.edge,
                 sequence: completion.sequence,
                 timeline_target: presented.request.tick.presentation_target,
             };
@@ -1936,6 +2051,8 @@ impl OutputScheduler {
             wake_modeset: Some(WakeModeset::new(Instant::now())),
             wake_frame_pending: true,
             request: plane_commit(output, pool.size)?,
+            production: ProductionEstimate::default(),
+            blanking: Duration::ZERO,
         });
         let _ = runtime;
         Ok(())
@@ -2035,6 +2152,33 @@ mod feedback_audit_tests {
 #[cfg(test)]
 mod submit_lead_tests {
     use super::*;
+
+    #[test]
+    fn render_ahead_is_an_explicit_opt_in() {
+        use std::env::VarError;
+        assert!(!render_ahead_enabled(Err(&VarError::NotPresent)));
+        assert!(!render_ahead_enabled(Ok("0")));
+        assert!(render_ahead_enabled(Ok("1")));
+        assert!(!render_ahead_enabled(Ok("yes")));
+    }
+
+    #[test]
+    fn late_successor_is_kept_while_fresh_frames_cannot_reach_the_next_edge() {
+        let interval = Duration::from_nanos(8_333_333);
+        let lead = kms_submit_lead(Duration::from_micros(227), interval);
+        let mut estimate = ProductionEstimate::default();
+        assert!(estimate.reaches_next_edge(interval, lead), "unmeasured");
+        estimate.observe(Duration::from_micros(5_000));
+        assert!(estimate.reaches_next_edge(interval, lead));
+        // A frame that took longer than the edge allows makes a fresh frame
+        // unreachable at once.
+        estimate.observe(Duration::from_micros(6_800));
+        assert!(!estimate.reaches_next_edge(interval, lead));
+        // One faster frame only lowers the estimate by an eighth.
+        estimate.observe(Duration::from_micros(4_000));
+        assert_eq!(estimate.0, Some(Duration::from_micros(5_950)));
+        assert!(estimate.reaches_next_edge(interval, lead));
+    }
 
     #[test]
     fn known_blanking_preserves_driver_margin_before_its_earliest_edge() {

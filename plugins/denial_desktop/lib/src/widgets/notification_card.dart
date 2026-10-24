@@ -9,6 +9,7 @@ class NotificationCard extends StatelessWidget {
     this.compact = false,
     this.mobile = false,
     this.groupedBackdrop = false,
+    this.cachedBackdrop = false,
     this.expanded = false,
     this.showActions = true,
     this.onDismiss,
@@ -22,6 +23,10 @@ class NotificationCard extends StatelessWidget {
   final bool compact;
   final bool mobile;
   final bool groupedBackdrop;
+
+  /// Draw the enclosing [WindowBackdropCache]'s frost as the glass instead
+  /// of filtering the live scene, when one is in scope.
+  final bool cachedBackdrop;
 
   final bool expanded;
   final bool showActions;
@@ -129,12 +134,19 @@ class NotificationCard extends StatelessWidget {
         color: panelSurface
             ? null
             : theme.cardColor(context.shellColors.surfaceContainerLow),
-        gradient: panelSurface
-            ? theme.panelGradient(
+        // A phone's notifications are cards, wherever they show; in glass
+        // their opacity is the panels' anyway.
+        gradient: !panelSurface
+            ? null
+            : mobile
+            ? theme.cardGradient(
                 context.shellColors.panelBackground,
                 context.shellColors.panelBackgroundBottom,
               )
-            : null,
+            : theme.panelGradient(
+                context.shellColors.panelBackground,
+                context.shellColors.panelBackgroundBottom,
+              ),
         borderRadius: radius,
         border: mobile && theme.transparencyMode == ShellTransparencyMode.glass
             ? null
@@ -182,17 +194,40 @@ class NotificationCard extends StatelessWidget {
       ),
     );
 
-    final content = mobile
-        ? ShellBackdropBlur(
-            grouped: groupedBackdrop,
-            blur:
-                !ShadeBackdropScene.sharesBlur(context) &&
-                theme.effectivePanelOpacity < 1.0,
-            separateChild: true,
-            borderRadius: radius,
-            child: decoration,
-          )
-        : decoration;
+    final cache = mobile && cachedBackdrop && theme.effectivePanelOpacity < 1.0
+        ? WindowBackdropCache.maybeOf(context)
+        : null;
+    final Widget content;
+    if (!mobile) {
+      content = decoration;
+    } else if (cache != null) {
+      // The shared frost replaces a live blur pass per card.
+      content = Stack(
+        fit: StackFit.passthrough,
+        children: [
+          Positioned.fill(
+            child: WindowBackdropSlice(
+              cache: cache,
+              borderRadius: radius,
+              glass: theme.windowGlassShading,
+              opacity: NotificationReveal.maybeOf(context),
+              fadeOverlay: true,
+            ),
+          ),
+          NotificationReveal.revealed(context, decoration),
+        ],
+      );
+    } else {
+      content = ShellBackdropBlur(
+        grouped: groupedBackdrop,
+        blur:
+            !ShadeBackdropScene.sharesBlur(context) &&
+            theme.effectivePanelOpacity < 1.0,
+        separateChild: true,
+        borderRadius: radius,
+        child: decoration,
+      );
+    }
 
     return Semantics(
       container: true,
