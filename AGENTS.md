@@ -62,6 +62,11 @@ confirm a new `deniald` is running.
 - On the greetd hosts `.183` and `.188`, restart `greetd.service` directly,
   without ending the login session first or waiting for Denial to return:
   greetd runs `initial_session` once per daemon start, otherwise its greeter.
+- `.183` (AMD Raven laptop, Wi-Fi: SSH answers a minute or two after boot)
+  has amdgpu GPU hangs that its reset cannot recover: a machine issue, not
+  Denial. `gpu-hang-recover.service` saves the devcoredump and the named
+  process to `/var/log/amdgpu/` and reboots it through SysRq; GFXOFF is off on
+  its kernel command line (`amdgpu.ppfeaturemask=0xfff73fff`).
 - The lab Limine entries hash the staged kernel and initramfs with
   BLAKE2b-512, not SHA-512, which has the same 128-hex shape but stops Limine
   with `hash for URI does not match!`. Generate each suffix with
