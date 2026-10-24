@@ -17,8 +17,14 @@ The machine actually has:
 - CachyOS, an Arch-compatible x86-64 host;
 - an AMD Ryzen AI 9 HX 370 with 12 cores and 24 threads;
 - 30 GiB physical RAM and 30 GiB zram;
-- a 512 GB NVMe drive with approximately 439 GiB currently free;
+- a 512 GB NVMe drive: a 192 GiB Btrfs system partition, the rest for the
+  lab's install targets; branch validation needs 80 GiB free on it;
 - Btrfs storage below `/srv`;
+- the Nix store in its own Btrfs subvolume, `@nix` on `/nix`, so the snapper
+  snapshots of `/` taken around pacman runs never hold store paths that
+  garbage collection removed. Each branch's newest validated Nix build stays
+  a GC root under `/srv/denial-builder/cache/nix-roots/`, so collecting
+  garbage keeps what the next run would otherwise rebuild;
 - synchronized time and an NVMe health log with no media errors.
 
 The host operating system is not the future release build authority. Stage 2

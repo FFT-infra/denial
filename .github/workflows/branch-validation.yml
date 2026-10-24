@@ -216,6 +216,10 @@ jobs:
         run: |
           set -euo pipefail
           cache_name="$(jq -er '.name' nix/cachix-cache.json)"
+          # The newest build of each branch stays a GC root, so cleaning
+          # the store keeps what the next run would otherwise rebuild.
+          nix_roots="/srv/denial-builder/cache/nix-roots/$VALIDATION_BRANCH"
+          mkdir -p "$nix_roots"
           mapfile -t nix_paths < <(
             nix build \
               .#denial \
@@ -230,8 +234,9 @@ jobs:
               .#checks.x86_64-linux.engine-cache-unstable \
               .#checks.x86_64-linux.path-contract \
               --accept-flake-config \
+              --max-jobs 3 \
               --cores 16 \
-              --out-link "$RUNNER_TEMP/denial-nix-cache" \
+              --out-link "$nix_roots/result" \
               --print-build-logs \
               --print-out-paths \
               2> >(tee "$EVIDENCE_ROOT/nix-build.txt" >&2)
