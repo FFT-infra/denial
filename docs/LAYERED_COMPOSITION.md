@@ -86,15 +86,18 @@ until it changes.
   slice to a retained `DenialSlice` texture when its display list changed,
   then draws entries in order with `PaintWindow`, `DrawImage` or a backdrop
   `SaveLayer`, and presents one backing store.
-- Slice storage (color texture plus MSAA and depth/stencil attachments) is
-  grow-only: a slice renders into the top-left corner of its slot's storage
-  while it fits. Otherwise the slot swaps in the smallest fitting storage from
-  a per-view pool of up to four entries, and only then allocates, growing a
-  too-small extent by at least half, up to the output. Storage released by
-  growing or vanishing slices goes to the pool; it is freed only when the pool
-  overflows (smallest first) or the view is collected. A re-rendered slice
-  whose storage exceeds twice its area trades it for a tighter pooled one,
-  since each re-render clears and resolves the whole storage.
+- A slice renders as the output's root pass would draw it, with the output
+  target's sample count (single-sample on Denial outputs), so layered and
+  direct frames match. Its storage is only the color texture (4 bytes per
+  pixel); depth/stencil, and MSAA color where the output uses it, are created
+  for each render and released with it, as the root pass's are.
+- A slice renders into the top-left corner of its slot's storage while the
+  slice fits in at most twice its area, since each re-render clears the whole
+  storage. Otherwise the slot takes the smallest such storage that another
+  slice released earlier in the same build, and only then allocates exactly
+  the slice's extent, rounded up to 64 pixels. Storage that no slice of the
+  build took, and the storage of slots beyond the build's last slice, is
+  freed when the build ends, so retained storage follows the current scene.
 - Every layered frame keeps frame damage diffing. The composition clips to
   the buffer damage, clears it, and loads the target outside it, as the
   direct path's partial repaint does.
@@ -127,8 +130,7 @@ Denial layered composition audit view=-1 interval_ms=… direct_frames=…
   slices_rendered=… rendered_new=… rendered_bounds=… rendered_content=…
   rendered_pixels=… rendered_slice_pixels=… slice_allocations=…
   slice_pool_reuses=… retained_slices=… retained_slice_pixels=…
-  pooled_slices=… pooled_slice_pixels=… slice_render_total_us=…
-  compose_total_us=… compose_max_us=… recompose_total_us=… recompose_max_us=…
+  slice_render_total_us=… compose_total_us=… compose_max_us=… recompose_total_us=… recompose_max_us=…
 ```
 
 `layered_frames` are builds, `single_slice_frames` builds without cuts, and
@@ -138,7 +140,9 @@ Cuts are counted by kind; material ends are not counted. A re-rendered slice
 records one reason: `new` (no retained texture), `bounds` (bounds changed) or
 `content` (display list not equal). `rendered_pixels` is the storage area
 cleared and drawn; `rendered_slice_pixels` is the slices' own rounded extent,
-so the difference is the cost of storage kept larger than the slice. Times are
+so the difference is the cost of storage kept larger than the slice.
+`slice_pool_reuses` counts storage a slot took over from another slice in the
+same build instead of allocating. Times are
 raster-thread CPU before the present callback, not GPU time. `tools/denial-benchmark --capture-audit` summarizes
 these lines per phase.
 
